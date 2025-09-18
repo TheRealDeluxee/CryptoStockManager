@@ -398,7 +398,7 @@ def google_trends(search):
     pytrends.build_payload(kw_list, cat=0, timeframe='today 12-m') #Trend for 12 month
     data = pytrends.interest_over_time() 
     data = data.reset_index() 
-
+    
     df = pd.DataFrame()
     df = pd.DataFrame(columns=['Datum', 'Interesse'])
     df['Datum'] = data['date']
