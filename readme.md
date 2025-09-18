@@ -15,7 +15,7 @@ That’s why I decided to take matters into my own hands and developed CaSa a fr
 
 While it’s functional and stable, there’s still plenty of room for growth. Check out the "New Feature Idea List" for planned improvements and let’s build something great together!
 
-![Project Overview](alert_watch_phone.png)
+![Project Overview][alert_watch_phone.png]
 
 ## Features
 
@@ -101,3 +101,5 @@ This project is licensed under the MIT License.
 - [Yahoo Finance](https://finance.yahoo.com) – Provides stock market data, trends, and financial news.
 - [Rock Pi](https://rockpi.org/) – A robust single-board computer for running this project efficiently.
 - [Armbian OS](https://www.armbian.com/) – A lightweight operating system for ARM-based devices, perfect for deploying CaSa.
+
+[def]: alert_watch_phone.png
