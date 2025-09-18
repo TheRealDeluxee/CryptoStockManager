@@ -15,7 +15,7 @@ That’s why I decided to take matters into my own hands and developed CaSa a fr
 
 While it’s functional and stable, there’s still plenty of room for growth. Check out the "New Feature Idea List" for planned improvements and let’s build something great together!
 
-![Project Overview][alert_watch_phone.png]
+![Project Overview](alert_watch_phone.png)
 
 ## Features
 
