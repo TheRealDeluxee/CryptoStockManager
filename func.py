@@ -24,6 +24,7 @@ import matplotlib.ticker as mticker
 
 token_pushover  = ""
 user_pushover = ""
+av_key = ""
 
 one_day_price_change = ""
 seven_day_price_change = ""
@@ -200,7 +201,7 @@ def calc_indicator_fuctions(df):
     if 'Volume' in df.columns:
         df['VolMA20'] = df['Volume'].rolling(20, min_periods=10).mean()
         df['VolRatio20'] = df['Volume'] / df['VolMA20']
-    save_csv(df,"test.csv")
+    #save_csv(df,"test.csv") #Für Debugging
     return df
 
 
@@ -210,12 +211,39 @@ def save_csv(df, path=None, index=False, date_cols=()):
         if c in d: d[c] = pd.to_datetime(d[c], errors='coerce').dt.strftime('%d.%m.%Y')
     return d.to_csv(path, sep=";", decimal=",", index=index, encoding="utf-8-sig", lineterminator="\n")
 
-def calculate_stabw(a: pd.Series, window=20):
-    mean = a.tail(window).mean()
-    std = a.tail(window).std(ddof=0)
-    
-    return std/mean*100
+def calc_stat_limits(df, column, window=20):
+    if column not in df.columns:
+        return {k: np.nan for k in
+                ["std90_upper","std90_lower","mad90_upper","mad90_lower",
+                 "q95_upper","q05_lower"]}
 
+    data = df[column].dropna().to_numpy()[-window:]
+    if data.size < 2:
+        return {k: np.nan for k in
+                ["std95_upper","std95_lower","mad95_upper","mad95_lower",
+                 "q95_upper","q95_lower"]}
+
+    mean   = np.mean(data)
+    median = np.median(data)
+    std    = np.std(data, ddof=1)
+    mad    = np.median(np.abs(data - median))
+
+    z = 1.6448536269514722   # 90% zweiseitig (je 5% an den Rändern)
+    robust_sigma = 1.4826 * mad
+
+    std95_upper = mean   + z * std
+    std95_lower = mean   - z * std
+    mad95_upper = median + z * robust_sigma
+    mad95_lower = median - z * robust_sigma
+
+    q95_lower, q95_upper = np.quantile(data, [0.05, 0.95])
+
+    return {
+        "std95_upper": std95_upper, "std95_lower": std95_lower,
+        "mad95_upper": mad95_upper, "mad95_lower": mad95_lower,
+        "q95_upper": q95_upper, "q95_lower": q95_lower,
+        "mean": mean, "median": median
+    }
 
 def calculate_sma(df, window=20):
     if 'Price' not in df.columns:
@@ -269,6 +297,16 @@ def human_format_euro(x, pos):
     else:
         return f"{int(x)} €"
 
+def human_format(num, pos):
+    magnitude = 0
+    while abs(num) >= 1000:
+        magnitude += 1
+        num /= 1000.0
+    return '%.1f%s' % (num, ['', 'K', 'M', 'B', 'T'][magnitude])
+
+def human_format_euro(num, pos):
+    return human_format(num, pos) + '€'
+
 def plot_and_save(df, symbol, data_type, zero_line=None):
     if df is not None and not df.empty:
         #----------Create
@@ -288,12 +326,21 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
             df['Percentage Deviation'] = df['Price']/mean_price * 100 - 100
 
         #---------Axis set-up
-        for ax in [ax1, ax3]:
+        from matplotlib.ticker import MaxNLocator
+        for ax in [ax1, ax2, ax3]:
             #ax1.set_title('100 Hours' if data_type=='100h' else '100 Days', fontsize=14)
             ax.xaxis.set_major_locator(mdates.DayLocator() if data_type=='100h' else mdates.MonthLocator())
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
             ax.grid(True, axis='x', color='black', alpha=0.4)
-        
+            ax.spines['top'].set_visible(False)
+            ax.spines['bottom'].set_visible(False)
+            ax.spines['left'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            #ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+
+        ax2.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax1.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax1.yaxis.set_major_locator(MaxNLocator(nbins=3))
         ax2.yaxis.set_major_formatter(mticker.PercentFormatter())
         ax1.yaxis.set_major_formatter(mticker.FuncFormatter(human_format_euro))
         ax3.yaxis.set_major_formatter(mticker.FuncFormatter(human_format))
@@ -307,6 +354,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         ax1.plot(df.loc[df['HighP']==1, 'Date'],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
         ax1.plot(df.loc[df['LowP']==1,  'Date'],      df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
         ax2.plot(df['Date'], df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
+
         if 'Volume' in df.columns:
             colors = ['green' if close > open_val else 'red' for open_val, close in zip(df['Price'].shift(1), df['Price'])]
             colors[0] = 'gray'  # Erster Balken neutral, da kein Vortag
@@ -433,7 +481,7 @@ def seven_day_slope_pct(df, current):
     y.append(steigung * subset_df['index'].iloc[0] + y_achsenabschnitt)
     y.append(steigung * subset_df['index'].iloc[6] + y_achsenabschnitt)
 
-    # Ensure that y[0] is not 0 to prevent division by zero
+    # Ensure that y[0] is not 0 to prevent division from zero
     if y[0] == 0:
         raise ValueError("Calculation of the gradient is not possible as y[0] is 0.")
 
@@ -472,77 +520,50 @@ def signal_slope(slope_pct,sig_count):
 
     return sig, sig_count
 
-
-
-
-def VWMAvSMA_check(vwma_value, sma_value, sig_count):
-    if pd.isna(vwma_value) or pd.isna(sma_value) or sma_value == 0:
-        return "N/A", sig_count
-
-    diff_pct = (vwma_value - sma_value) / sma_value * 100
-
-    if diff_pct > 2:
-        sig = f"Strong bullish"
-        sig_count += 2
-    elif diff_pct > 0:
-        sig = f"Slightly bullish"
-        sig_count += 1
-    elif diff_pct < -2:
-        sig = f"Strong bearish"
-        sig_count -= 2
-    elif diff_pct < 0:
-        sig = f"Slightly bearish"
-        sig_count -= 1
-    else:
-        sig = "VWMA = SMA → neutral"
-        sig_count = 0
-
-    return sig, sig_count
-
-
 def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, link, data_type):
 
     alarms = {}
+    alarm_indicator = ""
     signal_count = 0
+    alarm_message_add = ""
 
-    RSI14, signal_count= RSI_check(df['RSI14'].iloc[-1],signal_count)
+    #Indikatoren
+    dEMA_pct, signal_count = signal_slope((df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100, signal_count)
+    RSI14, signal_count = RSI_check(df['RSI14'].iloc[-1], signal_count)
 
-    dEMA_pct, signal_count = signal_slope((df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-2])/df['Slow EMA'].iloc[-2]*100,signal_count)
-
-    if df['Mom10'].iloc[-2] != 0:
+    if df['Mom10'].iloc[-2] != 0: #Vermeidung Division durch Null
         dMom10_pct, signal_count = signal_slope((df['Mom10'].iloc[-1] - df['Mom10'].iloc[-2]) / df['Mom10'].iloc[-2] * 100, signal_count)
     else:
         dMom10_pct, signal_count = signal_slope(0, signal_count)  
 
-    #VolRatio20 check before VWMA20
+    dVWMA20_pct, signal_count = signal_slope((df['VWMA20'].iloc[-1] - df['VWMA20'].iloc[-2])/df['VWMA20'].iloc[-2]*100,signal_count) #VolRatio20 check before VWMA20
+    #VolMA20 feature to be added
 
-    dVWMAvSMA20, signal_count = VWMAvSMA_check(df["VWMA20"].iloc[-1], df["SMA20"].iloc[-1], signal_count)
-
-    
     current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
-    current_seven_days_slope_pct = seven_day_slope_pct(df,True)
-
+    current_seven_days_slope_pct = seven_day_slope_pct(df, True)
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
+    alarm_buy_sell = "Hold"
 
     #Watch-list & Portfolio-list
+
     if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
-        alarm_message = "Potential buy {} \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n#Cross-EMA ".format(symbol,dEMA_pct, RSI14, dMom10_pct, dVWMAvSMA20)
-        alarm_symbol = ">&#9650;"
-        alarm_symbol_color = "green"
-        alarms["101"] = {
-            "value": 1,
-            "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'>{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-        }
+        alarm_buy_sell = "Buy"
+        alarm_indicator = "Cross-EMA"
+        alarm_code = "101"
+        alarm_value = 1
+
+    if current_seven_days_slope_pct > seven_day_price_change:
+        alarm_buy_sell = "Buy"
+        alarm_indicator = "Positiv-7"
+        alarm_code = "121"
+        alarm_value = current_seven_days_slope_pct
 
     if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
-        alarm_message = "Potential buy {} \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n#100-Minimum ".format(symbol,dEMA_pct, RSI14, dMom10_pct, dVWMAvSMA20)
-        alarm_symbol = ">&#9679;"
-        alarm_symbol_color = "green"
-        alarms["122"] = {
-            "value": 1,
-            "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'>{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-        }
+        alarm_buy_sell = "Buy"
+        alarm_indicator = "100-Minimum"
+        alarm_code = "122"
+        alarm_value = 1
         
     #Portfolio-list
     if not watch_list: 
@@ -550,72 +571,58 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
         alarm_message_add = "Amount >1 year: {} ({} %)".format(round(amount_older_than_one_year,2),round(amount_older_than_one_year_pct,2))
 
         if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
-            alarm_message = "Potential sell {} \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n{} \n#Cross-EMA ".format(symbol,dEMA_pct, RSI14, dMom10_pct, dVWMAvSMA20,alarm_message_add)
-            alarm_symbol = ">&#9660;"
-            alarm_symbol_color = "red"
-            alarms["201"] = {
-                "value": 1,
-                "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-            }     
-
-       # if current_profit_pct < one_day_profit_limit and data_type == "100d":
-       #     alarm_message = "Potential sell {} \nProfit: {} %\nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n{} \n#Under buy rate ".format(symbol,round(current_profit_pct,2),dEMA_pct, RSI14, dMom10_pct, dVWMA20_pct,alarm_message_add)
-       #     alarm_symbol = ">&#9679;"
-       #     alarm_symbol_color = "red"
-       #     alarms["202"] = {
-       #         "value": current_profit_pct ,
-       #         "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-       #     }  
-        
-       # if current_one_day_price_change_pct < (one_day_price_change * -1) and data_type == "100d":
-       #     alarm_message = "Potential sell {} \nPrice': {} % \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n{} \n#Negative-1 ".format(symbol,round(current_one_day_price_change_pct,2),dEMA_pct, RSI14, dMom10_pct, dVWMA20_pct,alarm_message_add)
-       #     alarm_symbol = ">&#9679;"
-       #     alarm_symbol_color = "black"
-       #     alarms["211"] = {
-       #         "value": current_one_day_price_change_pct,
-       #         "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-       #     }    
+            alarm_buy_sell = "Sell"
+            alarm_indicator = "Cross-EMA"
+            alarm_code = "201"
+            alarm_value = 1      
         
         if current_seven_days_slope_pct < (seven_day_price_change * -1):
-            alarm_message = "Potential sell {} \nPrice7': {} % \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n{} \n#Negative-7 ".format(symbol,round(current_seven_days_slope_pct,2),dEMA_pct, RSI14, dMom10_pct, dVWMAvSMA20,alarm_message_add)
-            #alarm_message2 = ", ".join(df['Price'].tail(7).round(1).astype(str))
-            #alarm_message =  alarm_message1 + '\n' + alarm_message2 #Only for test
-            alarm_symbol = ">&#9679;"
-            alarm_symbol_color = "black"
-            alarms["221"] = {
-                "value": current_seven_days_slope_pct,
-                "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-            }  
+            alarm_buy_sell = "Sell"
+            alarm_indicator = "Negative-7"
+            alarm_code = "221"
+            alarm_value = current_seven_days_slope_pct
 
         if df['HighP'].iloc[-1] < df['HighP'].iloc[-2] and df['HighP'].iloc[-2] > df['HighP'].iloc[-3] and data_type == "100d":
-            alarm_message = "Potential sell {} \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n{} \n#100-Maximum ".format(symbol,dEMA_pct, RSI14, dMom10_pct, dVWMAvSMA20,alarm_message_add)
-            alarm_symbol = ">&#9679;"
-            alarm_symbol_color = "red"
-            alarms["222"] = {
-                "value": 1,
-                "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
+            alarm_buy_sell = "Sell"
+            alarm_indicator = "100-Maximum"
+            alarm_code = "222"
+            alarm_value = 1
+
+    if alarm_buy_sell == "Sell": 
+        alarm_symbol = "&#9660;"
+        alarm_symbol_color = "red"
+    if alarm_buy_sell == "Buy":
+        alarm_symbol = "&#9650;"
+        alarm_symbol_color = "green"
+
+    if alarm_buy_sell != "Hold":
+        # Headline (nur Symbol)
+        alarm_headline = f"{symbol}"
+
+        # Body-Text (mehrzeilig)
+        alarm_message = (
+            f"Trigger: {alarm_indicator}"
+            f" ({data_type})\n"
+            f"EMA: {dEMA_pct}\n"
+            f"RSI14: {RSI14}\n"
+            f"MOM10: {dMom10_pct}\n"
+            f"VWMA20: {dVWMA20_pct}\n"
+            f"{alarm_message_add}"
+        )
+
+        # HTML zusammenbauen – Headline separat, Body schwarz
+        alarms[alarm_code] = {
+                "value": alarm_value,
+                "msg": (
+                    f"<html><body>"
+                    # Headline (separates Element, 28px, farbig)
+                    f"<div style='font-size:28px; font-weight:700; color:{alarm_symbol_color};'>"
+                    f"{alarm_headline} {alarm_symbol}</div>"
+                    # Body (schwarz; \n bleibt dank white-space:pre-line erhalten)
+                    f"<div style='color:black; white-space:pre-line;'>{alarm_message}</div>"
+                    f"</body></html>"
+                )
             }
-
-        #if current_one_day_price_change_pct > one_day_price_change and data_type == "100d":
-        #    alarm_message = "Potential buy {} \nPrice': {} % \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n#Positive-1 ".format(symbol,round(current_one_day_price_change_pct,2),dEMA_pct, RSI14, dMom10_pct, dVWMA20_pct)
-        #    alarm_symbol = ">&#9679;"
-        #    alarm_symbol_color = "black"
-        #    alarms["111"] = {
-        #        "value": current_one_day_price_change_pct,
-        #        "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-        #    }
-
-        if current_seven_days_slope_pct > seven_day_price_change:
-            alarm_message = "Potential buy {} \nPrice7': {} % \nEMA': {} \nRSI14: {} \nMOM10': {} \nPrice-Volume-push: {} \n#Positiv-7 ".format(symbol,round(current_seven_days_slope_pct,2),dEMA_pct, RSI14, dMom10_pct, dVWMAvSMA20)
-            #alarm_message2 = ", ".join(df['Price'].tail(7).round(1).astype(str))
-            #alarm_message =  alarm_message1 + '\n' + alarm_message2 #Only for test
-            alarm_symbol = ">&#9679;"
-            alarm_symbol_color = "black"
-            alarms["121"] = {
-                "value": current_seven_days_slope_pct,
-                "msg": f"<html><body><span style='color: {alarm_symbol_color}; font-size: 24px;'{alarm_symbol}</span><span style='color: black;'>{alarm_message}</span><a href='{link}'>#Technical analysis</a></body></html>"
-            }
-
 
     return alarms, signal_count
 
