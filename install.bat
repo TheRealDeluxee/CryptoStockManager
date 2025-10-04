@@ -5,7 +5,7 @@ REM Upgrade pip to latest version first
 python -m pip install --upgrade pip
 
 REM Install necessary packages
-pip install pandas numpy scipy requests matplotlib plotly pytrends yfinance schedule mplfinance ruptures
+pip install pandas numpy scipy requests matplotlib plotly pytrends yfinance schedule mplfinance ruptures kaleido
 
 echo Installation completed.
 pause

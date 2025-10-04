@@ -31,7 +31,7 @@ class crypto_stock:
         self.sell_money = 0
         self.amount_crypto_stock = 0
         self.data_type = ''
-        self.signal_count = 0
+        self.score = 0
 
         self.test_mode = False
         self.current_EMA_diff_pct = 0
@@ -85,6 +85,7 @@ class crypto_stock:
                 self.params_crypto_stock = "1mo"
             df = func.calc_indicator_fuctions(func.get_stock(self.symbol,self.params_crypto_stock))
 
+
         link = "https://de.tradingview.com/symbols/"
 
         if self.buy_balance_eur  == 1 and self.amount_crypto_stock == 1 : 
@@ -116,13 +117,13 @@ class crypto_stock:
         self.amount_older_than_one_year = func.older_than_one_year(self.df_buy_history)
         self.amount_older_than_one_year_pct = self.amount_older_than_one_year / self.amount_crypto_stock * 100
         
-        alarms, self.signal_count = func.alarm(df,self.search,self.watch_list, self.current_profit_pct, self.amount_older_than_one_year, self.amount_older_than_one_year_pct, link, self.data_type)
+        alarms, self.score = func.alarm(df,self.search,self.watch_list, self.current_profit_pct, self.amount_older_than_one_year, self.amount_older_than_one_year_pct, link, self.data_type)
 
         alarms_filter = self.filter(alarms)
         for key, info in alarms_filter.items():
             func.pushover_image(self.symbol, info['msg'])
 
-        # Watch-list items
+    # Watch-list items
         if self.watch_list:
             return {
                 'Name': self.search,
@@ -132,7 +133,7 @@ class crypto_stock:
                 '7 days [%]': self.current_seven_days_slope_pct,
                 '1 day [%]': self.current_one_day_price_change_pct,
                 'dEMA [%]': self.current_EMA_diff_pct,
-                'Rating': self.signal_count
+                'Rating': self.score
             }
         else:
             return {
@@ -143,7 +144,7 @@ class crypto_stock:
                 '7 days [%]': self.current_seven_days_slope_pct,
                 '1 day [%]': self.current_one_day_price_change_pct,
                 'dEMA [%]': self.current_EMA_diff_pct,
-                'Rating': self.signal_count
+                'Rating': self.score
             }
 
     def filter(self,alarm_neu):

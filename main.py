@@ -39,7 +39,6 @@ class CryptoStockManager:
         try:
             func.token_pushover = config.get('pushover', 'token')
             func.user_pushover = config.get('pushover', 'user')
-            func.av_key = config.get('alphavantage', 'key')
             self.test_mode = int(config.get('alarm', 'test_mode'))
             func.one_day_price_change = int(config.get('alarm', 'one_day_price_change'))
             func.seven_day_price_change = int(config.get('alarm', 'seven_day_price_change'))
@@ -97,7 +96,6 @@ class CryptoStockManager:
         else:
             print("Error: Section 'stocks' is missing in the INI file.")
         
-
     def restart_program(self):
         python = sys.executable
         return_code = subprocess.call([python] + sys.argv)
@@ -149,11 +147,10 @@ class CryptoStockManager:
             self.df_crypto_hh.loc[len(self.df_crypto_hh)] = item.refresh('100h')
 
     def send_summary(self):
-
         now = time.localtime()
 
         try:
-            # Sortiere und bereite die Tabellen auf
+            # Sort and prepare the tables
             self.df_crypto_hd = self.df_crypto_hd.sort_values(by=['Rating'], ascending=False)
             self.df_stock_hd = self.df_stock_hd.sort_values(by=['Rating'], ascending=False)
 
@@ -182,13 +179,11 @@ class CryptoStockManager:
                 print('\n')
                 print(self.df_stock_hd.round(2))
 
-            # Erstelle und sende Zusammenfassungen
+            # Create and send summaries using matplotlib
             try:
                 output_path = os.path.join(self.output_dir, 'summary_crypto.png')
                 if not self.df_crypto_hd.empty:
-                    fig = ff.create_table(self.df_crypto_hd.round(2))
-                    fig.update_layout(autosize=True)
-                    fig.write_image(output_path, scale=2)
+                    func.create_table_image(self.df_crypto_hd.round(2), output_path, 'Crypto Summary')
                     func.pushover_image('summary_crypto', 'Daily summary crypto')
             except Exception as e:
                 print(f"Error while processing crypto summary: {e}")
@@ -197,17 +192,13 @@ class CryptoStockManager:
                 try:
                     output_path = os.path.join(self.output_dir, 'summary_stock.png')
                     if not self.df_stock_hd.empty:
-                        fig = ff.create_table(self.df_stock_hd.round(2))
-                        fig.update_layout(autosize=True)
-                        fig.write_image(output_path, scale=2)
+                        func.create_table_image(self.df_stock_hd.round(2), output_path, 'Stock Summary')
                         func.pushover_image('summary_stock', 'Daily summary stock')
                 except Exception as e:
                     print(f"Error while processing stock summary: {e}")
 
         except Exception as e:
             print(f"Unexpected error in send_summary: {e}")
-
-
 
 # Initialize the manager
 manager = CryptoStockManager(config_file_path="config.ini")
@@ -218,21 +209,21 @@ current_hour = now.tm_hour
 current_minute = now.tm_min
 noon_hour, noon_minute = map(int, noon_analysis.split(":"))
 
+if manager.test_mode == 1: #Test_mode in config
+    #manager.hundred_hour_analysis() 
+    manager.hundred_day_analysis() 
+    manager.send_summary()
+
 if current_hour > noon_hour or (current_hour == noon_hour and current_minute >= noon_minute):
     manager.hundred_day_analysis() 
-
-if manager.test_mode == 1: #Test_mode in config
-    manager.hundred_hour_analysis() 
-    manager.hundred_day_analysis() 
-    manager.send_summary
 
 # Schedule tasks
 schedule.every().hour.do(manager.hundred_hour_analysis)          
 schedule.every().day.at(morning_analysis).do(manager.hundred_day_analysis)
 schedule.every().day.at(noon_analysis).do(manager.hundred_day_analysis)
 
-#schedule.every().day.at(midnight_config).do(lambda: manager.load_config()) #reload config at midnight 
-schedule.every().day.at(evening_summary).do(manager.send_summary) #Daily summary
+#schedule.every().day.at(midnight_config).do(lambda: manager.load_config()) # Reload config at midnight
+schedule.every().day.at(evening_summary).do(manager.send_summary) # Daily summary
 
 while True:
     try:

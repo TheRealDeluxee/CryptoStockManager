@@ -1,14 +1,14 @@
 # Modified func.py with volume bars added to the plot
 
-# --- Standardbibliothek ---
+# --- Standard Library ---
 import os
 import time
 import base64, hashlib, hmac
 from datetime import datetime, timedelta
-from urllib.parse import quote  # nur falls du URL-Teile kodieren musst
+from urllib.parse import quote  # only if you need to encode URL parts
 import urllib.request, json
 
-# --- Externe Pakete ---
+# --- External Packages ---
 import requests #instal
 import pandas as pd #instal
 import numpy as np # install
@@ -21,77 +21,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
+import matplotlib.patches as mpatches
 
 token_pushover  = ""
 user_pushover = ""
-av_key = ""
-
 one_day_price_change = ""
 seven_day_price_change = ""
 one_day_profit_limit = ""
 output_dir = 'plots'
-av_key = ""
 
-def get_stock(symbol, period):
-    # Determine interval and Alpha Vantage function
-    if period == '1mo':
-        function = 'TIME_SERIES_INTRADAY'
-        interval = '60min'
-    else:
-        function = 'TIME_SERIES_DAILY'
-
-    # Construct API URL
-    base_url = 'https://www.alphavantage.co/query'
-    params = {
-        'function': function,
-        'symbol': symbol,
-        'apikey': av_key
-    }
-
-    if function == 'TIME_SERIES_INTRADAY':
-        params['interval'] = interval
-        params['outputsize'] = 'compact'
-    else:
-        params['outputsize'] = 'compact'
-
-    df = pd.DataFrame()
-
-    for i in range(5):
-        try:
-            response = requests.get(base_url, params=params)
-            data = response.json()
-
-            key = next(k for k in data if "Time Series" in k)
-            df = pd.DataFrame.from_dict(data[key], orient='index')
-            df.index = pd.to_datetime(df.index)
-            df = df.sort_index()
-
-            if not df.empty:
-                break
-            else:
-                time.sleep(300)
-        except Exception as e:
-            print(f"Attempt {i+1} failed for {symbol}: {e}")
-            time.sleep(300)
-
-    df = df.tail(100)
-    df['Date'] = df.index
-    df['Price'] = df['4. close'].astype(float)
-    df['Volume'] = df['5. volume'].astype(float)  # Keep volume
-
-    df = df.reset_index(drop=True)
-    df_dropped = df.drop(columns=[col for col in df.columns if 'open' in col.lower()
-                                                       or 'high' in col.lower()
-                                                       or 'low' in col.lower()
-                                                       or col not in ['Date', 'Price', 'Volume']])  # Keep Volume
-
-    return df_dropped
-
-
-def get_stock_yf_old(symbol,period):
-    # Fetch historical stock data from Yahoo Finance
-    # Attempts multiple tries if data retrieval fails
-    # Drops unneeded columns before returning the DataFrame
+def get_stock(symbol,period):
     df = pd.DataFrame()
 
     if period =='1mo':
@@ -129,6 +68,7 @@ def get_stock_yf_old(symbol,period):
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
 
     return df_dropped
+
 
 def get_crypto(symbol,params_historical):
     # Set the API endpoint and parameters for historical data
@@ -179,7 +119,7 @@ def calc_indicator_fuctions(df):
     df['Position'] = df['Signal'].diff()
     df['Diff EMA'] = df['Fast EMA'] - df['Slow EMA']
 
-    # Calculate Min Max
+    # Calculate min and max
     df['High'] = df['Fast EMA'].max()
     df['Low'] = df['Fast EMA'].min()
     df['HighP'] = np.where(df['Fast EMA'] == df['High'], 1, 0)
@@ -190,18 +130,20 @@ def calc_indicator_fuctions(df):
 
     # Calculate RSI14
     df['RSI14'] = calculate_rsi(df, window=14)
+
     # Calculate Momentum
-    df['Mom10'] = calculate_momentum(df, window=10)
+    df['Mom10'] = calculate_momentum(df, 'Price', window=10)
+    # Calculate Volume Momentum
+    df['VMom10'] = calculate_momentum(df, 'Volume', window=10)
+
     # Calculate VWMA20
     df['VWMA20'] = calculate_vwma(df, window=20)
     # Calculate SMA20
-    df['SMA20'] = calculate_sma(df, window=20)
+    df['SMA7'] = calculate_ma(df, 'Price', window=7)
+    # Calculate VMA20
+    df['VMA7'] = calculate_ma(df, 'Volume', window=7)
 
-    # Calculate VolMA20
-    if 'Volume' in df.columns:
-        df['VolMA20'] = df['Volume'].rolling(20, min_periods=10).mean()
-        df['VolRatio20'] = df['Volume'] / df['VolMA20']
-    #save_csv(df,"test.csv") #Für Debugging
+    #save_csv(df,"test.csv") #For debugging
     return df
 
 
@@ -211,64 +153,30 @@ def save_csv(df, path=None, index=False, date_cols=()):
         if c in d: d[c] = pd.to_datetime(d[c], errors='coerce').dt.strftime('%d.%m.%Y')
     return d.to_csv(path, sep=";", decimal=",", index=index, encoding="utf-8-sig", lineterminator="\n")
 
-def calc_stat_limits(df, column, window=20):
+def calculate_ma(df, column, window=20):
     if column not in df.columns:
-        return {k: np.nan for k in
-                ["std90_upper","std90_lower","mad90_upper","mad90_lower",
-                 "q95_upper","q05_lower"]}
-
-    data = df[column].dropna().to_numpy()[-window:]
-    if data.size < 2:
-        return {k: np.nan for k in
-                ["std95_upper","std95_lower","mad95_upper","mad95_lower",
-                 "q95_upper","q95_lower"]}
-
-    mean   = np.mean(data)
-    median = np.median(data)
-    std    = np.std(data, ddof=1)
-    mad    = np.median(np.abs(data - median))
-
-    z = 1.6448536269514722   # 90% zweiseitig (je 5% an den Rändern)
-    robust_sigma = 1.4826 * mad
-
-    std95_upper = mean   + z * std
-    std95_lower = mean   - z * std
-    mad95_upper = median + z * robust_sigma
-    mad95_lower = median - z * robust_sigma
-
-    q95_lower, q95_upper = np.quantile(data, [0.05, 0.95])
-
-    return {
-        "std95_upper": std95_upper, "std95_lower": std95_lower,
-        "mad95_upper": mad95_upper, "mad95_lower": mad95_lower,
-        "q95_upper": q95_upper, "q95_lower": q95_lower,
-        "mean": mean, "median": median
-    }
-
-def calculate_sma(df, window=20):
-    if 'Price' not in df.columns:
         return pd.Series(index=df.index, dtype=float)
-    return df['Price'].rolling(window=window).mean()
+    return df[column].rolling(window=window).mean()
 
 def calculate_rsi(df, window=14):
-    delta = df['Price'].diff()  # Preisänderungen berechnen
-    gain = delta.where(delta > 0, 0)  # Gewinne (positive Änderungen)
-    loss = -delta.where(delta < 0, 0)  # Verluste (negative Änderungen)
+    delta = df['Price'].diff()  # Calculate price changes
+    gain = delta.where(delta > 0, 0)  # Gains (positive changes)
+    loss = -delta.where(delta < 0, 0)  # Losses (negative changes)
 
-    # Gleitender Durchschnitt für Gewinne und Verluste
+    # Moving average for gains and losses
     avg_gain = gain.rolling(window=window, min_periods=window).mean()
     avg_loss = loss.rolling(window=window, min_periods=window).mean()
 
-    # Berechnung von RSI
+    # RSI calculation
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
 
-    # Rückgabe von RSI
+    # Return RSI
     return rsi
 
 
-def calculate_momentum(df, window=10):
-    momentum = df['Price'] - df['Price'].shift(window)
+def calculate_momentum(df, column, window=10):
+    momentum = df[column] - df[column].shift(window)
     return momentum
 
 def calculate_vwma(df, window=20):
@@ -357,38 +265,16 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
 
         if 'Volume' in df.columns:
             colors = ['green' if close > open_val else 'red' for open_val, close in zip(df['Price'].shift(1), df['Price'])]
-            colors[0] = 'gray'  # Erster Balken neutral, da kein Vortag
-            ax3.bar(df['Date'], df['Volume'], color=colors, alpha=0.7, label='Volume')  # Alpha erhöht für bessere Sichtbarkeit
+            colors[0] = 'gray'  # First bar neutral, since no previous day
+            ax3.bar(df['Date'], df['Volume'], color=colors, alpha=0.7, label='Volume')  # Increased alpha for better visibility
             
         #-------------Save
         os.makedirs(output_dir, exist_ok=True)
         plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight')
         plt.close(fig)
 
-
-
-def get_crypto_price(coin): #in Euro
-    url = 'https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=eur'.format(coin)
-    
-    for i in range(5):
-        try:
-            response = requests.get(url)
-            break
-        except Exception as e:
-            infos = {'tries': int(i), 'function': 'get_crypto_price','exception': e}
-            msg = "Script try number %(tries)s to %(function)s \n\n%(exception)s" %infos
-            pushover(msg)
-            time.sleep(300)
-    
-    if response.status_code == 200:
-        json_data = response.json()
-        price = json_data[coin]['eur']
-        return price
-    else:
-        return -1
-
 def pushover(message: str):
-    # Logfile
+    # Log file
     with open('logfile.txt', 'a') as f:
         f.write(time.strftime("%x %X", time.localtime()) + '  \n' + message + '\n\n')
 
@@ -442,8 +328,8 @@ def google_trends(search):
             pushover(msg)
             time.sleep(300)
     
-    kw_list = [search] # list of keywords to get data 
-    pytrends.build_payload(kw_list, cat=0, timeframe='today 12-m') #Trend for 12 month
+    kw_list = [search] # List of keywords to get data
+    pytrends.build_payload(kw_list, cat=0, timeframe='today 12-m') # Trend for 12 months
     data = pytrends.interest_over_time() 
     data = data.reset_index() 
 
@@ -489,63 +375,64 @@ def seven_day_slope_pct(df, current):
 
     return slope_pct
 
+def calc_stat_limits(df, column, window=100, invert=False):
+    if column not in df.columns:
+        return np.nan, np.nan
 
-def RSI_check(value, sig_count):
-    sig = str(round(value, 1))
-    if value < 30: 
-        sig += " < 30 (buy-oversold)"
-        sig_count += 1
-    elif value > 70: 
-        sig += " > 70 (sell-overbought)"
-        sig_count -= 1  
-    elif 30 <= value <= 50:
-        sig += " (neutral-bearish)"
-    else:  # 50 < value <= 70
-        sig += " (neutral-bullish)"  # Fixed typo: "bullisch" -> "bullish"
-
-    return sig, sig_count
-
-def signal_slope(slope_pct,sig_count):
+    data = df[column].dropna().to_numpy()[-window:]
+    if data.size < 2:
+        return np.nan, np.nan
     
-    sig = str(round(slope_pct,1))
-    if slope_pct > 2: 
-        sig += "% (buy)"
-        sig_count += 1
-    elif slope_pct < -2: 
-        sig += "% (sell)"
-        sig_count += -1
-    else: 
-        sig += "% (neutral)"
-        sig_count += 0
+        # Calculate quantile (percentile) of current_value in data
+    quantile = float(np.sum(data <= df[column].iloc[-1])) / len(data)
+    quantile_pct = round(quantile * 100, 2)
 
-    return sig, sig_count
+    if invert:
+        quantile_pct = 100 - quantile_pct
+
+    if quantile_pct <= 10:
+        sig_count = -3
+    elif quantile_pct <= 20:
+        sig_count = -2
+    elif quantile_pct <= 30:
+        sig_count = -1
+    elif quantile_pct >= 90:
+        sig_count = 3
+    elif quantile_pct >= 80:
+        sig_count = 2
+    elif quantile_pct >= 70:
+        sig_count = 3
+    else:
+        sig_count = 0
+
+    return sig_count, quantile_pct
+
 
 def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, link, data_type):
 
     alarms = {}
     alarm_indicator = ""
-    signal_count = 0
+    score = 0
     alarm_message_add = ""
 
     #Indikatoren
-    dEMA_pct, signal_count = signal_slope((df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100, signal_count)
-    RSI14, signal_count = RSI_check(df['RSI14'].iloc[-1], signal_count)
+    RSI14_signal_count, RSI14_quantile_pct = calc_stat_limits(df, 'RSI14', window=100, invert=True) 
+    MOM10_signal_count, MOM10_quantile_pct = calc_stat_limits(df, 'Mom10', window=100, invert=False) 
+    VMOM10_signal_count, VMOM10_quantile_pct = calc_stat_limits(df, 'VMom10', window=100, invert=False)
+    SMA7_signal_count, SMA7_quantile_pct = calc_stat_limits(df, 'SMA7', window=100, invert=False)
+    VMA7_signal_count, VMA7_quantile_pct = calc_stat_limits(df, 'VMA7', window=100, invert=False)
 
-    if df['Mom10'].iloc[-2] != 0: #Vermeidung Division durch Null
-        dMom10_pct, signal_count = signal_slope((df['Mom10'].iloc[-1] - df['Mom10'].iloc[-2]) / df['Mom10'].iloc[-2] * 100, signal_count)
-    else:
-        dMom10_pct, signal_count = signal_slope(0, signal_count)  
+    
+    #dEMA_pct, signal_count = signal_slope((df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100, signal_count)
+    #dVWMA20_pct, signal_count = signal_slope((df['VWMA20'].iloc[-1] - df['VWMA20'].iloc[-2])/df['VWMA20'].iloc[-2]*100,signal_count) #VolRatio20 check before VWMA20
 
-    dVWMA20_pct, signal_count = signal_slope((df['VWMA20'].iloc[-1] - df['VWMA20'].iloc[-2])/df['VWMA20'].iloc[-2]*100,signal_count) #VolRatio20 check before VWMA20
-    #VolMA20 feature to be added
-
-    current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
+    #current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
     current_seven_days_slope_pct = seven_day_slope_pct(df, True)
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
     alarm_buy_sell = "Hold"
 
-    #Watch-list & Portfolio-list
+    # Watch-list & Portfolio-list
 
     if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
         alarm_buy_sell = "Buy"
@@ -565,7 +452,7 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
         alarm_code = "122"
         alarm_value = 1
         
-    #Portfolio-list
+    # Portfolio-list
     if not watch_list: 
         
         alarm_message_add = "Amount >1 year: {} ({} %)".format(round(amount_older_than_one_year,2),round(amount_older_than_one_year_pct,2))
@@ -596,35 +483,147 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
         alarm_symbol_color = "green"
 
     if alarm_buy_sell != "Hold":
-        # Headline (nur Symbol)
+    # Headline (only symbol)
         alarm_headline = f"{symbol}"
 
-        # Body-Text (mehrzeilig)
+    # Helper to build arrow string for signal count
+        def arrow_string(count):
+            if np.isnan(count):
+                return ""
+            arrow_up = "+"  # Up
+            arrow_down = "-"  # Down
+            cycle = "&#8226;"      # Neutral
+            if count > 0:
+                return f" {arrow_up * int(count)}"
+            elif count < 0:
+                return f" {arrow_down * abs(int(count))}"
+            return f" {cycle}"
+
+        alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
+        alarm_analysis2, score = tech_analyse2(MOM10_signal_count,VMOM10_signal_count, score)
+        alarm_analysis3, score = tech_analyse3(SMA7_signal_count,VMA7_signal_count, score)
+
         alarm_message = (
             f"Trigger: {alarm_indicator}"
+            f"Score: {score}\n"
             f" ({data_type})\n"
-            f"EMA: {dEMA_pct}\n"
-            f"RSI14: {RSI14}\n"
-            f"MOM10: {dMom10_pct}\n"
-            f"VWMA20: {dVWMA20_pct}\n"
-            f"{alarm_message_add}"
+            f"RSI14: {round(RSI14_quantile_pct,2)} %{arrow_string(RSI14_signal_count)}\n"
+            f"{alarm_analysis1}\n\n"
+            f"SMA7: {SMA7_quantile_pct} %{arrow_string(SMA7_signal_count)}\n"
+            f"VMA7: {VMA7_quantile_pct} %{arrow_string(VMA7_signal_count)}\n"
+            f"{alarm_analysis3}\n\n"
+            f"MOM10: {MOM10_quantile_pct} %{arrow_string(MOM10_signal_count)}\n"
+            f"VMOM10: {VMOM10_quantile_pct} %{arrow_string(VMOM10_signal_count)}\n"
+            f"{alarm_analysis2}\n\n"
+            f"{alarm_message_add}\n"
         )
 
-        # HTML zusammenbauen – Headline separat, Body schwarz
+        score = RSI14_signal_count
+
+    # Build HTML – headline separate, body black
         alarms[alarm_code] = {
                 "value": alarm_value,
                 "msg": (
                     f"<html><body>"
-                    # Headline (separates Element, 28px, farbig)
+                    # Headline (separate element, 28px, colored)
                     f"<div style='font-size:28px; font-weight:700; color:{alarm_symbol_color};'>"
                     f"{alarm_headline} {alarm_symbol}</div>"
-                    # Body (schwarz; \n bleibt dank white-space:pre-line erhalten)
+                    # Body (black; \n remains due to white-space:pre-line)
                     f"<div style='color:black; white-space:pre-line;'>{alarm_message}</div>"
                     f"</body></html>"
                 )
             }
 
-    return alarms, signal_count
+    return alarms, score
+
+
+# Analyse 1: Nur RSI
+def tech_analyse1(RSI14, score):
+    parts = []
+    prob_map = {1: "Potentially", 2: "Possible", 3: "Very likely"}
+    if RSI14 != 0:
+        direction = "correction to rise." if RSI14 > 0 else "correction to fall."
+        parts.append(f"{prob_map.get(abs(RSI14), 'Potentially')} {direction}")
+    analysis = "Analysis: " + " ".join(s.strip() for s in parts if s)
+    score += RSI14
+    return analysis, score
+
+# Analyse 2: MOM10 und VMOM10
+def tech_analyse2(MOM10, VMOM10, score):
+    # Volume Support Matrix
+    VOLUME_MATRIX = {
+        -3: "Very low volume supported",
+        -2: "Low volume supported",
+        -1: "Decreased volume supported",
+         0: "Average volume supported",
+         1: "Increased volume supported",
+         2: "High volume supported",
+         3: "Very high volume supported"
+    }
+    
+    # Momentum Movement Matrix
+    MOMENTUM_MATRIX = {
+        -3: "strong slowdown",
+        -2: "slowdown",
+        -1: "slight slowdown",
+         0: "steady movement",
+         1: "slight acceleration",
+         2: "acceleration",
+         3: "strong acceleration"
+    }
+    
+    # Werte aus den Matrizen holen (mit Fallback)
+    volume_text = VOLUME_MATRIX.get(VMOM10, "Volume support anomaly")
+    momentum_text = MOMENTUM_MATRIX.get(MOM10, "movement")
+
+    score += MOM10 + VMOM10
+
+    if MOM10 > 0 and VMOM10 < 0:
+        fake_out = " (possible fake-out)"
+        score += 0
+    else:
+        fake_out = ""
+    
+    return f"Short-term-Analysis: {volume_text} {momentum_text}{fake_out}.", score
+
+# Analyse 3: SMA7 und VMA7
+def tech_analyse3(SMA7, VMA7, score):
+    # Volume Matrix
+    VOLUME_MATRIX = {
+        -3: "Very low volume",
+        -2: "Low volume",
+        -1: "Decreased volume",
+         0: "Average volume",
+         1: "Increased volume",
+         2: "High volume",
+         3: "Very high volume"
+    }
+    
+    # Trend Strength Matrix (basierend auf Absolutwert)
+    TREND_MATRIX = {
+        -3: "with strong negative trend",
+        -2: "with negative trend",
+        -1: "with slight negative trend",
+        0: "without trend",
+        1: "with slight trend",
+        2: "with trend",
+        3: "with strong trend"
+    }
+    
+    # Werte aus den Matrizen holen (mit Fallback)
+    volume_text = VOLUME_MATRIX.get(VMA7, "Volume anomaly")
+    trend_text = TREND_MATRIX.get(abs(SMA7), "with trend")
+
+    score += SMA7 + VMA7
+
+    if SMA7 > 0 and VMA7 < 0:
+        fake_out = " (possible fake-out)"
+        score += 0
+    else:
+        fake_out = ""
+
+    return f"Trend-Analysis: {volume_text} {trend_text}{fake_out}.", score
+
 
 def older_than_one_year(df):
     current_date = datetime.now()
@@ -633,3 +632,47 @@ def older_than_one_year(df):
     total_amount = filtered_df['Amount'].sum()
     
     return total_amount
+
+def create_table_image(df, output_path, title):
+    
+    # Figure erstellen
+    fig, ax = plt.subplots(figsize=(14, len(df) * 0.5 + 1))
+    ax.axis('tight')
+    ax.axis('off')
+    
+    # Tabelle erstellen
+    table = ax.table(
+        cellText=df.values,
+        colLabels=df.columns,
+        cellLoc='center',
+        loc='center',
+        bbox=[0, 0, 1, 1]
+    )
+    
+    # Styling
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 2)
+    
+    # Header-Zeile hervorheben
+    for i in range(len(df.columns)):
+        cell = table[(0, i)]
+        cell.set_facecolor('#4CAF50')
+        cell.set_text_props(weight='bold', color='white')
+    
+    # Total-Zeile hervorheben (letzte Zeile)
+    for i in range(len(df.columns)):
+        cell = table[(len(df), i)]
+        cell.set_facecolor('#E8E8E8')
+        cell.set_text_props(weight='bold')
+    
+    # Alternierende Zeilenfarben
+    for i in range(1, len(df)):
+        for j in range(len(df.columns)):
+            cell = table[(i, j)]
+            if i % 2 == 0:
+                cell.set_facecolor('#F5F5F5')
+    
+    plt.title(title, fontsize=14, fontweight='bold', pad=20)
+    plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
