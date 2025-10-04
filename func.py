@@ -411,8 +411,9 @@ def calc_stat_limits(df, column, window=100, invert=False):
 def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, link, data_type):
 
     alarms = {}
+    tech_indicators = None  # oder [] oder {}
+    score = 0            # falls score auch betroffen ist
     alarm_indicator = ""
-    score = 0
     alarm_message_add = ""
 
     #Indikatoren
@@ -482,6 +483,19 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
         alarm_symbol = "&#9650;"
         alarm_symbol_color = "green"
 
+    alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
+    alarm_analysis2, score = tech_analyse2(MOM10_signal_count,VMOM10_signal_count, score)
+    alarm_analysis3, score = tech_analyse3(SMA7_signal_count,VMA7_signal_count, score)
+    score = RSI14_signal_count
+
+    tech_indicators = {
+        'RSI14': RSI14_quantile_pct,
+        'MOM10': MOM10_quantile_pct,
+        'VMOM10': VMOM10_quantile_pct,
+        'SMA7': SMA7_quantile_pct,
+        'VMA7': VMA7_quantile_pct
+    }
+
     if alarm_buy_sell != "Hold":
     # Headline (only symbol)
         alarm_headline = f"{symbol}"
@@ -499,14 +513,12 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
                 return f" {arrow_down * abs(int(count))}"
             return f" {cycle}"
 
-        alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
-        alarm_analysis2, score = tech_analyse2(MOM10_signal_count,VMOM10_signal_count, score)
-        alarm_analysis3, score = tech_analyse3(SMA7_signal_count,VMA7_signal_count, score)
+
 
         alarm_message = (
             f"Trigger: {alarm_indicator}"
-            f"Score: {score}\n"
             f" ({data_type})\n"
+            f"Score: {score}\n\n"
             f"RSI14: {round(RSI14_quantile_pct,2)} %{arrow_string(RSI14_signal_count)}\n"
             f"{alarm_analysis1}\n\n"
             f"SMA7: {SMA7_quantile_pct} %{arrow_string(SMA7_signal_count)}\n"
@@ -518,7 +530,6 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
             f"{alarm_message_add}\n"
         )
 
-        score = RSI14_signal_count
 
     # Build HTML – headline separate, body black
         alarms[alarm_code] = {
@@ -534,7 +545,7 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
                 )
             }
 
-    return alarms, score
+    return alarms, tech_indicators, score
 
 
 # Analyse 1: Nur RSI
@@ -633,10 +644,10 @@ def older_than_one_year(df):
     
     return total_amount
 
-def create_table_image(df, output_path, title):
+def create_table_image(df, output_path):
     
-    # Figure erstellen
-    fig, ax = plt.subplots(figsize=(14, len(df) * 0.5 + 1))
+    # Figure erstellen (schmaler)
+    fig, ax = plt.subplots(figsize=(4.5, len(df) * 0.45 + 0.8))
     ax.axis('tight')
     ax.axis('off')
     
@@ -648,11 +659,17 @@ def create_table_image(df, output_path, title):
         loc='center',
         bbox=[0, 0, 1, 1]
     )
+    # Adjust first column width for long names
+    col_widths = [0.22] + [0.13] * (len(df.columns) - 1)
+    for i, width in enumerate(col_widths):
+        for j in range(len(df) + 1):
+            cell = table[(j, i)]
+            cell.set_width(width)
     
     # Styling
     table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1, 2)
+    table.set_fontsize(7)
+    table.scale(0.55, 1.2)
     
     # Header-Zeile hervorheben
     for i in range(len(df.columns)):
@@ -673,6 +690,5 @@ def create_table_image(df, output_path, title):
             if i % 2 == 0:
                 cell.set_facecolor('#F5F5F5')
     
-    plt.title(title, fontsize=14, fontweight='bold', pad=20)
     plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()

@@ -32,6 +32,7 @@ class crypto_stock:
         self.amount_crypto_stock = 0
         self.data_type = ''
         self.score = 0
+        self.tech_indicators = {}
 
         self.test_mode = False
         self.current_EMA_diff_pct = 0
@@ -117,35 +118,22 @@ class crypto_stock:
         self.amount_older_than_one_year = func.older_than_one_year(self.df_buy_history)
         self.amount_older_than_one_year_pct = self.amount_older_than_one_year / self.amount_crypto_stock * 100
         
-        alarms, self.score = func.alarm(df,self.search,self.watch_list, self.current_profit_pct, self.amount_older_than_one_year, self.amount_older_than_one_year_pct, link, self.data_type)
+        alarms, self.tech_indicators, self.score = func.alarm(df,self.search,self.watch_list, self.current_profit_pct, self.amount_older_than_one_year, self.amount_older_than_one_year_pct, link, self.data_type)
 
         alarms_filter = self.filter(alarms)
         for key, info in alarms_filter.items():
             func.pushover_image(self.symbol, info['msg'])
 
-    # Watch-list items
-        if self.watch_list:
-            return {
-                'Name': self.search,
-                'Piece [€]': round(df.tail(1)['Price'].values[0], 2),
-                'Profit [€]': 0,
-                'Profit [%]': 0,
-                '7 days [%]': self.current_seven_days_slope_pct,
-                '1 day [%]': self.current_one_day_price_change_pct,
-                'dEMA [%]': self.current_EMA_diff_pct,
-                'Rating': self.score
-            }
-        else:
-            return {
-                'Name': self.search,
-                'Piece [€]': round(df.tail(1)['Price'].values[0], 2),
-                'Profit [€]': self.current_profit,
-                'Profit [%]': self.current_profit_pct,
-                '7 days [%]': self.current_seven_days_slope_pct,
-                '1 day [%]': self.current_one_day_price_change_pct,
-                'dEMA [%]': self.current_EMA_diff_pct,
-                'Rating': self.score
-            }
+        return {
+            'Name': self.search,
+            'RSI14': self.tech_indicators.get('RSI14', None),
+            'MOM10': self.tech_indicators.get('MOM10', None),
+            'VMOM10': self.tech_indicators.get('VMOM10', None),
+            'SMA7': self.tech_indicators.get('SMA7', None),
+            'VMA7': self.tech_indicators.get('VMA7', None),
+            'Rating': self.score
+        }
+
 
     def filter(self,alarm_neu):
         change = {}

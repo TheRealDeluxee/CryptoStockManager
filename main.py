@@ -20,10 +20,11 @@ class CryptoStockManager:
         self.config_file_path = config_file_path
         self.test_mode = 0
         self.output_dir = output_dir
-        self.df_crypto_hd = pd.DataFrame(columns=['Name', 'Piece [€]', 'Profit [€]', 'Profit [%]', '7 days [%]', '1 day [%]', 'dEMA [%]', 'Rating'])
-        self.df_stock_hd = pd.DataFrame(columns=['Name', 'Piece [€]', 'Profit [€]', 'Profit [%]', '7 days [%]', '1 day [%]', 'dEMA [%]', 'Rating'])
-        self.df_crypto_hh = pd.DataFrame(columns=['Name', 'Piece [€]', 'Profit [€]', 'Profit [%]', '7 Hours [%]', '1 Hour [%]', 'dEMA [%]', 'Rating'])
-        self.df_stock_hh = pd.DataFrame(columns=['Name', 'Piece [€]', 'Profit [€]', 'Profit [%]', '7 Hours [%]', '1 Hour [%]', 'dEMA [%]', 'Rating'])
+        self.df_crypto_hd = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
+        self.df_stock_hd = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
+        self.df_crypto_hh = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
+        self.df_stock_hh = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
+        
         self.crypto_items_hh = []
         self.crypto_items_hd = []
         self.stock_items_hh = []
@@ -154,28 +155,10 @@ class CryptoStockManager:
             self.df_crypto_hd = self.df_crypto_hd.sort_values(by=['Rating'], ascending=False)
             self.df_stock_hd = self.df_stock_hd.sort_values(by=['Rating'], ascending=False)
 
-            if not self.df_crypto_hd.empty:
-                self.df_crypto_hd.loc[len(self.df_crypto_hd)] = [
-                    'Total', '-', 
-                    self.df_crypto_hd['Profit [€]'].sum(), 
-                    self.df_crypto_hd['Profit [%]'].mean(), 
-                    self.df_crypto_hd['7 days [%]'].mean(), 
-                    self.df_crypto_hd['1 day [%]'].mean(), 
-                    self.df_crypto_hd['dEMA [%]'].mean(), '-'
-                ]
-
             print(f"\nLast refresh {time.asctime(now)}")
             print(self.df_crypto_hd.round(2))
 
             if self.stock_update and not self.df_stock_hd.empty:
-                self.df_stock_hd.loc[len(self.df_stock_hd)] = [
-                    'Total', '-', 
-                    self.df_stock_hd['Profit [€]'].sum(), 
-                    self.df_stock_hd['Profit [%]'].mean(), 
-                    self.df_stock_hd['7 days [%]'].mean(), 
-                    self.df_stock_hd['1 day [%]'].mean(), 
-                    self.df_stock_hd['dEMA [%]'].mean(), '-'
-                ]
                 print('\n')
                 print(self.df_stock_hd.round(2))
 
@@ -183,7 +166,7 @@ class CryptoStockManager:
             try:
                 output_path = os.path.join(self.output_dir, 'summary_crypto.png')
                 if not self.df_crypto_hd.empty:
-                    func.create_table_image(self.df_crypto_hd.round(2), output_path, 'Crypto Summary')
+                    func.create_table_image(self.df_crypto_hd.round(2), output_path)
                     func.pushover_image('summary_crypto', 'Daily summary crypto')
             except Exception as e:
                 print(f"Error while processing crypto summary: {e}")
@@ -192,7 +175,7 @@ class CryptoStockManager:
                 try:
                     output_path = os.path.join(self.output_dir, 'summary_stock.png')
                     if not self.df_stock_hd.empty:
-                        func.create_table_image(self.df_stock_hd.round(2), output_path, 'Stock Summary')
+                        func.create_table_image(self.df_stock_hd.round(2), output_path)
                         func.pushover_image('summary_stock', 'Daily summary stock')
                 except Exception as e:
                     print(f"Error while processing stock summary: {e}")
@@ -210,7 +193,7 @@ current_minute = now.tm_min
 noon_hour, noon_minute = map(int, noon_analysis.split(":"))
 
 if manager.test_mode == 1: #Test_mode in config
-    #manager.hundred_hour_analysis() 
+    manager.hundred_hour_analysis() 
     manager.hundred_day_analysis() 
     manager.send_summary()
 
