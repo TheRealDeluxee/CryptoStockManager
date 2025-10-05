@@ -24,7 +24,7 @@ class CryptoStockManager:
         self.df_stock_hd = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
         self.df_crypto_hh = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
         self.df_stock_hh = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
-        
+        self.version = "0.0.0"
         self.crypto_items_hh = []
         self.crypto_items_hd = []
         self.stock_items_hh = []
@@ -38,6 +38,7 @@ class CryptoStockManager:
             raise FileNotFoundError(f"The INI file '{self.config_file_path}' could not be found or loaded.")
 
         try:
+            self.version = config.get('version', 'number')
             func.token_pushover = config.get('pushover', 'token')
             func.user_pushover = config.get('pushover', 'user')
             self.test_mode = int(config.get('alarm', 'test_mode'))
@@ -46,7 +47,7 @@ class CryptoStockManager:
             func.one_day_profit_limit = int(config.get('alarm', 'one_day_profit_limit'))
             self.previous_alarm_change = int(config.get('alarm', 'previous_alarm_change'))
         except (configparser.NoSectionError, configparser.NoOptionError) as e:
-            print(f"Error in the configuration: {e}")
+            func.log_print(f"Error in the configuration: {e}")
 
         if "crypto" in config.sections():
             crypto_config_items = config.items("crypto")
@@ -66,12 +67,12 @@ class CryptoStockManager:
                             date = date_str.strip()
                             crypto_obj.buy(spend, quantity, date)
                         except ValueError:
-                            print(f"Error when parsing spend or quantity for {name}")
+                            func.log_print(f"Error when parsing spend or quantity for {name}")
                 except ValueError:
-                    print(f"Error when parsing spend or quantity for {crypto}")
+                    func.log_print(f"Error when parsing spend or quantity for {crypto}")
 
         else:
-            print("Error: Section 'crypto' is missing in the INI file.")
+            func.log_print("Error: Section 'crypto' is missing in the INI file.")
 
         if "stocks" in config.sections():
             stock_config_items = config.items("stocks")
@@ -91,17 +92,17 @@ class CryptoStockManager:
                             date = date_str.strip()
                             stock_obj.buy(spend, quantity, date)
                         except ValueError:
-                            print(f"Error when parsing spend or quantity for {name}")
+                            func.log_print(f"Error when parsing spend or quantity for {name}")
                 except ValueError:
-                    print(f"Error when parsing spend or quantity for {stock}")
+                    func.log_print(f"Error when parsing spend or quantity for {stock}")
         else:
-            print("Error: Section 'stocks' is missing in the INI file.")
+            func.log_print("Error: Section 'stocks' is missing in the INI file.")
         
     def restart_program(self):
         python = sys.executable
         return_code = subprocess.call([python] + sys.argv)
         if return_code != 0:
-            print(f"Warning: Restart failed with return code {return_code}")
+            func.log_print(f"Warning: Restart failed with return code {return_code}")
 
     def schedule_on_weekdays(self):
         now = time.localtime()
@@ -117,7 +118,7 @@ class CryptoStockManager:
         now = time.localtime()
         current_time = time.strftime("%Y-%m-%d %H:%M:%S", now)
 
-        print(f"Hundred day analysis started: {current_time}")
+        func.log_print(f"Hundred day analysis started")
 
         self.df_crypto_hd = self.df_crypto_hd[0:0]
         self.df_stock_hd = self.df_stock_hd[0:0]
@@ -134,15 +135,15 @@ class CryptoStockManager:
         now = time.localtime()
         current_time = time.strftime("%Y-%m-%d %H:%M:%S", now)
 
-        print(f"Hundred hour analysis started: {current_time}")
+        func.log_print(f"Hundred hour analysis started")
 
         self.df_crypto_hh = self.df_crypto_hh[0:0]
         self.df_stock_hh = self.df_stock_hh[0:0]
 
         self.schedule_on_weekdays()
-        if self.stock_update:
-            for item in self.stock_items_hh:
-                self.df_stock_hh.loc[len(self.df_stock_hh)] = item.refresh('100h')
+        #if self.stock_update:
+        #    for item in self.stock_items_hh:
+        #        self.df_stock_hh.loc[len(self.df_stock_hh)] = item.refresh('100h')
 
         for item in self.crypto_items_hh:
             self.df_crypto_hh.loc[len(self.df_crypto_hh)] = item.refresh('100h')
@@ -155,12 +156,12 @@ class CryptoStockManager:
             self.df_crypto_hd = self.df_crypto_hd.sort_values(by=['Rating'], ascending=False)
             self.df_stock_hd = self.df_stock_hd.sort_values(by=['Rating'], ascending=False)
 
-            print(f"\nLast refresh {time.asctime(now)}")
-            print(self.df_crypto_hd.round(2))
+            func.log_print(f"\nLast refresh {time.asctime(now)}")
+            func.log_print(self.df_crypto_hd.round(2))
 
             if self.stock_update and not self.df_stock_hd.empty:
-                print('\n')
-                print(self.df_stock_hd.round(2))
+                func.log_print('\n')
+                func.log_print(self.df_stock_hd.round(2))
 
             # Create and send summaries using matplotlib
             try:
@@ -169,7 +170,7 @@ class CryptoStockManager:
                     func.create_table_image(self.df_crypto_hd.round(2), output_path)
                     func.pushover_image('summary_crypto', 'Daily summary crypto')
             except Exception as e:
-                print(f"Error while processing crypto summary: {e}")
+                func.log_print(f"Error while processing crypto summary: {e}")
 
             if self.stock_update:
                 try:
@@ -178,14 +179,14 @@ class CryptoStockManager:
                         func.create_table_image(self.df_stock_hd.round(2), output_path)
                         func.pushover_image('summary_stock', 'Daily summary stock')
                 except Exception as e:
-                    print(f"Error while processing stock summary: {e}")
+                    func.log_print(f"Error while processing stock summary: {e}")
 
         except Exception as e:
-            print(f"Unexpected error in send_summary: {e}")
+            func.log_print(f"Unexpected error in send_summary: {e}")
 
 # Initialize the manager
 manager = CryptoStockManager(config_file_path="config.ini")
-func.pushover("Initialization complete")
+func.pushover(f"Initialization complete - Version {manager.version}")
 start_time = time.time()  
 now = time.localtime()
 current_hour = now.tm_hour
@@ -228,7 +229,7 @@ while True:
         infos = {'hours': int(hours), 'minutes': int(minutes), 'seconds': int(seconds), 'exception': e}
         msg = "Script stopped because of an exception \nRuntime: %(hours)s h %(minutes)s min %(seconds)s sec \n\n%(exception)s" % infos
         func.pushover(msg)
-        print(e)
+        func.log_print(e)
         time.sleep(600)  # Waiting time of 10 minutes before restarting
         manager.restart_program()
 

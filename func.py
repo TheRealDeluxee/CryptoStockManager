@@ -7,6 +7,7 @@ import base64, hashlib, hmac
 from datetime import datetime, timedelta
 from urllib.parse import quote  # only if you need to encode URL parts
 import urllib.request, json
+import random
 
 # --- External Packages ---
 import requests #instal
@@ -30,83 +31,125 @@ seven_day_price_change = ""
 one_day_profit_limit = ""
 output_dir = 'plots'
 
-def get_stock(symbol,period):
+def get_stock(symbol, period):
     df = pd.DataFrame()
-
-    if period =='1mo':
-        interval='1h'
+    
+    if period == '1mo':
+        interval = '1h'
     else:
-        interval='1d'
-
+        interval = '1d'
+    
+    # Exponential backoff: Start with shorter waits, increase over time
+    wait_times = [60, 120, 300, 600, 900]  # 1min, 2min, 5min, 10min, 15min
+    
     for i in range(5):
         try:
+            # Random delay before request to avoid patterns (1-3 seconds)
+            time.sleep(random.uniform(1, 3))
+            
             # Fetch data from Yahoo Finance
             stock = yf.Ticker(symbol)
-            df = stock.history(period=period, interval=interval)  # Getting the last 100 days of stock data
-            if not df.empty:  # Check whether the retrieval was successful
+            df = stock.history(period=period, interval=interval)
+            
+            if not df.empty:
                 break
             else:
-                time.sleep(300)
+                wait_time = wait_times[i] if i < len(wait_times) else 900
+                msg = f"Empty response for {symbol}, waiting {wait_time}s before retry {i+1}"
+                pushover(msg)
+                time.sleep(wait_time)
+                
         except Exception as e:
-            infos = {'sym': symbol, 'tries': int(i), 'function': 'get_stock','exception': e}
-            msg = "Script try number %(tries)s to %(function)s of symbol %(sym)s \n\n%(exception)s" %infos
-            pushover(msg) 
-            time.sleep(300)
-   
-
+            error_msg = str(e).lower()
+            
+            # Bestimme Wartezeit basierend auf Error-Typ
+            if 'rate limit' in error_msg or 'too many requests' in error_msg:
+                wait_time = wait_times[i] if i < len(wait_times) else 900
+            else:
+                wait_time = 30  # Kürzere Wartezeit bei anderen Errors
+            
+            infos = {
+                'sym': symbol, 
+                'tries': int(i + 1), 
+                'function': 'get_stock',
+                'exception': e,
+                'wait_time': wait_time
+            }
+            msg = "Script try number %(tries)s to %(function)s of symbol %(sym)s\nWaiting %(wait_time)ss\n\n%(exception)s" % infos
+            pushover(msg)
+            
+            if i < 4:  # Nicht nach dem letzten Versuch warten
+                time.sleep(wait_time)
+    
+    if df.empty:
+        # Optional: Return None oder raise Exception
+        return None
+    
     if 'Date' not in df.columns:
-        df['Date'] = df.index  # Convert the DatetimeIndex into a 'Date' column
-
+        df['Date'] = df.index
+    
     df = df.tail(100)
     df['Price'] = df['Close']
-
+    
     df_inverted = df.reset_index(drop=True)
-
     df_inverted.rename(columns={'index': 'Date'}, inplace=True)
-
+    
     columns_to_drop = ['Close', 'Open', 'High', 'Low', 'Dividends', 'Stock Splits']
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
-
+    
     return df_dropped
 
 
-def get_crypto(symbol,params_historical):
-    # Set the API endpoint and parameters for historical data
+def get_crypto(symbol, params_historical):
     url_historical = f'https://api.coingecko.com/api/v3/coins/{symbol}/market_chart'
-
+    wait_times = [30, 60, 120, 300, 600]
+    data = None
+    
     for i in range(5):
         try:
-            response_historical = requests.get(url_historical, params=params_historical)
-            data = response_historical.json()
-
-            if 'prices' in data and data['prices']:
-                break
+            time.sleep(random.uniform(0.5, 2))
+            response = requests.get(url_historical, params=params_historical, timeout=30)
+            
+            # Bestimme Wartezeit basierend auf Status oder Error-Typ
+            if response.status_code == 429:
+                wait_time = int(response.headers.get('Retry-After', wait_times[i]))
+            elif response.status_code != 200:
+                wait_time = wait_times[i]
             else:
-                time.sleep(300)
+                data = response.json()
+                if 'prices' in data and data['prices']:
+                    break
+                wait_time = wait_times[i]
+            
+            log_print(f"Retry {i+1} for {symbol}, waiting {wait_time}s (Status: {response.status_code})")
+            if i < 4:
+                time.sleep(wait_time)
+                
         except Exception as e:
-            infos = {'sym': symbol, 'tries': i+1, 'function': 'get_crypto', 'exception': e}
-            msg = "Script try number %(tries)s to %(function)s of symbol %(sym)s \n\n%(exception)s" % infos
-            print(msg)
-            time.sleep(300)
-
-    # Extract the data for the last 100 days
+            wait_time = wait_times[min(i, len(wait_times)-1)]
+            log_print(f"Error for {symbol} (try {i+1}): {e}. Waiting {wait_time}s")
+            if i < 4:
+                time.sleep(wait_time)
+    
+    if not data or 'prices' not in data or not data['prices']:
+        log_print(f"Failed to fetch {symbol} after 5 attempts")
+        return None
+    
+    # Daten verarbeiten
     prices = data['prices']
-    volumes = data['total_volumes']
-    last_100_days_data = {}
-
-    for price, volume in zip(prices, volumes):  # excluding the latest price from the loop
-        # Convert timestamp to datetime and shift by one day
-        date = pd.Timestamp(price[0], unit='ms')
-        last_100_days_data[date.strftime('%Y-%m-%d %H:%M:%S')] = {'Price': price[1], 'Volume': volume[1]}
-
-    # Convert the data to pandas DataFrame for easier analysis
+    volumes = data.get('total_volumes', [[p[0], 0] for p in prices])
+    
+    last_100_days_data = {
+        pd.Timestamp(price[0], unit='ms').strftime('%Y-%m-%d %H:%M:%S'): 
+        {'Price': price[1], 'Volume': volume[1]}
+        for price, volume in zip(prices, volumes)
+    }
+    
     df = pd.DataFrame(last_100_days_data).T.reset_index()
     df.columns = ['Date', 'Price', 'Volume']
-
-    if len(df) > 100:
-        df = df.iloc[:-1]  # Remove the last row to ensure we have only 100 rows
-
+    df = df.tail(100).reset_index(drop=True)
     df['Date'] = pd.to_datetime(df['Date'])
+    
     return df
 
 def calc_indicator_fuctions(df):
@@ -264,19 +307,38 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         ax2.plot(df['Date'], df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
 
         if 'Volume' in df.columns:
-            colors = ['green' if close > open_val else 'red' for open_val, close in zip(df['Price'].shift(1), df['Price'])]
-            colors[0] = 'gray'  # First bar neutral, since no previous day
-            ax3.bar(df['Date'], df['Volume'], color=colors, alpha=0.7, label='Volume')  # Increased alpha for better visibility
-            
+            colors = ['green' if close > open_val else 'red'
+                    for open_val, close in zip(df['Price'].shift(1), df['Price'])]
+            colors[0] = 'gray'
+            dates_num = mdates.date2num(df['Date'])               # Datum -> float (Tage)
+            if len(dates_num) > 1:
+                delta_days = float(np.median(np.diff(dates_num))) # typischer Abstand
+            else:
+                delta_days = 1.0
+            bar_width = delta_days * 0.8                          # 80% des Abstands
+
+            ax3.bar(dates_num, df['Volume'],
+                    width=bar_width, align='center',
+                    color=colors, alpha=0.7, linewidth=0)
+
+            ax3.xaxis_date()  # Achse wieder als Datum formatieren
+            ax3.margins(x=0.01)  # etwas Rand, damit nichts abgeschnitten wird 
+
         #-------------Save
         os.makedirs(output_dir, exist_ok=True)
         plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight')
         plt.close(fig)
 
 def pushover(message: str):
-    # Log file
-    with open('logfile.txt', 'a') as f:
-        f.write(time.strftime("%x %X", time.localtime()) + '  \n' + message + '\n\n')
+    # Log file (prepend new entry)
+    log_entry = time.strftime("%x %X", time.localtime()) + '  \n' + message + '\n\n'
+    try:
+        with open('logfile.txt', 'r', encoding='utf-8') as f:
+            old_content = f.read()
+    except FileNotFoundError:
+        old_content = ''
+    with open('logfile.txt', 'w', encoding='utf-8') as f:
+        f.write(log_entry + old_content)
 
     try:
         requests.post(
@@ -291,11 +353,9 @@ def pushover(message: str):
             timeout=10,
         )
     except Exception as e:
-        print(f"Pushover error: {e}")
+        log_print(f"Pushover error: {e}")
 
 def pushover_image(symbol: str, message: str):
-    with open('logfile.txt', 'a') as f:
-        f.write(time.strftime("%x %X", time.localtime()) + '  \n' + message + '\n\n')
 
     file_name = os.path.join(output_dir, symbol + ".png")
     try:
@@ -313,7 +373,7 @@ def pushover_image(symbol: str, message: str):
                 timeout=30,
             )
     except Exception as e:
-        print(f"Pushover image error: {e}")
+        log_print(f"Pushover image error: {e}")
 
 
 def google_trends(search):
@@ -401,7 +461,7 @@ def calc_stat_limits(df, column, window=100, invert=False):
     elif quantile_pct >= 80:
         sig_count = 2
     elif quantile_pct >= 70:
-        sig_count = 3
+        sig_count = 1
     else:
         sig_count = 0
 
@@ -434,29 +494,27 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
     alarm_buy_sell = "Hold"
 
     # Watch-list & Portfolio-list
-
-    if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
-        alarm_buy_sell = "Buy"
-        alarm_indicator = "Cross-EMA"
-        alarm_code = "101"
-        alarm_value = 1
-
-    if current_seven_days_slope_pct > seven_day_price_change:
-        alarm_buy_sell = "Buy"
-        alarm_indicator = "Positiv-7"
-        alarm_code = "121"
-        alarm_value = current_seven_days_slope_pct
-
-    if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
-        alarm_buy_sell = "Buy"
-        alarm_indicator = "100-Minimum"
-        alarm_code = "122"
-        alarm_value = 1
-        
-    # Portfolio-list
     if not watch_list: 
         
         alarm_message_add = "Amount >1 year: {} ({} %)".format(round(amount_older_than_one_year,2),round(amount_older_than_one_year_pct,2))
+
+        if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
+            alarm_buy_sell = "Buy"
+            alarm_indicator = "Cross-EMA"
+            alarm_code = "101"
+            alarm_value = 1
+
+        if current_seven_days_slope_pct > seven_day_price_change:
+            alarm_buy_sell = "Buy"
+            alarm_indicator = "Positiv-7"
+            alarm_code = "121"
+            alarm_value = current_seven_days_slope_pct
+
+        if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
+            alarm_buy_sell = "Buy"
+            alarm_indicator = "100-Minimum"
+            alarm_code = "122"
+            alarm_value = 1 
 
         if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
             alarm_buy_sell = "Sell"
@@ -486,7 +544,6 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
     alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
     alarm_analysis2, score = tech_analyse2(MOM10_signal_count,VMOM10_signal_count, score)
     alarm_analysis3, score = tech_analyse3(SMA7_signal_count,VMA7_signal_count, score)
-    score = RSI14_signal_count
 
     tech_indicators = {
         'RSI14': RSI14_quantile_pct,
@@ -547,16 +604,25 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
 
     return alarms, tech_indicators, score
 
-
-# Analyse 1: Nur RSI
+# Analyse 1: RSI14
 def tech_analyse1(RSI14, score):
-    parts = []
-    prob_map = {1: "Potentially", 2: "Possible", 3: "Very likely"}
-    if RSI14 != 0:
-        direction = "correction to rise." if RSI14 > 0 else "correction to fall."
-        parts.append(f"{prob_map.get(abs(RSI14), 'Potentially')} {direction}")
-    analysis = "Analysis: " + " ".join(s.strip() for s in parts if s)
+    # Probability Matrix
+    PROBABILITY_MATRIX = {
+        -3: "Very likely correction to fall.",
+        -2: "Possible correction to fall.",
+        -1: "Potentially correction to fall.",
+         0: "Neutral.",
+         1: "Potentially correction to rise.",
+         2: "Possible correction to rise.",
+         3: "Very likely correction to rise."
+    }
+
+    # Werte aus den Matrizen holen
+    analysis = PROBABILITY_MATRIX.get(RSI14, "error")
+    
+    # Score aktualisieren
     score += RSI14
+    
     return analysis, score
 
 # Analyse 2: MOM10 und VMOM10
@@ -584,10 +650,10 @@ def tech_analyse2(MOM10, VMOM10, score):
     }
     
     # Werte aus den Matrizen holen (mit Fallback)
-    volume_text = VOLUME_MATRIX.get(VMOM10, "Volume support anomaly")
-    momentum_text = MOMENTUM_MATRIX.get(MOM10, "movement")
+    volume_text = VOLUME_MATRIX.get(VMOM10, "error")
+    momentum_text = MOMENTUM_MATRIX.get(MOM10, "error")
 
-    score += MOM10 + VMOM10
+    score = score + MOM10 + VMOM10
 
     if MOM10 > 0 and VMOM10 < 0:
         fake_out = " (possible fake-out)"
@@ -622,10 +688,10 @@ def tech_analyse3(SMA7, VMA7, score):
     }
     
     # Werte aus den Matrizen holen (mit Fallback)
-    volume_text = VOLUME_MATRIX.get(VMA7, "Volume anomaly")
-    trend_text = TREND_MATRIX.get(abs(SMA7), "with trend")
+    volume_text = VOLUME_MATRIX.get(VMA7, "error")
+    trend_text = TREND_MATRIX.get(abs(SMA7), "error")
 
-    score += SMA7 + VMA7
+    score = score + SMA7 + VMA7
 
     if SMA7 > 0 and VMA7 < 0:
         fake_out = " (possible fake-out)"
@@ -644,51 +710,75 @@ def older_than_one_year(df):
     
     return total_amount
 
-def create_table_image(df, output_path):
-    
-    # Figure erstellen (schmaler)
-    fig, ax = plt.subplots(figsize=(4.5, len(df) * 0.45 + 0.8))
-    ax.axis('tight')
-    ax.axis('off')
-    
-    # Tabelle erstellen
+def create_table_image(
+    df,
+    output_path,
+    body_fontsize=7,
+    header_fontsize=5.5,
+    header_color="#3A778A",
+    fig_width=4.5,
+    row_height=0.45,
+    left_col_width=0.22,
+    other_col_width=0.13,
+    dpi=200
+):
+    # Höhe: Datenzeilen + etwas Luft für Header
+    fig_height = len(df) * row_height + 0.5
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.axis("off")
+
+    # Header einfärben über colColours (robust mit edges='horizontal')
     table = ax.table(
         cellText=df.values,
         colLabels=df.columns,
-        cellLoc='center',
-        loc='center',
-        bbox=[0, 0, 1, 1]
+        cellLoc="center",
+        loc="center",
+        bbox=[0, 0, 1, 1],
+        edges="horizontal",
+        colColours=[header_color] * len(df.columns),
     )
-    # Adjust first column width for long names
-    col_widths = [0.22] + [0.13] * (len(df.columns) - 1)
-    for i, width in enumerate(col_widths):
-        for j in range(len(df) + 1):
-            cell = table[(j, i)]
-            cell.set_width(width)
-    
-    # Styling
+
+    # Spaltenbreiten setzen
+    col_widths = [left_col_width] + [other_col_width] * (len(df.columns) - 1)
+    total_rows = len(df) + 1  # +1 wegen Header
+    for j in range(total_rows):
+        for i, w in enumerate(col_widths):
+            table[(j, i)].set_width(w)
+
+    # Schriften
     table.auto_set_font_size(False)
-    table.set_fontsize(7)
-    table.scale(0.55, 1.2)
-    
-    # Header-Zeile hervorheben
+    table.set_fontsize(body_fontsize)
+
+    # Header-Text formatieren
     for i in range(len(df.columns)):
         cell = table[(0, i)]
-        cell.set_facecolor('#4CAF50')
-        cell.set_text_props(weight='bold', color='white')
-    
-    # Total-Zeile hervorheben (letzte Zeile)
-    for i in range(len(df.columns)):
-        cell = table[(len(df), i)]
-        cell.set_facecolor('#E8E8E8')
-        cell.set_text_props(weight='bold')
-    
-    # Alternierende Zeilenfarben
-    for i in range(1, len(df)):
-        for j in range(len(df.columns)):
-            cell = table[(i, j)]
-            if i % 2 == 0:
-                cell.set_facecolor('#F5F5F5')
-    
-    plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+        cell.set_text_props(weight="bold", color="white", fontsize=header_fontsize)
+        cell.visible_edges = "closed"  # optional: Header komplett umrandet
+
+    # leichte Skalierung für dichteres Layout
+    table.scale(0.55, 1.0)
+
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor="white")
     plt.close()
+
+
+
+
+def log_print(message: str):
+
+    # Print to console
+    print(message)
+    
+    # Create log entry with timestamp
+    log_entry = time.strftime("%x %X", time.localtime()) + '  \n' + str(message) + '\n\n'
+    
+    # Read existing content
+    try:
+        with open('logfile.txt', 'r', encoding='utf-8') as f:
+            old_content = f.read()
+    except FileNotFoundError:
+        old_content = ''
+    
+    # Write new entry at the beginning
+    with open('logfile.txt', 'w', encoding='utf-8') as f:
+        f.write(log_entry + old_content)
