@@ -117,6 +117,10 @@ LHA.DE = Lufthansa; 1,1,1                # Watch-list: Use 1,1,1 for tracking on
 
 This project is licensed under the MIT License.
 
+## Disclaimer
+
+This application generates alerts based on technical indicators and market data analysis. All alerts are purely informational and require independent user evaluation. Users are solely responsible for their own investment decisions. CaSa does not recommend buying or selling any assets, nor does it provide personalized investment advice.
+
 ## Links
 
 - [Pushover](https://pushover.net/) — Notification service (iOS/Android apps available)
