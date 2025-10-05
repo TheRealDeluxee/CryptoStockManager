@@ -9,4 +9,6 @@
 /backup
 /__pycache__
 /test.csv
-/desktop.ini
+desktop.ini
+Thumbs.db
+*.lnk
