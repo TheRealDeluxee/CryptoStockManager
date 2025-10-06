@@ -1,5 +1,3 @@
-# Modified func.py with volume bars added to the plot
-
 # --- Standard Library ---
 import os
 import time
@@ -62,11 +60,11 @@ def get_stock(symbol, period):
         except Exception as e:
             error_msg = str(e).lower()
             
-            # Bestimme Wartezeit basierend auf Error-Typ
+            # Determine wait time based on error type
             if 'rate limit' in error_msg or 'too many requests' in error_msg:
                 wait_time = wait_times[i] if i < len(wait_times) else 900
             else:
-                wait_time = 30  # Kürzere Wartezeit bei anderen Errors
+                wait_time = 30  # Shorter wait time for other errors
             
             infos = {
                 'sym': symbol, 
@@ -78,7 +76,7 @@ def get_stock(symbol, period):
             msg = "Script try number %(tries)s to %(function)s of symbol %(sym)s\nWaiting %(wait_time)ss\n\n%(exception)s" % infos
             pushover(msg)
             
-            if i < 4:  # Nicht nach dem letzten Versuch warten
+            if i < 4:  # Do not wait after the last attempt
                 time.sleep(wait_time)
     
     if df.empty:
@@ -110,7 +108,7 @@ def get_crypto(symbol, params_historical):
             time.sleep(random.uniform(0.5, 2))
             response = requests.get(url_historical, params=params_historical, timeout=30)
             
-            # Bestimme Wartezeit basierend auf Status oder Error-Typ
+            # Determine wait time based on status or error type
             if response.status_code == 429:
                 wait_time = int(response.headers.get('Retry-After', wait_times[i]))
             elif response.status_code != 200:
@@ -135,7 +133,7 @@ def get_crypto(symbol, params_historical):
         log_print(f"Failed to fetch {symbol} after 5 attempts")
         return None
     
-    # Daten verarbeiten
+    # Process data
     prices = data['prices']
     volumes = data.get('total_volumes', [[p[0], 0] for p in prices])
     
@@ -260,11 +258,11 @@ def human_format_euro(num, pos):
 
 def plot_and_save(df, symbol, data_type, zero_line=None):
     if df is not None and not df.empty:
-        #----------Create
+    #----------Create
         fig, (ax1, ax3) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
         ax2 = ax1.twinx()
 
-        #-----------Background
+    #-----------Background
         df_min, df_max = df['Price'].min(), df['Price'].max()
         if zero_line is not None and zero_line != 0:
             ax1.set_facecolor('#d0f0d0' if zero_line < df['Price'].iloc[-1] else '#f0d0d0')
@@ -276,7 +274,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
             mean_price = df['Price'].mean()
             df['Percentage Deviation'] = df['Price']/mean_price * 100 - 100
 
-        #---------Axis set-up
+    #---------Axis set-up
         from matplotlib.ticker import MaxNLocator
         for ax in [ax1, ax2, ax3]:
             #ax1.set_title('100 Hours' if data_type=='100h' else '100 Days', fontsize=14)
@@ -296,7 +294,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         ax1.yaxis.set_major_formatter(mticker.FuncFormatter(human_format_euro))
         ax3.yaxis.set_major_formatter(mticker.FuncFormatter(human_format))
         
-        #--------------Drawing
+    #--------------Drawing
         ax1.plot(df['Date'], df['Price'], label='Price', color='k', linewidth=1.5)
         ax1.plot(df['Date'], df['Fast EMA'], label='Fast EMA', linestyle=':', color='green')
         ax1.plot(df['Date'], df['Slow EMA'], label='Slow EMA', linestyle=':', color='red')
@@ -324,7 +322,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
             ax3.xaxis_date()  # Achse wieder als Datum formatieren
             ax3.margins(x=0.01)  # etwas Rand, damit nichts abgeschnitten wird 
 
-        #-------------Save
+    #-------------Save
         os.makedirs(output_dir, exist_ok=True)
         plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight')
         plt.close(fig)
@@ -392,11 +390,11 @@ def google_trends(search):
     pytrends.build_payload(kw_list, cat=0, timeframe='today 12-m') # Trend for 12 months
     data = pytrends.interest_over_time() 
     data = data.reset_index() 
-    
+
     df = pd.DataFrame()
-    df = pd.DataFrame(columns=['Datum', 'Interesse'])
-    df['Datum'] = data['date']
-    df['Interesse'] = data[search]
+    df = pd.DataFrame(columns=['Date', 'Interest'])
+    df['Date'] = data['date']
+    df['Interest'] = data[search]
 
     return df.tail(1)['Interesse'].values[0], df.tail(2)['Interesse'].values[0]
 
@@ -443,7 +441,7 @@ def calc_stat_limits(df, column, window=100, invert=False):
     if data.size < 2:
         return np.nan, np.nan
     
-        # Calculate quantile (percentile) of current_value in data
+    # Calculate quantile (percentile) of current_value in data
     quantile = float(np.sum(data <= df[column].iloc[-1])) / len(data)
     quantile_pct = round(quantile * 100, 2)
 
@@ -476,7 +474,7 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
     alarm_indicator = ""
     alarm_message_add = ""
 
-    #Indikatoren
+    #Indicators
     RSI14_signal_count, RSI14_quantile_pct = calc_stat_limits(df, 'RSI14', window=100, invert=True) 
     MOM10_signal_count, MOM10_quantile_pct = calc_stat_limits(df, 'Mom10', window=100, invert=False) 
     VMOM10_signal_count, VMOM10_quantile_pct = calc_stat_limits(df, 'VMom10', window=100, invert=False)
@@ -604,7 +602,7 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
 
     return alarms, tech_indicators, score
 
-# Analyse 1: RSI14
+    # Analysis 1: RSI14
 def tech_analyse1(RSI14, score):
     # Probability Matrix
     PROBABILITY_MATRIX = {
@@ -625,7 +623,7 @@ def tech_analyse1(RSI14, score):
     
     return analysis, score
 
-# Analyse 2: MOM10 und VMOM10
+    # Analysis 2: MOM10 and VMOM10
 def tech_analyse2(MOM10, VMOM10, score):
     # Volume Support Matrix
     VOLUME_MATRIX = {
@@ -663,7 +661,7 @@ def tech_analyse2(MOM10, VMOM10, score):
     
     return f"Short-term-Analysis: {volume_text} {momentum_text}{fake_out}.", score
 
-# Analyse 3: SMA7 und VMA7
+    # Analysis 3: SMA7 and VMA7
 def tech_analyse3(SMA7, VMA7, score):
     # Volume Matrix
     VOLUME_MATRIX = {
@@ -676,7 +674,7 @@ def tech_analyse3(SMA7, VMA7, score):
          3: "Very high volume"
     }
     
-    # Trend Strength Matrix (basierend auf Absolutwert)
+    # Trend Strength Matrix (based on absolute value)
     TREND_MATRIX = {
         -3: "with strong negative trend",
         -2: "with negative trend",
@@ -722,12 +720,12 @@ def create_table_image(
     other_col_width=0.13,
     dpi=200
 ):
-    # Höhe: Datenzeilen + etwas Luft für Header
+    # Height: Data rows + some space for header
     fig_height = len(df) * row_height + 0.5
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis("off")
 
-    # Header einfärben über colColours (robust mit edges='horizontal')
+    # Color header using colColours (robust with edges='horizontal')
     table = ax.table(
         cellText=df.values,
         colLabels=df.columns,
@@ -738,24 +736,24 @@ def create_table_image(
         colColours=[header_color] * len(df.columns),
     )
 
-    # Spaltenbreiten setzen
+    # Set column widths
     col_widths = [left_col_width] + [other_col_width] * (len(df.columns) - 1)
     total_rows = len(df) + 1  # +1 wegen Header
     for j in range(total_rows):
         for i, w in enumerate(col_widths):
             table[(j, i)].set_width(w)
 
-    # Schriften
+    # Fonts
     table.auto_set_font_size(False)
     table.set_fontsize(body_fontsize)
 
-    # Header-Text formatieren
+    # Format header text
     for i in range(len(df.columns)):
         cell = table[(0, i)]
         cell.set_text_props(weight="bold", color="white", fontsize=header_fontsize)
         cell.visible_edges = "closed"  # optional: Header komplett umrandet
 
-    # leichte Skalierung für dichteres Layout
+    # Slight scaling for denser layout
     table.scale(0.55, 1.0)
 
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor="white")

@@ -1,4 +1,6 @@
-# Crypto and Stock Alert - CaSa 
+![Project Overview](logo.png)
+
+# Crypto and Stock Alert
 
 ## Overview
 
