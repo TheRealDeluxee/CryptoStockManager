@@ -122,18 +122,26 @@ class crypto_stock:
 
         alarms_filter = self.filter(alarms)
         for key, info in alarms_filter.items():
-            func.pushover_image(self.symbol, info['msg'])
+            func.pushover_image(self.symbol, info['msg'], info['priority'])
 
-        return {
-            'Name': self.search,
-            'RSI14': self.tech_indicators.get('RSI14', None),
-            'MOM10': self.tech_indicators.get('MOM10', None),
-            'VMOM10': self.tech_indicators.get('VMOM10', None),
-            'SMA7': self.tech_indicators.get('SMA7', None),
-            'VMA7': self.tech_indicators.get('VMA7', None),
-            'Rating': self.score
-        }
+        # Watch-list items
+        if self.watch_list:
+            return {
+                'Name': self.search,
+                'Piece [€]': round(df.tail(1)['Price'].values[0], 2),
+                '7d P&L [%]': round(self.current_seven_days_slope_pct, 2),
+                '1d P&L [%]': round(self.current_one_day_price_change_pct, 2),
 
+                'Rating': self.score
+            }
+        else:
+            return {
+                'Name': self.search,
+                'Piece [€]': round(df.tail(1)['Price'].values[0], 2),
+                '7d P&L [%]': round(self.current_seven_days_slope_pct, 2),
+                '1d P&L [%]': round(self.current_one_day_price_change_pct, 2),
+                'Rating': self.score
+            }
 
     def filter(self,alarm_neu):
         change = {}
@@ -149,5 +157,3 @@ class crypto_stock:
                 change[key] = new_info
         return change
     
-
-        

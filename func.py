@@ -184,9 +184,61 @@ def calc_indicator_fuctions(df):
     # Calculate VMA20
     df['VMA7'] = calculate_ma(df, 'Volume', window=7)
 
+    # Calculate rolling 5-day slope percentage
+    df['ROC5'] = ROC5(df, 'Price', window=5)
+
+    # Calculate rolling 5-day slope percentage
+    df['VROC5'] = ROC5(df, 'Volume', window=5)
+
+    
+
     #save_csv(df,"test.csv") #For debugging
     return df
 
+def ROC5(df, column='Price', window=7):
+    """
+    Calculate rolling slope percentage for a given column over a specified window.
+    Returns a Series with the percentage change based on linear regression slope.
+    """
+    if column not in df.columns:
+        return pd.Series(index=df.index, dtype=float)
+    
+    if len(df) < window:
+        return pd.Series(index=df.index, dtype=float)
+    
+    def calc_slope_pct(series):
+        if len(series) < window or series.isna().any():
+            return np.nan
+        
+        try:
+            # Create index for regression (0 to window-1)
+            x = np.arange(len(series))
+            y = series.values
+            
+            # Perform linear regression
+            result = linregress(x, y)
+            slope = result.slope
+            intercept = result.intercept
+            
+            # Calculate predicted values at start and end
+            y_start = intercept  # when x = 0
+            y_end = slope * (len(series) - 1) + intercept  # when x = window-1
+            
+            # Prevent division by zero
+            if y_start == 0:
+                return np.nan
+            
+            # Calculate percentage change
+            slope_pct = (y_end / y_start - 1) * 100
+            return slope_pct
+            
+        except Exception:
+            return np.nan
+    
+    # Apply rolling calculation
+    rolling_slope = df[column].rolling(window=window).apply(calc_slope_pct, raw=False)
+    
+    return rolling_slope
 
 def save_csv(df, path=None, index=False, date_cols=()):
     d = df.copy()
@@ -261,6 +313,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
     #----------Create
         fig, (ax1, ax3) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
         ax2 = ax1.twinx()
+        fig.patch.set_alpha(0)
 
     #-----------Background
         df_min, df_max = df['Price'].min(), df['Price'].max()
@@ -324,10 +377,10 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
 
     #-------------Save
         os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight', transparent=True)
         plt.close(fig)
 
-def pushover(message: str):
+def pushover(message: str, priority: int=0):
     # Log file (prepend new entry)
     log_entry = time.strftime("%x %X", time.localtime()) + '  \n' + message + '\n\n'
     try:
@@ -342,18 +395,20 @@ def pushover(message: str):
         requests.post(
             "https://api.pushover.net/1/messages.json",
             data={
+                "title" : "CaSa Alarm", 
                 "token": token_pushover,
                 "user": user_pushover,
                 "message": message,
                 "url_title": "Link",
                 "html": 1,
+                "priority": priority   #-2 lowes -1 low 0 normal 1 high 2 emergency
             },
             timeout=10,
         )
     except Exception as e:
         log_print(f"Pushover error: {e}")
 
-def pushover_image(symbol: str, message: str):
+def pushover_image(symbol: str, message: str, priority: int=0):
 
     file_name = os.path.join(output_dir, symbol + ".png")
     try:
@@ -361,11 +416,13 @@ def pushover_image(symbol: str, message: str):
             requests.post(
                 "https://api.pushover.net/1/messages.json",
                 data={
+                    "title" : "CaSa Alarm",
                     "token": token_pushover,
                     "user": user_pushover,
                     "url_title": "Link",
                     "message": message,
                     "html": 1,
+                    "priority": priority   #-2 lowes -1 low 0 normal 1 high 2 emergency
                 },
                 files={"attachment": ("image.jpg", fh, "image/jpeg")},
                 timeout=30,
@@ -469,25 +526,26 @@ def calc_stat_limits(df, column, window=100, invert=False):
 def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, link, data_type):
 
     alarms = {}
-    tech_indicators = None  # oder [] oder {}
-    score = 0            # falls score auch betroffen ist
+    tech_indicators = None  
+    score = 0           
     alarm_indicator = ""
     alarm_message_add = ""
+    alarm_priority = 0 #-2 lowes -1 low 0 normal 1 high 2 emergency
 
     #Indicators
     RSI14_signal_count, RSI14_quantile_pct = calc_stat_limits(df, 'RSI14', window=100, invert=True) 
-    MOM10_signal_count, MOM10_quantile_pct = calc_stat_limits(df, 'Mom10', window=100, invert=False) 
-    VMOM10_signal_count, VMOM10_quantile_pct = calc_stat_limits(df, 'VMom10', window=100, invert=False)
+
+
     SMA7_signal_count, SMA7_quantile_pct = calc_stat_limits(df, 'SMA7', window=100, invert=False)
     VMA7_signal_count, VMA7_quantile_pct = calc_stat_limits(df, 'VMA7', window=100, invert=False)
-
+    ROC5_signal_count, ROC5_quantile_pct = calc_stat_limits(df, 'ROC5', window=100, invert=False)
+    VROC5_signal_count, VROC5_quantile_pct = calc_stat_limits(df, 'VROC5', window=100, invert=False)
     
     #dEMA_pct, signal_count = signal_slope((df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100, signal_count)
     #dVWMA20_pct, signal_count = signal_slope((df['VWMA20'].iloc[-1] - df['VWMA20'].iloc[-2])/df['VWMA20'].iloc[-2]*100,signal_count) #VolRatio20 check before VWMA20
 
     #current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
-    current_seven_days_slope_pct = seven_day_slope_pct(df, True)
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
     alarm_buy_sell = "Hold"
 
@@ -502,11 +560,11 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
             alarm_code = "101"
             alarm_value = 1
 
-        if current_seven_days_slope_pct > seven_day_price_change:
+        if df['ROC5'].iloc[-1] > seven_day_price_change:
             alarm_buy_sell = "Buy"
-            alarm_indicator = "Positiv-7"
+            alarm_indicator = "Positiv-5"
             alarm_code = "121"
-            alarm_value = current_seven_days_slope_pct
+            alarm_value = df['ROC5'].iloc[-1]
 
         if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
             alarm_buy_sell = "Buy"
@@ -520,11 +578,11 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
             alarm_code = "201"
             alarm_value = 1      
         
-        if current_seven_days_slope_pct < (seven_day_price_change * -1):
+        if df['ROC5'].iloc[-1] < (seven_day_price_change * -1):
             alarm_buy_sell = "Sell"
-            alarm_indicator = "Negative-7"
+            alarm_indicator = "Negative-5"
             alarm_code = "221"
-            alarm_value = current_seven_days_slope_pct
+            alarm_value = df['ROC5'].iloc[-1]
 
         if df['HighP'].iloc[-1] < df['HighP'].iloc[-2] and df['HighP'].iloc[-2] > df['HighP'].iloc[-3] and data_type == "100d":
             alarm_buy_sell = "Sell"
@@ -532,23 +590,28 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
             alarm_code = "222"
             alarm_value = 1
 
+    alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
+    alarm_analysis2, score = tech_analyse2(ROC5_signal_count,VROC5_signal_count, score)
+    alarm_analysis3, score = tech_analyse3(SMA7_signal_count,VMA7_signal_count, score)
+    score += ROC5_signal_count
+
     if alarm_buy_sell == "Sell": 
         alarm_symbol = "&#9660;"
         alarm_symbol_color = "red"
+        if score < -5:
+            alarm_priority = 1 #-2 lowes -1 low 0 normal 1 high 2 emergency
     if alarm_buy_sell == "Buy":
         alarm_symbol = "&#9650;"
         alarm_symbol_color = "green"
-
-    alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
-    alarm_analysis2, score = tech_analyse2(MOM10_signal_count,VMOM10_signal_count, score)
-    alarm_analysis3, score = tech_analyse3(SMA7_signal_count,VMA7_signal_count, score)
+        if score > 5:
+            alarm_priority = 1 #-2 lowes -1 low 0 normal 1 high 2 emergency
 
     tech_indicators = {
         'RSI14': RSI14_quantile_pct,
-        'MOM10': MOM10_quantile_pct,
-        'VMOM10': VMOM10_quantile_pct,
+        'MOM10': ROC5_quantile_pct,
+        'VMOM10': VROC5_quantile_pct,
         'SMA7': SMA7_quantile_pct,
-        'VMA7': VMA7_quantile_pct
+        'VMA7': VMA7_quantile_pct,
     }
 
     if alarm_buy_sell != "Hold":
@@ -568,8 +631,6 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
                 return f" {arrow_down * abs(int(count))}"
             return f" {cycle}"
 
-
-
         alarm_message = (
             f"Trigger: {alarm_indicator}"
             f" ({data_type})\n"
@@ -579,16 +640,16 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
             f"SMA7: {SMA7_quantile_pct} %{arrow_string(SMA7_signal_count)}\n"
             f"VMA7: {VMA7_quantile_pct} %{arrow_string(VMA7_signal_count)}\n"
             f"{alarm_analysis3}\n\n"
-            f"MOM10: {MOM10_quantile_pct} %{arrow_string(MOM10_signal_count)}\n"
-            f"VMOM10: {VMOM10_quantile_pct} %{arrow_string(VMOM10_signal_count)}\n"
+            f"ROC5: {ROC5_quantile_pct} %{arrow_string(ROC5_signal_count)}\n"
+            f"VROC5: {VROC5_quantile_pct} %{arrow_string(VROC5_signal_count)}\n"
             f"{alarm_analysis2}\n\n"
             f"{alarm_message_add}\n"
         )
 
-
     # Build HTML – headline separate, body black
         alarms[alarm_code] = {
                 "value": alarm_value,
+                "priority": alarm_priority,
                 "msg": (
                     f"<html><body>"
                     # Headline (separate element, 28px, colored)
@@ -601,6 +662,14 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
             }
 
     return alarms, tech_indicators, score
+
+def linear_remap(value, old_min, old_max, new_min, new_max):
+    """Mappt value linear von [old_min, old_max] nach [new_min, new_max].
+       Wenn old_min == old_max wird der Mittelwert des Zielintervalls zurückgegeben."""
+    if old_max == old_min:
+        return 0.5 * (new_min + new_max)
+    t = (value - old_min) / (old_max - old_min)
+    return new_min + t * (new_max - new_min)
 
     # Analysis 1: RSI14
 def tech_analyse1(RSI14, score):
@@ -624,11 +693,11 @@ def tech_analyse1(RSI14, score):
     return analysis, score
 
     # Analysis 2: MOM10 and VMOM10
-def tech_analyse2(MOM10, VMOM10, score):
+def tech_analyse2(ROC5, VROC5, score):
     # Volume Support Matrix
     VOLUME_MATRIX = {
-        -3: "Very low volume supported",
-        -2: "Low volume supported",
+        -3: "Very low volume supported", 
+        -2: "Low volume supported", 
         -1: "Decreased volume supported",
          0: "Average volume supported",
          1: "Increased volume supported",
@@ -648,16 +717,24 @@ def tech_analyse2(MOM10, VMOM10, score):
     }
     
     # Werte aus den Matrizen holen (mit Fallback)
-    volume_text = VOLUME_MATRIX.get(VMOM10, "error")
-    momentum_text = MOMENTUM_MATRIX.get(MOM10, "error")
+    volume_text = VOLUME_MATRIX.get(VROC5, "error")
+    momentum_text = MOMENTUM_MATRIX.get(ROC5, "error")
 
-    score = score + MOM10 + VMOM10
+    if ROC5 < 0: 
+        VROC5_score = VROC5 * -1  
+    else:
+        VROC5_score = VROC5 
 
-    if MOM10 > 0 and VMOM10 < 0:
+    if  VROC5 < 0:
+        Tscore = 0
         fake_out = " (possible fake-out)"
-        score += 0
     else:
         fake_out = ""
+        Tscore = ROC5 + VROC5_score
+
+    score = score + Tscore
+
+
     
     return f"Short-term-Analysis: {volume_text} {momentum_text}{fake_out}.", score
 
@@ -689,13 +766,19 @@ def tech_analyse3(SMA7, VMA7, score):
     volume_text = VOLUME_MATRIX.get(VMA7, "error")
     trend_text = TREND_MATRIX.get(abs(SMA7), "error")
 
-    score = score + SMA7 + VMA7
+    if SMA7 < 0: 
+        VMA7_score = VMA7 * -1  
+    else:
+        VMA7_score = VMA7 
 
-    if SMA7 > 0 and VMA7 < 0:
+    if  VMA7 < 0:
+        Tscore = 0
         fake_out = " (possible fake-out)"
-        score += 0
     else:
         fake_out = ""
+        Tscore = SMA7 + VMA7_score
+
+    score = score + Tscore
 
     return f"Trend-Analysis: {volume_text} {trend_text}{fake_out}.", score
 

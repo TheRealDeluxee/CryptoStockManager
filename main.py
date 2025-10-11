@@ -20,10 +20,10 @@ class CryptoStockManager:
         self.config_file_path = config_file_path
         self.test_mode = 0
         self.output_dir = output_dir
-        self.df_crypto_hd = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
-        self.df_stock_hd = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
-        self.df_crypto_hh = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
-        self.df_stock_hh = pd.DataFrame(columns=['Name', 'RSI14', 'MOM10', 'VMOM10', 'SMA7', 'VMA7', 'Rating'])
+        self.df_crypto_hd = pd.DataFrame(columns=['Name', 'Piece [€]', '7d P&L [%]', '1d P&L [%]', 'Rating'])
+        self.df_stock_hd = pd.DataFrame(columns=['Name', 'Piece [€]', '7d P&L [%]', '1d P&L [%]', 'Rating'])
+        self.df_crypto_hh = pd.DataFrame(columns=['Name', 'Piece [€]', '7d P&L [%]', '1d P&L [%]', 'Rating'])
+        self.df_stock_hh = pd.DataFrame(columns=['Name', 'Piece [€]', '7d P&L [%]', '1d P&L [%]', 'Rating'])
         self.version = "0.0.0"
         self.crypto_items_hh = []
         self.crypto_items_hd = []
