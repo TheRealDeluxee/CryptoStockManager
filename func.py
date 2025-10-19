@@ -190,10 +190,63 @@ def calc_indicator_fuctions(df):
     # Calculate rolling 5-day slope percentage
     df['VROC5'] = ROC5(df, 'Volume', window=5)
 
-    
+    # Calculate bollinger bands
+    df['BB_Mid'], df['BB_Upper'], df['BB_Lower'] = bollinger_bands(df, 'Price', window=20)
 
-    #save_csv(df,"test.csv") #For debugging
+    save_csv(df,"test.csv",date_cols=['Date']) #For debugging
     return df
+
+def calc_state_fuctions(state,df):
+        # update balances and indicators into grouped state
+
+    state.current_balance_eur = state.amount_crypto_stock * df.iloc[-1]['Price']
+    state.yesterday_balance_eur = state.amount_crypto_stock * df.iloc[-2]['Price']
+
+    state.current_profit = state.current_balance_eur - state.buy_balance_eur
+    state.yesterday_profit = state.yesterday_balance_eur - state.buy_balance_eur
+
+    # protect division by zero for profit pct
+    if state.buy_balance_eur:
+        state.current_profit_pct = (state.current_balance_eur - state.buy_balance_eur)/state.buy_balance_eur*100
+        state.yesterday_profit_pct = (state.yesterday_balance_eur - state.buy_balance_eur)/state.buy_balance_eur*100
+    else:
+        state.current_profit_pct = 0
+        state.yesterday_profit_pct = 0
+
+    # price change pct
+    state.current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
+    state.yesterday_one_day_price_change_pct = (df['Price'].iloc[-2] - df['Price'].iloc[-3]) / df['Price'].iloc[-3] * 100
+    
+    state.current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
+    state.yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
+
+    state.current_seven_days_slope_pct = seven_day_slope_pct(df,True)
+    state.yesterday_seven_days_slope_pct = seven_day_slope_pct(df,False)
+
+    state.amount_older_than_one_year = older_than_one_year(state.df_buy_history)
+
+    if state.amount_crypto_stock:
+        state.amount_older_than_one_year_pct = state.amount_older_than_one_year / state.amount_crypto_stock * 100
+    else:
+        state.amount_older_than_one_year_pct = 0
+
+    if state.buy_balance_eur  == 1 and state.amount_crypto_stock == 1: 
+        state.watch_list = True
+        state.zero_line = None
+    else:
+        state.watch_list = False
+        state.zero_line = state.buy_balance_eur/state.amount_crypto_stock
+    
+    return state
+        
+
+def bollinger_bands(df, column='Price', window=20, num_std=2):
+    sma = df[column].rolling(window=window).mean()
+    rstd = df[column].rolling(window=window).std()
+    upper_band = sma + num_std * rstd
+    lower_band = sma - num_std * rstd
+    return sma, upper_band, lower_band
+
 
 def ROC5(df, column='Price', window=7):
     """
@@ -242,9 +295,33 @@ def ROC5(df, column='Price', window=7):
 
 def save_csv(df, path=None, index=False, date_cols=()):
     d = df.copy()
+    # Datumsspalten ins Format TT.MM.JJJJ konvertieren
     for c in date_cols:
-        if c in d: d[c] = pd.to_datetime(d[c], errors='coerce').dt.strftime('%d.%m.%Y')
-    return d.to_csv(path, sep=";", decimal=",", index=index, encoding="utf-8-sig", lineterminator="\n")
+        if c in d:
+            d[c] = pd.to_datetime(d[c], errors='coerce').dt.strftime('%d.%m.%Y')
+    # Speichern mit deutschem Separator und Encoding
+    return d.to_csv(
+        path,
+        sep=";",
+        decimal=",",
+        index=index,
+        encoding="utf-8-sig",
+        lineterminator="\n"
+    )
+
+def load_csv(path, index=False, date_cols=()):
+    df = pd.read_csv(
+        path,
+        sep=";",
+        decimal=",",
+        index_col=0 if index else None,
+        encoding="utf-8-sig",
+        lineterminator="\n"
+    )
+    for c in date_cols:
+        if c in df:
+            df[c] = pd.to_datetime(df[c], format="%d.%m.%Y", errors="coerce")
+    return df
 
 def calculate_ma(df, column, window=20):
     if column not in df.columns:
@@ -313,7 +390,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
     #----------Create
         fig, (ax1, ax3) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
         ax2 = ax1.twinx()
-        fig.patch.set_alpha(0)
+        #fig.patch.set_alpha(0)
 
     #-----------Background
         df_min, df_max = df['Price'].min(), df['Price'].max()
@@ -348,6 +425,34 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         ax3.yaxis.set_major_formatter(mticker.FuncFormatter(human_format))
         
     #--------------Drawing
+        ax1.fill_between(
+            df['Date'], 
+            df['BB_Lower'], 
+            df['BB_Upper'], 
+            color='grey', 
+            alpha=0.2, 
+            label='Bollinger-Bereich'
+        )
+        ax1.set_ylim(df['BB_Lower'].min(), df['BB_Upper'].max())
+
+        min_remap = linear_remap(
+            df['BB_Lower'].min(),
+            df['Price'].min(),
+            df['Price'].max(),
+            df['Percentage Deviation'].min(),
+            df['Percentage Deviation'].max()
+        )
+
+        max_remap = linear_remap(
+            df['BB_Upper'].max(),
+            df['Price'].min(),
+            df['Price'].max(),
+            df['Percentage Deviation'].min(),
+            df['Percentage Deviation'].max()
+        )
+
+        ax2.set_ylim(min_remap, max_remap)
+        
         ax1.plot(df['Date'], df['Price'], label='Price', color='k', linewidth=1.5)
         ax1.plot(df['Date'], df['Fast EMA'], label='Fast EMA', linestyle=':', color='green')
         ax1.plot(df['Date'], df['Slow EMA'], label='Slow EMA', linestyle=':', color='red')
@@ -355,6 +460,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         ax1.plot(df.loc[df['Position']==-1.0, 'Date'], df.loc[df['Position']==-1.0, 'Fast EMA'], 'v',  markersize=10, color='red', label='Sell')
         ax1.plot(df.loc[df['HighP']==1, 'Date'],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
         ax1.plot(df.loc[df['LowP']==1,  'Date'],      df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
+
         ax2.plot(df['Date'], df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
 
         if 'Volume' in df.columns:
@@ -377,8 +483,10 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
 
     #-------------Save
         os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight', transparent=True)
-        plt.close(fig)
+    # Set figure background to white
+    fig.patch.set_facecolor('white')
+    plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight', facecolor='white', transparent=False)
+    plt.close(fig)
 
 def pushover(message: str, priority: int=0):
     # Log file (prepend new entry)
@@ -456,39 +564,45 @@ def google_trends(search):
     return df.tail(1)['Interesse'].values[0], df.tail(2)['Interesse'].values[0]
 
 def seven_day_slope_pct(df, current):
-    # Ensure that the DataFrame has at least 8 rows to view both current and previous 7 days
+
     if len(df) < 8:
-        raise ValueError("The DataFrame must contain at least 8 lines.")
+        log_print(f"seven_day_slope_pct: DataFrame has only {len(df)} rows, need at least 8")
+        return 0.0
     
-    y = []
-
-    if current:
-        subset_df = df.tail(7)
-    else:
-        subset_df = df[-8:-1]
-
-    subset_df.reset_index(inplace=True)  # Includes the index in a column called 'index'
-
-    # Linear regression
     try:
-        result = linregress(subset_df['index'], subset_df['Price'])
+        # ✅ Problem 4a Fix: Explizites iloc
+        if current:
+            y = df['Price'].iloc[-7:].values
+        else:
+            y = df['Price'].iloc[-8:-1].values
+        
+        # Validierung
+        if len(y) != 7:
+            log_print(f"seven_day_slope_pct: Expected 7 values, got {len(y)}")
+            return 0.0
+            
+        if np.any(np.isnan(y)):
+            log_print("seven_day_slope_pct: NaN values in price data")
+            return 0.0
+        
+        # ✅ Problem 4b Fix: Direktes np.arange(7) statt index-Reset
+        # x = [0, 1, 2, 3, 4, 5, 6] unabhängig vom DataFrame-Index
+        slope, intercept = linregress(np.arange(7), y)[:2]
+        
+        # Werte an Tag 0 und Tag 6
+        y_start = intercept
+        y_end = slope * 6 + intercept
+        
+        if y_start == 0:
+            log_print("seven_day_slope_pct: y_start is 0")
+            return 0.0
+        
+        return (y_end / y_start - 1) * 100
+        
     except Exception as e:
-        raise RuntimeError(f"Error in linear regression: {e}")
-
-    steigung = result.slope
-    y_achsenabschnitt = result.intercept
-
-    # Calculate the predicted y-values for day 1 and day 7
-    y.append(steigung * subset_df['index'].iloc[0] + y_achsenabschnitt)
-    y.append(steigung * subset_df['index'].iloc[6] + y_achsenabschnitt)
-
-    # Ensure that y[0] is not 0 to prevent division from zero
-    if y[0] == 0:
-        raise ValueError("Calculation of the gradient is not possible as y[0] is 0.")
-
-    slope_pct = (y[1] / y[0] - 1)* 100
-
-    return slope_pct
+        # ✅ Problem 4c Fix: Graceful Fehlerbehandlung
+        log_print(f"seven_day_slope_pct: Error - {e}")
+        return 0.0
 
 def calc_stat_limits(df, column, window=100, invert=False):
     if column not in df.columns:
@@ -523,88 +637,27 @@ def calc_stat_limits(df, column, window=100, invert=False):
     return sig_count, quantile_pct
 
 
-def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, link, data_type):
+def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type):
 
     alarms = {}
     tech_indicators = None  
-    score = 0           
-    alarm_indicator = ""
-    alarm_message_add = ""
-    alarm_priority = 0 #-2 lowes -1 low 0 normal 1 high 2 emergency
+    score = 0
 
-    #Indicators
+    # Indicators
     RSI14_signal_count, RSI14_quantile_pct = calc_stat_limits(df, 'RSI14', window=100, invert=True) 
-
-
     SMA7_signal_count, SMA7_quantile_pct = calc_stat_limits(df, 'SMA7', window=100, invert=False)
     VMA7_signal_count, VMA7_quantile_pct = calc_stat_limits(df, 'VMA7', window=100, invert=False)
     ROC5_signal_count, ROC5_quantile_pct = calc_stat_limits(df, 'ROC5', window=100, invert=False)
     VROC5_signal_count, VROC5_quantile_pct = calc_stat_limits(df, 'VROC5', window=100, invert=False)
     
-    #dEMA_pct, signal_count = signal_slope((df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100, signal_count)
-    #dVWMA20_pct, signal_count = signal_slope((df['VWMA20'].iloc[-1] - df['VWMA20'].iloc[-2])/df['VWMA20'].iloc[-2]*100,signal_count) #VolRatio20 check before VWMA20
-
-    #current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
-    alarm_buy_sell = "Hold"
 
-    # Watch-list & Portfolio-list
-    if not watch_list: 
-        
-        alarm_message_add = "Amount >1 year: {} ({} %)".format(round(amount_older_than_one_year,2),round(amount_older_than_one_year_pct,2))
-
-        if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
-            alarm_buy_sell = "Buy"
-            alarm_indicator = "Cross-EMA"
-            alarm_code = "101"
-            alarm_value = 1
-
-        if df['ROC5'].iloc[-1] > seven_day_price_change:
-            alarm_buy_sell = "Buy"
-            alarm_indicator = "Positiv-5"
-            alarm_code = "121"
-            alarm_value = df['ROC5'].iloc[-1]
-
-        if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
-            alarm_buy_sell = "Buy"
-            alarm_indicator = "100-Minimum"
-            alarm_code = "122"
-            alarm_value = 1 
-
-        if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
-            alarm_buy_sell = "Sell"
-            alarm_indicator = "Cross-EMA"
-            alarm_code = "201"
-            alarm_value = 1      
-        
-        if df['ROC5'].iloc[-1] < (seven_day_price_change * -1):
-            alarm_buy_sell = "Sell"
-            alarm_indicator = "Negative-5"
-            alarm_code = "221"
-            alarm_value = df['ROC5'].iloc[-1]
-
-        if df['HighP'].iloc[-1] < df['HighP'].iloc[-2] and df['HighP'].iloc[-2] > df['HighP'].iloc[-3] and data_type == "100d":
-            alarm_buy_sell = "Sell"
-            alarm_indicator = "100-Maximum"
-            alarm_code = "222"
-            alarm_value = 1
-
+    # Tech Analysis Score
     alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
-    alarm_analysis2, score = tech_analyse2(ROC5_signal_count,VROC5_signal_count, score)
-    alarm_analysis3, score = tech_analyse3(SMA7_signal_count,VMA7_signal_count, score)
+    alarm_analysis2, score = tech_analyse2(ROC5_signal_count, VROC5_signal_count, score)
+    alarm_analysis3, score = tech_analyse3(SMA7_signal_count, VMA7_signal_count, score)
     score += ROC5_signal_count
-
-    if alarm_buy_sell == "Sell": 
-        alarm_symbol = "&#9660;"
-        alarm_symbol_color = "red"
-        if score < -5:
-            alarm_priority = 1 #-2 lowes -1 low 0 normal 1 high 2 emergency
-    if alarm_buy_sell == "Buy":
-        alarm_symbol = "&#9650;"
-        alarm_symbol_color = "green"
-        if score > 5:
-            alarm_priority = 1 #-2 lowes -1 low 0 normal 1 high 2 emergency
 
     tech_indicators = {
         'RSI14': RSI14_quantile_pct,
@@ -614,52 +667,55 @@ def alarm(df,symbol,watch_list, current_profit_pct, amount_older_than_one_year, 
         'VMA7': VMA7_quantile_pct,
     }
 
-    if alarm_buy_sell != "Hold":
-    # Headline (only symbol)
-        alarm_headline = f"{symbol}"
-
-    # Helper to build arrow string for signal count
-        def arrow_string(count):
-            if np.isnan(count):
-                return ""
-            arrow_up = "+"  # Up
-            arrow_down = "-"  # Down
-            cycle = "&#8226;"      # Neutral
-            if count > 0:
-                return f" {arrow_up * int(count)}"
-            elif count < 0:
-                return f" {arrow_down * abs(int(count))}"
-            return f" {cycle}"
-
-        alarm_message = (
-            f"Trigger: {alarm_indicator}"
-            f" ({data_type})\n"
+    # Helper für Alarm-Erstellung
+    def create_alarm(code, buy_sell, indicator, value):
+        color = "green" if buy_sell == "Buy" else "red"
+        symbol_arrow = "&#9650;" if buy_sell == "Buy" else "&#9660;"
+        priority = 1 if (score > 5 and buy_sell == "Buy") or (score < -5 and buy_sell == "Sell") else 0
+        
+        arrow_str = lambda cnt: f" {'+' * int(cnt)}" if cnt > 0 else f" {'-' * abs(int(cnt))}" if cnt < 0 else " &#8226;"
+        
+        msg_add = f"Amount >1 year: {round(amount_older_than_one_year,2)} ({round(amount_older_than_one_year_pct,2)} %)" if not watch_list else ""
+        
+        message = (
+            f"Trigger: {indicator} ({data_type})\n"
             f"Score: {score}\n\n"
-            f"RSI14: {round(RSI14_quantile_pct,2)} %{arrow_string(RSI14_signal_count)}\n"
-            f"{alarm_analysis1}\n\n"
-            f"SMA7: {SMA7_quantile_pct} %{arrow_string(SMA7_signal_count)}\n"
-            f"VMA7: {VMA7_quantile_pct} %{arrow_string(VMA7_signal_count)}\n"
-            f"{alarm_analysis3}\n\n"
-            f"ROC5: {ROC5_quantile_pct} %{arrow_string(ROC5_signal_count)}\n"
-            f"VROC5: {VROC5_quantile_pct} %{arrow_string(VROC5_signal_count)}\n"
-            f"{alarm_analysis2}\n\n"
-            f"{alarm_message_add}\n"
+            f"RSI14: {round(RSI14_quantile_pct,2)} %{arrow_str(RSI14_signal_count)}\n{alarm_analysis1}\n\n"
+            f"SMA7: {SMA7_quantile_pct} %{arrow_str(SMA7_signal_count)}\n"
+            f"VMA7: {VMA7_quantile_pct} %{arrow_str(VMA7_signal_count)}\n{alarm_analysis3}\n\n"
+            f"ROC5: {ROC5_quantile_pct} %{arrow_str(ROC5_signal_count)}\n"
+            f"VROC5: {VROC5_quantile_pct} %{arrow_str(VROC5_signal_count)}\n{alarm_analysis2}\n\n"
+            f"{msg_add}\n"
         )
+        
+        alarms[code] = {
+            "value": value,
+            "priority": priority,
+            "msg": f"<html><body><div style='font-size:28px; font-weight:700; color:{color};'>{symbol} {symbol_arrow}</div>"
+                   f"<div style='color:black; white-space:pre-line;'>{message}</div></body></html>"
+        }
 
-    # Build HTML – headline separate, body black
-        alarms[alarm_code] = {
-                "value": alarm_value,
-                "priority": alarm_priority,
-                "msg": (
-                    f"<html><body>"
-                    # Headline (separate element, 28px, colored)
-                    f"<div style='font-size:28px; font-weight:700; color:{alarm_symbol_color};'>"
-                    f"{alarm_headline} {alarm_symbol}</div>"
-                    # Body (black; \n remains due to white-space:pre-line)
-                    f"<div style='color:black; white-space:pre-line;'>{alarm_message}</div>"
-                    f"</body></html>"
-                )
-            }
+    # Portfolio Alarme (nicht Watchlist)
+    if not watch_list:
+        # BUY Signals
+        if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
+            create_alarm("101", "Buy", "Cross-EMA", 1)
+        
+        if df['ROC5'].iloc[-1] > seven_day_price_change:
+            create_alarm("121", "Buy", "Positiv-5", df['ROC5'].iloc[-1])
+        
+        if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
+            create_alarm("122", "Buy", "100-Minimum", 1)
+
+        # SELL Signals
+        if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
+            create_alarm("201", "Sell", "Cross-EMA", 1)
+        
+        if df['ROC5'].iloc[-1] < (seven_day_price_change * -1):
+            create_alarm("221", "Sell", "Negative-5", df['ROC5'].iloc[-1])
+        
+        if df['HighP'].iloc[-1] < df['HighP'].iloc[-2] and df['HighP'].iloc[-2] > df['HighP'].iloc[-3] and data_type == "100d":
+            create_alarm("222", "Sell", "100-Maximum", 1)
 
     return alarms, tech_indicators, score
 
@@ -729,8 +785,8 @@ def tech_analyse2(ROC5, VROC5, score):
         Tscore = 0
         fake_out = " (possible fake-out)"
     else:
-        fake_out = ""
         Tscore = ROC5 + VROC5_score
+        fake_out = ""
 
     score = score + Tscore
 
@@ -775,9 +831,9 @@ def tech_analyse3(SMA7, VMA7, score):
         Tscore = 0
         fake_out = " (possible fake-out)"
     else:
-        fake_out = ""
         Tscore = SMA7 + VMA7_score
-
+        fake_out = ""
+    
     score = score + Tscore
 
     return f"Trend-Analysis: {volume_text} {trend_text}{fake_out}.", score

@@ -55,9 +55,10 @@ class CryptoStockManager:
             for crypto, transactions in crypto_config_items:
                 try:
                     name, transaction_data = transactions.split(";", 1)
-                    crypto_obj = cl.crypto_stock(crypto, name.strip(), 'crypto', self.previous_alarm_change)
-                    self.crypto_items_hh.append(crypto_obj)
-                    self.crypto_items_hd.append(crypto_obj)
+                    crypto_objhh = cl.CryptoStock(crypto, name.strip(), 'crypto', self.previous_alarm_change)
+                    crypto_objhd = cl.CryptoStock(crypto, name.strip(), 'crypto', self.previous_alarm_change)
+                    self.crypto_items_hh.append(crypto_objhh)
+                    self.crypto_items_hd.append(crypto_objhd)
                 
                     for transaction in transaction_data.split(";"):
                         try:
@@ -65,7 +66,8 @@ class CryptoStockManager:
                             spend = float(spend_str)
                             quantity = float(quantity_str)
                             date = date_str.strip()
-                            crypto_obj.buy(spend, quantity, date)
+                            crypto_objhh.buy(spend, quantity, date)
+                            crypto_objhd.buy(spend, quantity, date)
                         except ValueError:
                             func.log_print(f"Error when parsing spend or quantity for {name}")
                 except ValueError:
@@ -80,9 +82,10 @@ class CryptoStockManager:
             for stock, transactions in stock_config_items:
                 try:
                     name, transaction_data = transactions.split(";", 1)
-                    stock_obj = cl.crypto_stock(stock, name.strip(), 'stock', self.previous_alarm_change)
-                    self.stock_items_hh.append(stock_obj)
-                    self.stock_items_hd.append(stock_obj)
+                    stock_objhh = cl.CryptoStock(stock, name.strip(), 'stock', self.previous_alarm_change)
+                    stock_objhd = cl.CryptoStock(stock, name.strip(), 'stock', self.previous_alarm_change)
+                    self.stock_items_hh.append(stock_objhh)
+                    self.stock_items_hd.append(stock_objhd)
 
                     for transaction in transaction_data.split(";"):
                         try:
@@ -90,7 +93,8 @@ class CryptoStockManager:
                             spend = float(spend_str)
                             quantity = float(quantity_str)
                             date = date_str.strip()
-                            stock_obj.buy(spend, quantity, date)
+                            stock_objhh.buy(spend, quantity, date)
+                            stock_objhd.buy(spend, quantity, date)
                         except ValueError:
                             func.log_print(f"Error when parsing spend or quantity for {name}")
                 except ValueError:
@@ -126,10 +130,10 @@ class CryptoStockManager:
         self.schedule_on_weekdays()
         if self.stock_update:
             for item in self.stock_items_hd:
-                self.df_stock_hd.loc[len(self.df_stock_hd)] = item.refresh('100d')
+                self.df_stock_hd.loc[len(self.df_stock_hd)] = item.process_data(item.get_API_data('100d'), '100d')
 
         for item in self.crypto_items_hd:
-            self.df_crypto_hd.loc[len(self.df_crypto_hd)] = item.refresh('100d')
+            self.df_crypto_hd.loc[len(self.df_crypto_hd)] = item.process_data(item.get_API_data('100d'), '100d')
 
     def hundred_hour_analysis(self): 
         now = time.localtime()
@@ -143,10 +147,11 @@ class CryptoStockManager:
         self.schedule_on_weekdays()
         #if self.stock_update:
         #    for item in self.stock_items_hh:
-        #        self.df_stock_hh.loc[len(self.df_stock_hh)] = item.refresh('100h')
+        #        df_stock_hh = item.get_API_data('100h')
+        #        self.df_stock_hh.loc[len(self.df_stock_hh)] = item.process_data(df_stock_hh)
 
         for item in self.crypto_items_hh:
-            self.df_crypto_hh.loc[len(self.df_crypto_hh)] = item.refresh('100h')
+            self.df_crypto_hh.loc[len(self.df_crypto_hh)] = item.process_data(item.get_API_data('100h'), '100h')
 
     def send_summary(self):
         now = time.localtime()
@@ -184,6 +189,13 @@ class CryptoStockManager:
         except Exception as e:
             func.log_print(f"Unexpected error in send_summary: {e}")
 
+    def backtest(self):
+        test_obj = cl.CryptoStock("test", "test", 'crypto', self.previous_alarm_change)
+        test_obj.buy(1000, 0.5, "01/01/2022")
+
+        test_data = func.load_csv("test.csv", index=False, date_cols=['Date'])
+        test_obj.process_data(test_data, '100d')
+
 # Initialize the manager
 manager = CryptoStockManager(config_file_path="config.ini")
 func.pushover(f"Initialization complete - Version {manager.version}")
@@ -194,20 +206,23 @@ current_minute = now.tm_min
 noon_hour, noon_minute = map(int, noon_analysis.split(":"))
 
 if manager.test_mode == 1: #Test_mode in config
+
+    #manager.backtest()
     manager.hundred_hour_analysis() 
     manager.hundred_day_analysis() 
     manager.send_summary()
+else:
+    
+    if current_hour > noon_hour or (current_hour == noon_hour and current_minute >= noon_minute):
+        manager.hundred_day_analysis() 
 
-if current_hour > noon_hour or (current_hour == noon_hour and current_minute >= noon_minute):
-    manager.hundred_day_analysis() 
+    # Schedule tasks
+    schedule.every().hour.do(manager.hundred_hour_analysis)          
+    schedule.every().day.at(morning_analysis).do(manager.hundred_day_analysis)
+    schedule.every().day.at(noon_analysis).do(manager.hundred_day_analysis)
 
-# Schedule tasks
-schedule.every().hour.do(manager.hundred_hour_analysis)          
-schedule.every().day.at(morning_analysis).do(manager.hundred_day_analysis)
-schedule.every().day.at(noon_analysis).do(manager.hundred_day_analysis)
-
-#schedule.every().day.at(midnight_config).do(lambda: manager.load_config()) # Reload config at midnight
-schedule.every().day.at(evening_summary).do(manager.send_summary) # Daily summary
+    #schedule.every().day.at(midnight_config).do(lambda: manager.load_config()) # Reload config at midnight
+    schedule.every().day.at(evening_summary).do(manager.send_summary) # Daily summary
 
 while True:
     try:
