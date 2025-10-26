@@ -45,7 +45,7 @@ class CryptoStockManager:
             func.one_day_price_change = int(config.get('alarm', 'one_day_price_change'))
             func.seven_day_price_change = int(config.get('alarm', 'seven_day_price_change'))
             func.one_day_profit_limit = int(config.get('alarm', 'one_day_profit_limit'))
-            self.previous_alarm_change = int(config.get('alarm', 'previous_alarm_change'))
+            func.previous_alarm_change = int(config.get('alarm', 'previous_alarm_change'))
         except (configparser.NoSectionError, configparser.NoOptionError) as e:
             func.log_print(f"Error in the configuration: {e}")
 
@@ -55,8 +55,8 @@ class CryptoStockManager:
             for crypto, transactions in crypto_config_items:
                 try:
                     name, transaction_data = transactions.split(";", 1)
-                    crypto_objhh = cl.CryptoStock(crypto, name.strip(), 'crypto', self.previous_alarm_change)
-                    crypto_objhd = cl.CryptoStock(crypto, name.strip(), 'crypto', self.previous_alarm_change)
+                    crypto_objhh = cl.CryptoStock(crypto, name.strip(), 'crypto')
+                    crypto_objhd = cl.CryptoStock(crypto, name.strip(), 'crypto')
                     self.crypto_items_hh.append(crypto_objhh)
                     self.crypto_items_hd.append(crypto_objhd)
                 
@@ -82,8 +82,8 @@ class CryptoStockManager:
             for stock, transactions in stock_config_items:
                 try:
                     name, transaction_data = transactions.split(";", 1)
-                    stock_objhh = cl.CryptoStock(stock, name.strip(), 'stock', self.previous_alarm_change)
-                    stock_objhd = cl.CryptoStock(stock, name.strip(), 'stock', self.previous_alarm_change)
+                    stock_objhh = cl.CryptoStock(stock, name.strip(), 'stock')
+                    stock_objhd = cl.CryptoStock(stock, name.strip(), 'stock')
                     self.stock_items_hh.append(stock_objhh)
                     self.stock_items_hd.append(stock_objhd)
 
@@ -190,7 +190,7 @@ class CryptoStockManager:
             func.log_print(f"Unexpected error in send_summary: {e}")
 
     def backtest(self):
-        test_obj = cl.CryptoStock("test", "test", 'crypto', self.previous_alarm_change)
+        test_obj = cl.CryptoStock("test", "test", 'crypto')
         test_obj.buy(1000, 0.5, "01/01/2022")
 
         test_data = func.load_csv("test.csv", index=False, date_cols=['Date'])

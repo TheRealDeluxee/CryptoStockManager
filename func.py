@@ -28,6 +28,7 @@ one_day_price_change = ""
 seven_day_price_change = ""
 one_day_profit_limit = ""
 output_dir = 'plots'
+previous_alarm_change = ""
 
 def get_stock(symbol, period):
     df = pd.DataFrame()
@@ -695,27 +696,29 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
                    f"<div style='color:black; white-space:pre-line;'>{message}</div></body></html>"
         }
 
+    value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).timestamp())
+
     # Portfolio Alarme (nicht Watchlist)
     if not watch_list:
         # BUY Signals
         if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
-            create_alarm("101", "Buy", "Cross-EMA", 1)
+            create_alarm("101", "Buy", "Cross-EMA", value_ts)
         
         if df['ROC5'].iloc[-1] > seven_day_price_change:
             create_alarm("121", "Buy", "Positiv-5", df['ROC5'].iloc[-1])
         
         if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
-            create_alarm("122", "Buy", "100-Minimum", 1)
+            create_alarm("122", "Buy", "100-Minimum", value_ts)
 
         # SELL Signals
         if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
-            create_alarm("201", "Sell", "Cross-EMA", 1)
+            create_alarm("201", "Sell", "Cross-EMA", value_ts)
         
         if df['ROC5'].iloc[-1] < (seven_day_price_change * -1):
             create_alarm("221", "Sell", "Negative-5", df['ROC5'].iloc[-1])
         
         if df['HighP'].iloc[-1] < df['HighP'].iloc[-2] and df['HighP'].iloc[-2] > df['HighP'].iloc[-3] and data_type == "100d":
-            create_alarm("222", "Sell", "100-Maximum", 1)
+            create_alarm("222", "Sell", "100-Maximum", value_ts)
 
     return alarms, tech_indicators, score
 
@@ -919,3 +922,18 @@ def log_print(message: str):
     # Write new entry at the beginning
     with open('logfile.txt', 'w', encoding='utf-8') as f:
         f.write(log_entry + old_content)
+
+def filter(alarm_neu, state):
+
+    change = {}
+    for key, new_info in alarm_neu.items():
+        new_value = new_info["value"]
+        if key in state.alarm_prev:
+            prev_value = state.alarm_prev[key]["value"]
+            if abs(prev_value - new_value) > previous_alarm_change:
+                change[key] = new_info 
+                state.alarm_prev[key] = new_info 
+        else:
+            state.alarm_prev[key] = new_info
+            change[key] = new_info
+    return change

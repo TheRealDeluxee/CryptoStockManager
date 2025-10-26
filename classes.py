@@ -48,13 +48,12 @@ class GroupedState:
 
 class CryptoStock:
 
-    def __init__(self, symbol, search, crypto_or_stock, previous_alarm_change):
+    def __init__(self, symbol, search, crypto_or_stock):
         self.symbol = symbol
         self.search = search
         self.type = crypto_or_stock
         self.params_crypto_stock = ''
         self.test_mode = False
-        self.previous_alarm_change = previous_alarm_change
 
         # Grouped state container for many related attributes
         self.state = GroupedState()
@@ -114,7 +113,7 @@ class CryptoStock:
         
         alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type)
 
-        alarms_filter = self.filter(alarms)
+        alarms_filter = func.filter(alarms, self.state)
         for key, info in alarms_filter.items():
             func.pushover_image(self.symbol, info['msg'], info['priority'])
 
@@ -135,18 +134,4 @@ class CryptoStock:
                 '1d P&L [%]': round(self.state.current_one_day_price_change_pct, 2),
                 'Rating': self.state.score
             }
-
-    def filter(self,alarm_neu):
-        change = {}
-        for key, new_info in alarm_neu.items():
-            new_value = new_info["value"]
-            if key in self.state.alarm_prev:
-                prev_value = self.state.alarm_prev[key]["value"]
-                if abs(prev_value - new_value) > self.previous_alarm_change:
-                    change[key] = new_info 
-                    self.state.alarm_prev[key] = new_info 
-            else:
-                self.state.alarm_prev[key] = new_info
-                change[key] = new_info
-        return change
     
