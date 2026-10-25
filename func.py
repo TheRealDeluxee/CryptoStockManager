@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote  # only if you need to encode URL parts
 import urllib.request, json
 import random
+import math
 
 # --- External Packages ---
 import requests #instal
@@ -21,14 +22,14 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import matplotlib.patches as mpatches
+import multiprocessing as mp
 
-token_pushover  = ""
-user_pushover = ""
-one_day_price_change = ""
-seven_day_price_change = ""
-one_day_profit_limit = ""
+_message_queue = None
+one_day_price_change = 0.0
+seven_day_price_change = 0.0
+one_day_profit_limit = 0.0
 output_dir = 'plots'
-previous_alarm_change = ""
+previous_alarm_change = 0.0
 
 def get_stock(symbol, period):
     df = pd.DataFrame()
@@ -48,7 +49,7 @@ def get_stock(symbol, period):
             
             # Fetch data from Yahoo Finance
             stock = yf.Ticker(symbol)
-            df = stock.history(period=period, interval=interval)
+            df = stock.history(period=period, interval=interval, timeout=20)
             
             if not df.empty:
                 break
@@ -56,7 +57,8 @@ def get_stock(symbol, period):
                 wait_time = wait_times[i] if i < len(wait_times) else 900
                 msg = f"Empty response for {symbol}, waiting {wait_time}s before retry {i+1}"
                 pushover(msg)
-                time.sleep(wait_time)
+                if i < 4:
+                    time.sleep(wait_time)
                 
         except Exception as e:
             error_msg = str(e).lower()
@@ -87,8 +89,8 @@ def get_stock(symbol, period):
     if 'Date' not in df.columns:
         df['Date'] = df.index
     
-    df = df.tail(100)
-    df['Price'] = df['Close']
+    df = df.tail(100).copy()
+    df['Price'] = stock_prices_in_eur(stock, df, period)
     
     df_inverted = df.reset_index(drop=True)
     df_inverted.rename(columns={'index': 'Date'}, inplace=True)
@@ -97,6 +99,35 @@ def get_stock(symbol, period):
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
     
     return df_dropped
+
+
+def stock_prices_in_eur(stock, df, period):
+    """Yahoo liefert oft USD/GBP. Unsere Käufe und Diagramme rechnen in EUR."""
+    currency = stock.get_history_metadata().get('currency')
+    if not currency:
+        raise ValueError("Die Kurswährung konnte nicht bestimmt werden.")
+    prices = df['Close'].astype(float)
+    if currency == 'EUR':
+        return prices
+    # London notiert teilweise in Pence statt Pfund.
+    if currency in ('GBp', 'GBX'):
+        currency = 'GBP'
+        prices = prices / 100
+    if len(currency) != 3 or not currency.isalpha():
+        raise ValueError(f"Nicht unterstützte Kurswährung: {currency}")
+    fx = yf.Ticker(f"{currency.upper()}EUR=X").history(period=period, interval='1d', timeout=20)
+    if fx.empty:
+        raise ValueError(f"Kein Wechselkurs für {currency}/EUR verfügbar.")
+    # Je Kurstag den zuletzt verfügbaren täglichen Wechselkurs verwenden.
+    dates = pd.to_datetime(df.index, utc=True).normalize()
+    fx_dates = pd.to_datetime(fx.index, utc=True).normalize()
+    rates = pd.DataFrame({'Date': fx_dates, 'Rate': fx['Close'].to_numpy()})
+    rates = rates.dropna().sort_values('Date').drop_duplicates('Date', keep='last')
+    joined = pd.merge_asof(pd.DataFrame({'Date': dates}).sort_values('Date'), rates,
+                           on='Date', direction='backward', tolerance=pd.Timedelta(days=7))
+    if joined['Rate'].isna().any() or (joined['Rate'] <= 0).any():
+        raise ValueError(f"Unvollständige Wechselkurse für {currency}/EUR.")
+    return prices * joined['Rate'].to_numpy()
 
 
 def get_crypto(symbol, params_historical):
@@ -134,24 +165,24 @@ def get_crypto(symbol, params_historical):
         log_print(f"Failed to fetch {symbol} after 5 attempts")
         return None
     
-    # Process data
-    prices = data['prices']
-    volumes = data.get('total_volumes', [[p[0], 0] for p in prices])
-    
-    last_100_days_data = {
-        pd.Timestamp(price[0], unit='ms').strftime('%Y-%m-%d %H:%M:%S'): 
-        {'Price': price[1], 'Volume': volume[1]}
-        for price, volume in zip(prices, volumes)
-    }
-    
-    df = pd.DataFrame(last_100_days_data).T.reset_index()
-    df.columns = ['Date', 'Price', 'Volume']
-    df = df.tail(100).reset_index(drop=True)
-    df['Date'] = pd.to_datetime(df['Date'])
-    
-    return df
+    # Preise und Volumen anhand des Zeitstempels zuordnen (nicht blind zippen).
+    prices = pd.DataFrame(data['prices'], columns=['Timestamp', 'Price'])
+    volumes = pd.DataFrame(data.get('total_volumes', []), columns=['Timestamp', 'Volume'])
+    df = prices.merge(volumes, on='Timestamp', how='left')
+    df['Date'] = pd.to_datetime(df.pop('Timestamp'), unit='ms', utc=True).dt.tz_localize(None)
+    df['Volume'] = df['Volume'].fillna(0)
+    df = df.sort_values('Date').drop_duplicates('Date', keep='last').tail(100)
+    return df[['Date', 'Price', 'Volume']].reset_index(drop=True)
+
 
 def calc_indicator_fuctions(df):
+    if df is None or df.empty or len(df) < 26:
+        raise ValueError("Mindestens 26 Kurswerte werden benötigt.")
+    for column in ('Price', 'Volume'):
+        if column not in df or not np.isfinite(df[column].astype(float)).all():
+            raise ValueError(f"Fehlende oder ungültige Werte in {column}.")
+    if (df['Price'] <= 0).any() or (df['Volume'] < 0).any():
+        raise ValueError("Kurse müssen positiv und Volumina mindestens null sein.")
    
     # Calculate Fast EMA and Slow EMA
     df['Fast EMA'] = df['Price'].ewm(span=12, adjust=False).mean()
@@ -194,50 +225,67 @@ def calc_indicator_fuctions(df):
     # Calculate bollinger bands
     df['BB_Mid'], df['BB_Upper'], df['BB_Lower'] = bollinger_bands(df, 'Price', window=20)
 
-    save_csv(df,"test.csv",date_cols=['Date']) #For debugging
     return df
 
 def calc_state_fuctions(state,df):
-        # update balances and indicators into grouped state
+    # update balances and indicators into grouped state
 
-    state.current_balance_eur = state.amount_crypto_stock * df.iloc[-1]['Price']
-    state.yesterday_balance_eur = state.amount_crypto_stock * df.iloc[-2]['Price']
+    # Guard: need at least 3 rows for -1, -2, -3 indexing
+    if df is None or df.empty or len(df) < 3:
+        log_print("calc_state_fuctions: DataFrame too short, skipping calculations")
+        return state
 
-    state.current_profit = state.current_balance_eur - state.buy_balance_eur
-    state.yesterday_profit = state.yesterday_balance_eur - state.buy_balance_eur
+    # Safe reads of prices/emas
+    try:
+        last_price = float(df['Price'].iloc[-1])
+        prev_price = float(df['Price'].iloc[-2])
+        prev2_price = float(df['Price'].iloc[-3])
+    except Exception as e:
+        log_print(f"calc_state_fuctions: Price read error: {e}")
+        return state
+
+    amount = float(getattr(state, 'amount_crypto_stock', 0) or 0)
+    buy_balance = float(getattr(state, 'buy_balance_eur', 0) or 0)
+
+    state.current_balance_eur = amount * last_price
+    state.yesterday_balance_eur = amount * prev_price
+
+    state.current_profit = state.current_balance_eur - buy_balance
+    state.yesterday_profit = state.yesterday_balance_eur - buy_balance
 
     # protect division by zero for profit pct
-    if state.buy_balance_eur:
-        state.current_profit_pct = (state.current_balance_eur - state.buy_balance_eur)/state.buy_balance_eur*100
-        state.yesterday_profit_pct = (state.yesterday_balance_eur - state.buy_balance_eur)/state.buy_balance_eur*100
+    if buy_balance:
+        state.current_profit_pct = state.current_profit / buy_balance * 100
+        state.yesterday_profit_pct = state.yesterday_profit / buy_balance * 100
     else:
-        state.current_profit_pct = 0
-        state.yesterday_profit_pct = 0
+        state.current_profit_pct = 0.0
+        state.yesterday_profit_pct = 0.0
 
-    # price change pct
-    state.current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
-    state.yesterday_one_day_price_change_pct = (df['Price'].iloc[-2] - df['Price'].iloc[-3]) / df['Price'].iloc[-3] * 100
-    
-    state.current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
-    state.yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
+    # price change pct (guard divide by zero)
+    state.current_one_day_price_change_pct = (last_price - prev_price) / prev_price * 100 if prev_price else 0.0
+    state.yesterday_one_day_price_change_pct = (prev_price - prev2_price) / prev2_price * 100 if prev2_price else 0.0
 
-    state.current_seven_days_slope_pct = seven_day_slope_pct(df,True)
-    state.yesterday_seven_days_slope_pct = seven_day_slope_pct(df,False)
+    # EMA diff pct (guard denom)
+    def safe_pct(numer, denom):
+        return (numer / denom * 100) if denom else 0.0
+
+    state.current_EMA_diff_pct = safe_pct(df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1], df['Slow EMA'].iloc[-1])
+    state.yesterday_EMA_diff_pct = safe_pct(df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2], df['Slow EMA'].iloc[-2])
+
+    state.current_seven_days_slope_pct = seven_day_slope_pct(df, True)
+    state.yesterday_seven_days_slope_pct = seven_day_slope_pct(df, False)
 
     state.amount_older_than_one_year = older_than_one_year(state.df_buy_history)
 
-    if state.amount_crypto_stock:
-        state.amount_older_than_one_year_pct = state.amount_older_than_one_year / state.amount_crypto_stock * 100
+    if amount:
+        state.amount_older_than_one_year_pct = state.amount_older_than_one_year / amount * 100
     else:
-        state.amount_older_than_one_year_pct = 0
+        state.amount_older_than_one_year_pct = 0.0
 
-    if state.buy_balance_eur  == 1 and state.amount_crypto_stock == 1: 
-        state.watch_list = True
-        state.zero_line = None
-    else:
-        state.watch_list = False
-        state.zero_line = state.buy_balance_eur/state.amount_crypto_stock
-    
+    # Eine Watchlist braucht keinen künstlichen Kauf von 1 EUR / 1 Stück.
+    state.watch_list = amount <= 0
+    state.zero_line = buy_balance / amount if not state.watch_list else None
+
     return state
         
 
@@ -310,7 +358,7 @@ def save_csv(df, path=None, index=False, date_cols=()):
         lineterminator="\n"
     )
 
-def load_csv(path, index=False, date_cols=()):
+def load_csv(path, index=False):
     df = pd.read_csv(
         path,
         sep=";",
@@ -319,9 +367,19 @@ def load_csv(path, index=False, date_cols=()):
         encoding="utf-8-sig",
         lineterminator="\n"
     )
-    for c in date_cols:
-        if c in df:
-            df[c] = pd.to_datetime(df[c], format="%d.%m.%Y", errors="coerce")
+
+    # erst Date erzeugen
+    df["Price"] = df["Close"]
+    df["Date"] = pd.to_datetime(df["Close time"], format="%Y-%m-%d %H:%M:%S", errors="coerce")
+
+    # dann droppen und zurückgeben
+    columns_to_drop = [
+        "Open time", "Open", "High", "Low", "Close", "Close time",
+        "Quote asset volume", "Number of trades",
+        "Taker buy base asset volume", "Taker buy quote asset volume", "Ignore"
+    ]
+    df = df.drop(columns=[c for c in columns_to_drop if c in df.columns])
+
     return df
 
 def calculate_ma(df, column, window=20):
@@ -342,7 +400,8 @@ def calculate_rsi(df, window=14):
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
 
-    # Return RSI
+    # Ein unveränderter Kurs hat neutralen RSI statt 0/0 (= NaN).
+    rsi = rsi.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
     return rsi
 
 
@@ -356,26 +415,6 @@ def calculate_vwma(df, window=20):
     pv = df['Price'] * df['Volume']
     return pv.rolling(window=window).sum() / df['Volume'].rolling(window=window).sum()
 
-def human_format(x, pos):
-    if x >= 1_000_000_000:
-        return f"{x*1.0/1_000_000_000:.0f}B"
-    elif x >= 1_000_000:
-        return f"{x*1.0/1_000_000:.0f}M"
-    elif x >= 1_000:
-        return f"{x*1.0/1_000:.0f}k"
-    else:
-        return f"{int(x)}"
-    
-def human_format_euro(x, pos):
-    if x >= 1_000_000_000:
-        return f"{x/1_000_000_000:.0f}B €"
-    elif x >= 1_000_000:
-        return f"{x/1_000_000:.0f}M €"
-    elif x >= 1_000:
-        return f"{x/1_000:.0f}k €"
-    else:
-        return f"{int(x)} €"
-
 def human_format(num, pos):
     magnitude = 0
     while abs(num) >= 1000:
@@ -387,6 +426,8 @@ def human_format_euro(num, pos):
     return human_format(num, pos) + '€'
 
 def plot_and_save(df, symbol, data_type, zero_line=None):
+    if df is None or df.empty:
+        raise ValueError("Kein Diagramm ohne Kursdaten möglich.")
     if df is not None and not df.empty:
     #----------Create
         fig, (ax1, ax3) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
@@ -434,10 +475,16 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
             alpha=0.2, 
             label='Bollinger-Bereich'
         )
-        ax1.set_ylim(df['BB_Lower'].min(), df['BB_Upper'].max())
+        # Kurs mit einbeziehen, sonst wird ein Ausbruch aus dem Band abgeschnitten.
+        lower = min(df['BB_Lower'].min(), df['Price'].min())
+        upper = max(df['BB_Upper'].max(), df['Price'].max())
+        if lower == upper:
+            padding = max(abs(lower) * 0.01, 0.01)
+            lower, upper = lower - padding, upper + padding
+        ax1.set_ylim(lower, upper)
 
         min_remap = linear_remap(
-            df['BB_Lower'].min(),
+            lower,
             df['Price'].min(),
             df['Price'].max(),
             df['Percentage Deviation'].min(),
@@ -445,13 +492,15 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         )
 
         max_remap = linear_remap(
-            df['BB_Upper'].max(),
+            upper,
             df['Price'].min(),
             df['Price'].max(),
             df['Percentage Deviation'].min(),
             df['Percentage Deviation'].max()
         )
 
+        if min_remap == max_remap:
+            min_remap, max_remap = min_remap - 1, max_remap + 1
         ax2.set_ylim(min_remap, max_remap)
         
         ax1.plot(df['Date'], df['Price'], label='Price', color='k', linewidth=1.5)
@@ -489,56 +538,22 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
     plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight', facecolor='white', transparent=False)
     plt.close(fig)
 
-def pushover(message: str, priority: int=0):
-    # Log file (prepend new entry)
-    log_entry = time.strftime("%x %X", time.localtime()) + '  \n' + message + '\n\n'
-    try:
-        with open('logfile.txt', 'r', encoding='utf-8') as f:
-            old_content = f.read()
-    except FileNotFoundError:
-        old_content = ''
-    with open('logfile.txt', 'w', encoding='utf-8') as f:
-        f.write(log_entry + old_content)
+def set_message_queue(queue: mp.Queue):
+    global _message_queue
+    _message_queue = queue
 
-    try:
-        requests.post(
-            "https://api.pushover.net/1/messages.json",
-            data={
-                "title" : "CaSa Alarm", 
-                "token": token_pushover,
-                "user": user_pushover,
-                "message": message,
-                "url_title": "Link",
-                "html": 1,
-                "priority": priority   #-2 lowes -1 low 0 normal 1 high 2 emergency
-            },
-            timeout=10,
-        )
-    except Exception as e:
-        log_print(f"Pushover error: {e}")
+def pushover(message: str, priority: int = 0):
+    log_print(message)
+    if _message_queue:
+        _message_queue.put({'type': 'text', 'message': message, 'priority': priority})
+    else:
+        log_print("No queue – message discarded.")
 
-def pushover_image(symbol: str, message: str, priority: int=0):
-
-    file_name = os.path.join(output_dir, symbol + ".png")
-    try:
-        with open(file_name, "rb") as fh:
-            requests.post(
-                "https://api.pushover.net/1/messages.json",
-                data={
-                    "title" : "CaSa Alarm",
-                    "token": token_pushover,
-                    "user": user_pushover,
-                    "url_title": "Link",
-                    "message": message,
-                    "html": 1,
-                    "priority": priority   #-2 lowes -1 low 0 normal 1 high 2 emergency
-                },
-                files={"attachment": ("image.jpg", fh, "image/jpeg")},
-                timeout=30,
-            )
-    except Exception as e:
-        log_print(f"Pushover image error: {e}")
-
+def pushover_image(symbol: str, message: str, priority: int = 0, delete_after_send=False):
+    if _message_queue:
+        _message_queue.put({'type': 'image', 'symbol': symbol, 'message': message, 'priority': priority, 'output_dir': output_dir, 'delete_after_send': delete_after_send})
+    else:
+        log_print("No queue – image discarded.")
 
 def google_trends(search):
     
@@ -550,6 +565,8 @@ def google_trends(search):
             infos = {'tries': int(i), 'function': __name__,'exception': e}
             msg = "Script try number %(tries)s to %(function)s \n\n%(exception)s" %infos
             pushover(msg)
+            if i == 4:
+                raise
             time.sleep(300)
     
     kw_list = [search] # List of keywords to get data
@@ -562,7 +579,9 @@ def google_trends(search):
     df['Date'] = data['date']
     df['Interest'] = data[search]
 
-    return df.tail(1)['Interesse'].values[0], df.tail(2)['Interesse'].values[0]
+    if len(df) < 2:
+        raise ValueError('Zu wenige Google-Trends-Daten.')
+    return df['Interest'].iloc[-1], df['Interest'].iloc[-2]
 
 def seven_day_slope_pct(df, current):
 
@@ -609,10 +628,14 @@ def calc_stat_limits(df, column, window=100, invert=False):
     if column not in df.columns:
         return np.nan, np.nan
 
-    data = df[column].dropna().to_numpy()[-window:]
+    if df.empty or not np.isfinite(df[column].iloc[-1]):
+        return np.nan, np.nan
+    data = df[column].replace([np.inf, -np.inf], np.nan).dropna().to_numpy()[-window:]
     if data.size < 2:
         return np.nan, np.nan
     
+    if np.all(data == data[0]):
+        return 0, 50.0
     # Calculate quantile (percentile) of current_value in data
     quantile = float(np.sum(data <= df[column].iloc[-1])) / len(data)
     quantile_pct = round(quantile * 100, 2)
@@ -638,65 +661,64 @@ def calc_stat_limits(df, column, window=100, invert=False):
     return sig_count, quantile_pct
 
 
+def analysis_details(df):
+    """Gemeinsame Kennwerte für Alarm und /check; diese Funktion versendet nichts."""
+    signals, quantiles = {}, {}
+    for column in ('RSI14', 'SMA7', 'VMA7', 'ROC5', 'VROC5'):
+        count, quantile = calc_stat_limits(df, column, window=100, invert=(column == 'RSI14'))
+        # Fehlendes Volumen ergibt kein verwertbares Momentum: neutral bewerten.
+        # Ein fehlender Preisindikator muss dagegen als Datenfehler auffallen.
+        if not math.isfinite(count) or not math.isfinite(quantile):
+            if column in ('VMA7', 'VROC5'):
+                count, quantile = 0, float('nan')
+            else:
+                raise ValueError(f"Keine ausreichenden Daten für {column}.")
+        signals[column], quantiles[column] = int(count), quantile
+    text1, score = tech_analyse1(signals['RSI14'], 0)
+    text2, score = tech_analyse2(signals['ROC5'], signals['VROC5'], score)
+    text3, score = tech_analyse3(signals['SMA7'], signals['VMA7'], score)
+    score += signals['ROC5']
+
+    def line(column):
+        count, value = signals[column], quantiles[column]
+        if not math.isfinite(value):
+            return f"{column}: keine Daten (neutral gewertet)"
+        marks = '+' * count if count > 0 else '-' * abs(count) if count < 0 else '●'
+        return f"{column}: {value:.2f} % {marks}"
+
+    message = (f"📊 Score: {score}\n{'─' * 5}\n"
+               f"{line('RSI14')}\n{text1}\n\n"
+               f"{line('SMA7')}\n{line('VMA7')}\n{text3}\n\n"
+               f"{line('ROC5')}\n{line('VROC5')}\n{text2}")
+    return {'score': score, 'quantiles': quantiles, 'message': message}
+
+
 def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type):
 
     alarms = {}
     tech_indicators = None  
     score = 0
 
-    # Indicators
-    RSI14_signal_count, RSI14_quantile_pct = calc_stat_limits(df, 'RSI14', window=100, invert=True) 
-    SMA7_signal_count, SMA7_quantile_pct = calc_stat_limits(df, 'SMA7', window=100, invert=False)
-    VMA7_signal_count, VMA7_quantile_pct = calc_stat_limits(df, 'VMA7', window=100, invert=False)
-    ROC5_signal_count, ROC5_quantile_pct = calc_stat_limits(df, 'ROC5', window=100, invert=False)
-    VROC5_signal_count, VROC5_quantile_pct = calc_stat_limits(df, 'VROC5', window=100, invert=False)
-    
+    details = analysis_details(df)
+    score = details['score']
+    tech_indicators = details['quantiles']
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
 
-    # Tech Analysis Score
-    alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
-    alarm_analysis2, score = tech_analyse2(ROC5_signal_count, VROC5_signal_count, score)
-    alarm_analysis3, score = tech_analyse3(SMA7_signal_count, VMA7_signal_count, score)
-    score += ROC5_signal_count
-
-    tech_indicators = {
-        'RSI14': RSI14_quantile_pct,
-        'MOM10': ROC5_quantile_pct,
-        'VMOM10': VROC5_quantile_pct,
-        'SMA7': SMA7_quantile_pct,
-        'VMA7': VMA7_quantile_pct,
-    }
-
-    # Helper für Alarm-Erstellung
     def create_alarm(code, buy_sell, indicator, value):
-        color = "green" if buy_sell == "Buy" else "red"
-        symbol_arrow = "&#9650;" if buy_sell == "Buy" else "&#9660;"
+        emoji = "🟢" if buy_sell == "Buy" else "🔴"
         priority = 1 if (score > 5 and buy_sell == "Buy") or (score < -5 and buy_sell == "Sell") else 0
-        
-        arrow_str = lambda cnt: f" {'+' * int(cnt)}" if cnt > 0 else f" {'-' * abs(int(cnt))}" if cnt < 0 else " &#8226;"
-        
-        msg_add = f"Amount >1 year: {round(amount_older_than_one_year,2)} ({round(amount_older_than_one_year_pct,2)} %)" if not watch_list else ""
-        
         message = (
-            f"Trigger: {indicator} ({data_type})\n"
-            f"Score: {score}\n\n"
-            f"RSI14: {round(RSI14_quantile_pct,2)} %{arrow_str(RSI14_signal_count)}\n{alarm_analysis1}\n\n"
-            f"SMA7: {SMA7_quantile_pct} %{arrow_str(SMA7_signal_count)}\n"
-            f"VMA7: {VMA7_quantile_pct} %{arrow_str(VMA7_signal_count)}\n{alarm_analysis3}\n\n"
-            f"ROC5: {ROC5_quantile_pct} %{arrow_str(ROC5_signal_count)}\n"
-            f"VROC5: {VROC5_quantile_pct} %{arrow_str(VROC5_signal_count)}\n{alarm_analysis2}\n\n"
-            f"{msg_add}\n"
+            f"{emoji} {symbol} — {buy_sell}\n"
+            f"🔔 Trigger: {indicator} ({data_type})\n"
+            + details['message']
         )
-        
-        alarms[code] = {
-            "value": value,
-            "priority": priority,
-            "msg": f"<html><body><div style='font-size:28px; font-weight:700; color:{color};'>{symbol} {symbol_arrow}</div>"
-                   f"<div style='color:black; white-space:pre-line;'>{message}</div></body></html>"
-        }
+        if not watch_list:
+            message += f"\n📅 Amount >1 year: {amount_older_than_one_year:.2f} ({amount_older_than_one_year_pct:.2f} %)"
+        alarms[code] = {"value": value, "priority": priority, "msg": message}
 
-    value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).timestamp())
+    # Nur das Datum: CoinGecko liefert als letzten Wert die aktuelle Uhrzeit.
+    value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).normalize().timestamp())
 
     # Portfolio Alarme (nicht Watchlist)
     if not watch_list:
@@ -823,7 +845,7 @@ def tech_analyse3(SMA7, VMA7, score):
     
     # Werte aus den Matrizen holen (mit Fallback)
     volume_text = VOLUME_MATRIX.get(VMA7, "error")
-    trend_text = TREND_MATRIX.get(abs(SMA7), "error")
+    trend_text = TREND_MATRIX.get(SMA7, "error")
 
     if SMA7 < 0: 
         VMA7_score = VMA7 * -1  
@@ -905,23 +927,11 @@ def create_table_image(
 
 
 def log_print(message: str):
-
-    # Print to console
     print(message)
-    
-    # Create log entry with timestamp
-    log_entry = time.strftime("%x %X", time.localtime()) + '  \n' + str(message) + '\n\n'
-    
-    # Read existing content
-    try:
-        with open('logfile.txt', 'r', encoding='utf-8') as f:
-            old_content = f.read()
-    except FileNotFoundError:
-        old_content = ''
-    
-    # Write new entry at the beginning
-    with open('logfile.txt', 'w', encoding='utf-8') as f:
-        f.write(log_entry + old_content)
+    log_entry = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + "  " + str(message) + "\n"
+    with open('logfile.txt', 'a', encoding='utf-8') as file:
+        file.write(log_entry)
+
 
 def filter(alarm_neu, state):
 

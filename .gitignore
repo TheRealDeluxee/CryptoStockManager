@@ -13,3 +13,5 @@
 desktop.ini
 Thumbs.db
 *.lnk
+/transactions.csv
+/watchlist.csv
