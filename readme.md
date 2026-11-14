@@ -63,6 +63,8 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 
 ## What's New
 
+**Version 0.1.0** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
 - Telegram bot instead of Pushover: notifications, charts and commands in one chat
 - Redesigned charts (trading-day axis, 200 dpi, volume profile, support/resistance) and daily ranking image
 - New commands: `/check` and `/ai` with buttons, `/alarm`, `/sellall`, `/event`
@@ -163,9 +165,6 @@ All files are plain text and can be edited with any editor. After changes, send 
 ### config.ini
 
 ```ini
-[version]
-number = 1.2.0
-
 [telegram]
 token = YOUR_TELEGRAM_BOT_TOKEN
 chat_id = YOUR_CHAT_ID
@@ -250,6 +249,10 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 - Delete dates directly in Telegram
 - Reminder one day before an event
 - Fix the EUR conversion for hourly stock data
+
+## Versioning
+
+CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.0`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

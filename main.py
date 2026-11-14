@@ -20,6 +20,10 @@ import classes as cl
 import func
 import telegram_bot
 
+# Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
+# Kept in the code instead of config.ini, because config.ini is private and not part of Git.
+VERSION = "0.1.0"
+
 MORNING_ANALYSIS = "09:30"
 NOON_ANALYSIS = "12:30"
 EVENING_SUMMARY = "18:30"
@@ -80,7 +84,7 @@ class CryptoStockManager:
         config = configparser.ConfigParser()
         if not config.read(config_file_path, encoding="utf-8-sig"):
             raise FileNotFoundError(f"{config_file_path} not found.")
-        self.version = config.get('version', 'number')
+        self.version = VERSION   # an old [version] section in config.ini is ignored
         self.test_mode = config.getint('alarm', 'test_mode')
         func.one_day_price_change = config.getfloat('alarm', 'one_day_price_change')
         func.seven_day_price_change = config.getfloat('alarm', 'seven_day_price_change')
