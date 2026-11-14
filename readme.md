@@ -29,6 +29,8 @@ Moreover, I was never fully satisfied with the existing apps and their features 
 
 That's why I decided to take matters into my own hands and developed CaSa—a free, open-source program available on GitHub. It is reliable, already includes the essential features and is a good starting point for anyone facing the same challenges. There is still plenty of room for growth (see [Ideas for the Future](#ideas-for-the-future)) – let's build something great together!
 
+![CaSa alert in Telegram on iPhone and Apple Watch](docs/telegram_phone_watch.png)
+
 ## Features
 
 **Analysis**
