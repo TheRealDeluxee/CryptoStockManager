@@ -1,125 +1,162 @@
-![Project Overview](logo.png)
+![CaSa](logo.png)
 
-# Crypto and Stock Alert
+# CaSa – Crypto and Stock Alert
 
-## Overview
+CaSa watches your cryptocurrencies and stocks, analyses them with technical indicators and sends alerts, charts and daily summaries to **Telegram**. The same Telegram chat is used to control the program: run analyses on demand, record buys and sells, switch alarms on and off, plan important dates and create prompts for ChatGPT or Claude.
 
-This project provides a Python-based system for analyzing and monitoring cryptocurrencies and stocks. It uses technical indicators like Moving Averages, RSI, Rate of Change, Bollinger Bands and Volume Analysis to evaluate trends and alert users on significant market conditions. The system tracks and visualizes data, calculates profits, and sends notifications and charts via a **Telegram bot**, which also accepts commands (analysis on demand, transactions, alarm settings, AI prompts).
+![Example chart](docs/example_chart.png)
 
-## Why do I need CaSa?
+## Contents
+
+- [Why CaSa?](#why-casa)
+- [Features](#features)
+- [What's New](#whats-new)
+- [Quick Start](#quick-start)
+- [Telegram Commands](#telegram-commands)
+- [Daily Schedule](#daily-schedule)
+- [Understanding Alerts and Charts](#understanding-alerts-and-charts)
+- [Configuration](#configuration)
+- [Project Structure](#project-structure)
+- [Known Limitations](#known-limitations)
+- [Ideas for the Future](#ideas-for-the-future)
+- [License, Disclaimer and Links](#license)
+
+## Why CaSa?
 
 I've always wanted to invest in stocks and cryptocurrencies, but I was held back by the fear of missing rapid market changes and, especially with crypto, the risk of losing significant money. Constantly monitoring prices felt overwhelming and stressful.
 
 Moreover, I was never fully satisfied with the existing apps and their features for tracking price changes. Most of them offer only basic alert thresholds, while more advanced functionalities often come with a price tag.
 
-That's why I decided to take matters into my own hands and developed CaSa—a free, open-source program now available on GitHub. CaSa is reliable and already includes several essential features, making it an excellent starting point for anyone facing the same challenges I did.
-
-While it's functional and stable, there's still plenty of room for growth. Check out the "New Feature Idea List" for planned improvements and let's build something great together!
-
-![Project Overview](alert_watch_phone.png)
+That's why I decided to take matters into my own hands and developed CaSa—a free, open-source program available on GitHub. It is reliable, already includes the essential features and is a good starting point for anyone facing the same challenges. There is still plenty of room for growth (see [Ideas for the Future](#ideas-for-the-future)) – let's build something great together!
 
 ## Features
 
-- **Automatic Data Retrieval**: Crypto data from CoinGecko, stock data from Yahoo Finance (foreign currencies are converted to EUR automatically)
-- **Longer History in the Background**: 250 daily / 450 hourly values are loaded, indicators are calculated on the full history and then cut to a 100-value window (no warm-up gaps at the left chart edge)
-- **Advanced Technical Analysis**: Multi-indicator scoring system combining:
-  - **RSI14**: 14-day Relative Strength Index for overbought/oversold signals
-  - **ROC5 & VROC5**: 5-period rate of change of price and volume with fake-out detection
-  - **SMA7 & VMA7**: Short-term trend and volume analysis with fake-out detection
-  - **EMA Crossovers**: Fast/Slow EMA (12/26) buy/sell signals
-  - **Bollinger Bands (20,2)**
-  - **7-Day Slope Analysis**: Price trend strength over weekly periods
-- **Support/Resistance Zones**: Nearest resistance (R1) above and support (S1) below the price, built from pivot points of the full history and shown with number of touches
-- **Smart Alarm System**:
-  - Quantile-based signal strength (3 levels: +/-, ++/--, +++/---)
-  - Volume-supported momentum detection
-  - Duplicate alarm filtering (also across `/restart`)
-  - Per-asset switch which assets are part of the automatic alarm analysis
-- **Visual Analytics**: Charts with price, EMAs, Bollinger Bands, buy/sell markers, support/resistance zones, volume bars and a volume profile
-- **Portfolio Tracking**: FIFO bookkeeping from `transactions.csv`, profit calculation and tax-relevant holding periods (>1 year)
-- **AI Prompt**: `/ai` creates a ready-to-copy prompt for ChatGPT or Claude including technical data, bottom/top formation, market phase and your position (no AI API needed)
-- **Event Reminders**: Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/termin`; on the day at 08:00 a reminder plus a daily analysis of the asset is sent
-- **Scheduling**: Hourly (100h) crypto analysis, daily (100d) analysis at 09:30 and 12:30, summary at 18:30
-- **Daily Summaries**: Ranking image sorted by 1-day P&L
+**Analysis**
+- Crypto data from CoinGecko, stock data from Yahoo Finance; foreign currencies (USD, GBP, ...) are converted to EUR
+- 250 daily / 450 hourly values are loaded, indicators are calculated on the full history and the last 100 values are evaluated
+- Scoring system (-18 to +18) from RSI14, SMA7/VMA7, ROC5/VROC5 with volume support and fake-out detection
+- EMA 12/26 crossovers, Bollinger Bands (20,2), 7-day trend slope
+- Support/resistance zones from pivot points of the full history
+
+**Alarms**
+- Automatic hourly and daily analysis of all assets marked with `1` in `assets.ini`
+- Triggers: EMA crossover, strong 5-day move, 100-day minimum/maximum
+- Duplicate filter: the same alarm is not sent twice in a row
+
+**Charts and Messages**
+- Chart without weekend gaps: price, EMAs, Bollinger Bands, signals, support/resistance (R1/S1), volume bars and volume profile
+- Clean Telegram messages (bold headers, aligned values)
+- Daily ranking of all assets by 1-day P&L
+
+![Example summary](docs/example_summary.png)
+
+**Portfolio**
+- Buys and sells in `transactions.csv` (FIFO bookkeeping)
+- Profit/loss per asset, background colour of the chart shows profit or loss
+- Holding period: amount held longer than one year (tax-relevant for crypto in Germany)
+
+**Planning and Research**
+- `/ai` creates a detailed prompt for ChatGPT or Claude: technical data, support/resistance, bottom/top formation, market phase of the asset and its leading market, your position and common investment rules – no AI API needed, just copy and paste
+- Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/termin`: reminder plus daily analysis on the day
 
 ## What's New
 
-- **Telegram bot instead of Pushover**: notifications, charts and commands in one chat
-- **Charts**: trading-day axis without weekend gaps, 200 dpi, volume profile on the right, support/resistance zones with legend, percentage axis on the left
-- **Messages**: clean HTML formatting in Telegram (bold headers, aligned values, no emojis)
-- **Daily Summary**: modern ranking table with 1-day P&L bars and highlighted best performer
-- **New commands**: `/check` and `/ai` with buttons, `/alarm` to switch assets on/off, `/sellall` to record the sale of a full position
-- **`assets.ini`**: one list of all known assets; `; 1` marks assets for the automatic alarm analysis
-- **AI prompt** with bottom/top formation (higher lows, RSI divergence, double bottom/top, volume climax, EMA confirmation) and market phase (price and SMA50 vs. SMA200, Golden/Death Cross) for the asset and its leading market (Bitcoin, DAX, S&P 500, FTSE MIB)
-- **Bug fixes**: no duplicate daily crypto alarms, price no longer cut off at Bollinger breakouts, evening summary kept after `/buy` / `/sell`
+- Telegram bot instead of Pushover: notifications, charts and commands in one chat
+- Redesigned charts (trading-day axis, 200 dpi, volume profile, support/resistance) and daily ranking image
+- New commands: `/check` and `/ai` with buttons, `/alarm`, `/sellall`, `/termin`
+- `assets.ini` replaces the old watchlist; `; 1` marks assets for the alarm analysis
+- AI prompt with bottom/top formation and market phase (SMA50/SMA200, Golden/Death Cross)
+- Event reminders with automatic daily analysis
+- Bug fixes: no duplicate daily crypto alarms, price no longer cut off at Bollinger breakouts, evening summary kept after `/buy` / `/sell`
 
-## Project Structure
+## Quick Start
 
-- `main.py`: Main program: loads configuration, schedules analyses, handles commands from the bot
-- `classes.py`: `CryptoStock` class (data, transactions, analysis per asset), reading `assets.ini` and `transactions.csv`
-- `func.py`: Data retrieval, indicators, support/resistance, alarms, charts and summary image
-- `telegram_bot.py`: Telegram bot (runs as separate process, sends messages and forwards commands to `main.py`)
-- `config.ini`: Version, alarm limits and Telegram access (must be created manually)
-- `assets.ini`: All cryptos and stocks known to the program (must be created manually)
-- `transactions.csv`: Buys and sells, written by the bot (`/buy`, `/sell`, `/sellall`)
-- `ki_frage.txt`: Template for the `/ai` prompt; created automatically, can be edited freely
-- `events.ini`: Important dates with reminder and analysis (optional, also written by `/termin`)
+1. **Install Python 3** (tested with Python 3.13)
+2. **Install the dependencies**
+   - Windows: run `install_venv.bat` (creates `.venv` and installs `requirements.txt`)
+   - Linux/macOS: `python3 -m venv .venv` and `.venv/bin/pip install -r requirements.txt`
+3. **Create a Telegram bot**
+   - Send `/newbot` to [@BotFather](https://t.me/BotFather) and copy the token
+   - Send any message to your new bot, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` – the number at `"chat":{"id":...}` is your chat id
+4. **Create `config.ini` and `assets.ini`** in the program folder (see [Configuration](#configuration))
+5. **Start CaSa**: `python main.py` (Windows: `.venv\Scripts\python main.py`)
 
-## Installation
+After the start, the bot sends a short message with the version, the number of monitored assets and the next scheduled analysis. Send `/help` for all commands.
 
-1. Install Python 3
-2. Windows: run `install_venv.bat` (creates `.venv` and installs `requirements.txt`)  
-   Other systems: `python3 -m venv .venv` and `.venv/bin/pip install -r requirements.txt`
-3. Create a Telegram bot with [@BotFather](https://t.me/BotFather) and note the token and your chat id
-4. Create `config.ini` and `assets.ini` in the root directory (see **Configuration**)
-5. Run the program: `python main.py`
-
-**Note**: Tested on RockPi3 with Armbian OS and on Windows 11.
+**Tested on**: RockPi3 with Armbian OS and Windows 11.
 
 ## Telegram Commands
 
 | Command | Function |
 |---|---|
-| `/check` | Daily analysis of one asset without alarm (choose via buttons) |
-| `/ai` | AI prompt to copy into ChatGPT or Claude (choose via buttons or `/ai <symbol>`) |
+| **Analysis** | |
+| `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol> <crypto\|stock>`) |
+| `/ai` | AI prompt to copy into ChatGPT or Claude (buttons or `/ai <symbol>`) |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
+| **Alarms and Dates** | |
 | `/alarm` | Switch assets on/off for the alarm analysis (buttons or `/alarm <symbol> <an\|aus>`) |
 | `/termin` | List upcoming dates, or add one: `/termin <symbol> <DD/MM/YYYY> <text>` |
+| **Portfolio** | |
 | `/buy <symbol> <crypto\|stock> <amount €> <qty> <DD/MM/YYYY>` | Record a buy |
-| `/sell <symbol> <crypto\|stock> <amount €> <qty>` | Record a sell |
+| `/sell <symbol> <crypto\|stock> <amount €> <qty>` | Record a sell (today) |
 | `/sellall <symbol> [amount €]` | Record the sale of the full position (current price if no amount, confirmation required) |
 | `/history <symbol>` | Transactions of one asset |
 | `/transactions` | All transactions |
+| **System** | |
 | `/status` | Bot status and number of transactions |
-| `/restart` | Restart the main program |
+| `/restart` | Restart the main program (reloads all files) |
 | `/help` | Overview of all commands |
 
-## Understanding the Alerts
+Only messages from the chat id in `config.ini` are accepted.
 
-**Alert Components:**
-- **Trigger**: Condition that generated the alert (e.g., Cross-EMA, Positiv-5, 100-Minimum)
-- **Score**: Combined indicator rating (scale -18 to +18, higher = stronger buy signal)
-- **RSI14**: Quantile percentage with signal strength
-- **Trend-Analysis (SMA7 & VMA7)** and **Short-term-Analysis (ROC5 & VROC5)**: trend and momentum with volume support and fake-out warnings
-- **Amount >1 year**: Holdings older than one year (tax-relevant in some countries)
+## Daily Schedule
 
-**Signal Strength:**
-- `+++` / `---`: Very strong signal (top/bottom 10% quantile)
-- `++` / `--`: Strong signal (10-20% quantile)
-- `+` / `-`: Moderate signal (20-30% quantile)
-- `●`: Neutral (30-70% quantile)
+| Time | What happens |
+|---|---|
+| every hour | 100-hour analysis of all crypto assets with `1` |
+| 08:00 | Reminder for today's dates from `events.ini` plus daily analysis of the asset |
+| 09:30 and 12:30 | 100-day analysis of all assets with `1` (stocks Monday to Friday, 08:00–22:00) |
+| 18:30 | Daily ranking (crypto and stocks) |
 
-**Fake-Out Detection**: Warns when price movement lacks volume support
+If the program is started after 12:30, the daily analysis runs immediately; missed date reminders are sent at the start. With `test_mode = 1` there is no schedule – all analyses run once at the start (date reminders still work).
 
-**Chart:**
-- Grey band: Bollinger Bands, dotted lines: Fast/Slow EMA, triangles: EMA crossovers
-- R1 / S1: nearest resistance and support zone (stronger colour = at least 2 touches)
+## Understanding Alerts and Charts
+
+**Alarm triggers**
+
+| Trigger | Signal | Meaning |
+|---|---|---|
+| Cross-EMA | Buy / Sell | Fast EMA (12) crosses the slow EMA (26) upwards / downwards (daily only) |
+| Positiv-5 / Negative-5 | Buy / Sell | 5-period rate of change above / below `seven_day_price_change` |
+| 100-Minimum / 100-Maximum | Buy / Sell | Fast EMA has formed a new 100-day low / high (daily only) |
+
+Alarms are only sent for assets you own. Messages with a score above +5 (buy) or below -5 (sell) are marked as important.
+
+**Message content**
+- **Score**: combined rating from -18 to +18 (higher = stronger buy signal)
+- **RSI14**, **Trend-Analysis (SMA7 & VMA7)**, **Short-term-Analysis (ROC5 & VROC5)**: position of the current value within the last 100 values (quantile) with signal strength and an interpretation
+- **Amount >1 year**: holdings older than one year
+
+| Symbol | Signal strength |
+|---|---|
+| `+++` / `---` | very strong (top/bottom 10 %) |
+| `++` / `--` | strong (10–20 %) |
+| `+` / `-` | moderate (20–30 %) |
+| `●` | neutral (30–70 %) |
+
+*Fake-out*: the price moves, but volume does not support the move.
+
+**Chart**
+- Black line: price; dotted lines: fast/slow EMA; grey band: Bollinger Bands
+- Triangles: EMA crossovers; dots: 100-day high/low of the fast EMA
+- **R1 / S1**: nearest resistance above and support below the price (stronger colour = at least 2 touches); details in the legend at the top right
 - Grey bars on the right: volume profile of the visible range (darker bar = price level with most volume)
-- Background green/red: current price above/below your average buy price
-
-![Project Overview](example_msg.png)
+- Left axis: deviation in % from your average buy price (or from the average price if you don't own the asset)
+- Background green/red: price above/below your average buy price
 
 ## Configuration
+
+All files are plain text and can be edited with any editor. After changes, send `/restart`.
 
 ### config.ini
 
@@ -132,14 +169,16 @@ token = YOUR_TELEGRAM_BOT_TOKEN
 chat_id = YOUR_CHAT_ID
 
 [alarm]
-one_day_price_change = 10       # One-day price change threshold (%) - currently inactive
-seven_day_price_change = 7      # ROC5 threshold for Positiv-5 / Negative-5 alarms (%)
-previous_alarm_change = 3       # Minimum change between consecutive alarms
-one_day_profit_limit = -2       # One-day profitability threshold (%) - currently inactive
+seven_day_price_change = 7      # threshold for Positiv-5 / Negative-5 alarms (%)
+previous_alarm_change = 3       # minimum change before the same alarm is sent again
+one_day_price_change = 10       # currently not used
+one_day_profit_limit = -2       # currently not used
 test_mode = 0                   # 0 = scheduled analyses, 1 = run all analyses once at start
 ```
 
 ### assets.ini
+
+All assets known to the program. Crypto symbols are CoinGecko IDs, stock symbols are Yahoo Finance symbols.
 
 ```ini
 # Format: symbol = Name; crypto|stock; 1
@@ -148,17 +187,17 @@ test_mode = 0                   # 0 = scheduled analyses, 1 = run all analyses o
 # # at the start hides the entry completely
 
 [crypto]
-bitcoin        = Bitcoin; crypto; 1      # CoinGecko ID
+bitcoin        = Bitcoin; crypto; 1
 cardano        = Cardano; crypto
 
 [stocks]
-QCOM           = Qualcomm; stock; 1      # Yahoo Finance symbol
+QCOM           = Qualcomm; stock; 1
 APC.DE         = Apple; stock
 ```
 
 The `1` can also be switched in Telegram with `/alarm`.
 
-### events.ini
+### events.ini (optional)
 
 ```ini
 # Format: name = symbol; DD/MM/YYYY; description
@@ -166,9 +205,11 @@ The `1` can also be switched in Telegram with `/alarm`.
 nvda_20261117  = NVDA; 17/11/2026; Q3 earnings after US market close
 ```
 
+Entries can also be added with `/termin`. Past dates are ignored.
+
 ### transactions.csv
 
-Written by the bot, one line per buy/sell:
+Written by `/buy`, `/sell` and `/sellall`:
 
 ```
 type;symbol;name;action;amount;qty;date
@@ -176,10 +217,37 @@ crypto;bitcoin;Bitcoin;buy;500.0;0.01;01/01/2024
 stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
 ```
 
-## Dependencies
+### ki_frage.txt
 
-- **Python Libraries**: see `requirements.txt` (`pandas`, `numpy`, `scipy`, `matplotlib`, `yfinance`, `requests`, `schedule`, `python-telegram-bot`, ...)
-- **External Services**: Telegram (free bot), CoinGecko, Yahoo Finance
+Template for the `/ai` prompt. It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{kurs}`, `{support}`, `{boden}` or `{markt}` are filled in by the program.
+
+`config.ini`, `assets.ini`, `events.ini` and `transactions.csv` contain personal data and are excluded from Git via `.gitignore`.
+
+## Project Structure
+
+| File | Purpose |
+|---|---|
+| `main.py` | Main program: loads the files, schedules analyses, handles commands from the bot |
+| `classes.py` | `CryptoStock` class (data, transactions, analysis per asset), reading and writing `assets.ini`, `events.ini`, `transactions.csv` |
+| `func.py` | Data retrieval, indicators, support/resistance, bottom/top formation, market phase, alarms, charts, summary image |
+| `telegram_bot.py` | Telegram bot, runs as a separate process: sends messages, forwards commands to `main.py` |
+| `install_venv.bat` | Installation on Windows |
+| `requirements.txt` | Python packages |
+
+## Known Limitations
+
+- The free CoinGecko API has rate limits and no daily candles (open/high/low); crypto analysis uses closing prices only.
+- The hourly analysis is only scheduled for crypto. Hourly data for stocks in foreign currencies currently fails during EUR conversion.
+- The program remembers sent alarms and date reminders only while it is running; after a full restart, an alarm or reminder of the same day can be sent again.
+- While an analysis is running, Telegram commands are processed afterwards.
+
+## Ideas for the Future
+
+- Second resistance/support zone (R2/S2) and alarms when a zone is broken
+- Bottom/top formation also in the alarm messages
+- Delete dates directly in Telegram
+- Reminder one day before an event
+- Fix the EUR conversion for hourly stock data
 
 ## License
 
@@ -191,8 +259,8 @@ This application generates alerts based on technical indicators and market data 
 
 ## Links
 
-- [Telegram BotFather](https://t.me/BotFather) — Create a Telegram bot
-- [CoinGecko](https://www.coingecko.com) — Cryptocurrency market data
-- [Yahoo Finance](https://finance.yahoo.com) — Stock market data
-- [Rock Pi](https://rockpi.org/) — Single-board computer for hosting
-- [Armbian OS](https://www.armbian.com/) — Lightweight ARM-based OS
+- [Telegram BotFather](https://t.me/BotFather) — create a Telegram bot
+- [CoinGecko](https://www.coingecko.com) — cryptocurrency market data
+- [Yahoo Finance](https://finance.yahoo.com) — stock market data
+- [Rock Pi](https://rockpi.org/) — single-board computer for hosting
+- [Armbian OS](https://www.armbian.com/) — lightweight ARM-based OS
