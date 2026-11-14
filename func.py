@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from urllib.parse import quote  # only if you need to encode URL parts
 import urllib.request, json
 import random
+import math
+import html
 
 # --- External Packages ---
 import requests #instal
@@ -21,19 +23,20 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import matplotlib.patches as mpatches
+import matplotlib.transforms as mtransforms
+import multiprocessing as mp
 
-token_pushover  = ""
-user_pushover = ""
-one_day_price_change = ""
-seven_day_price_change = ""
-one_day_profit_limit = ""
+_message_queue = None
+one_day_price_change = 0.0
+seven_day_price_change = 0.0
+one_day_profit_limit = 0.0
 output_dir = 'plots'
-previous_alarm_change = ""
+previous_alarm_change = 0.0
 
 def get_stock(symbol, period):
     df = pd.DataFrame()
     
-    if period == '1mo':
+    if period == '6mo':
         interval = '1h'
     else:
         interval = '1d'
@@ -48,7 +51,7 @@ def get_stock(symbol, period):
             
             # Fetch data from Yahoo Finance
             stock = yf.Ticker(symbol)
-            df = stock.history(period=period, interval=interval)
+            df = stock.history(period=period, interval=interval, timeout=20)
             
             if not df.empty:
                 break
@@ -56,7 +59,8 @@ def get_stock(symbol, period):
                 wait_time = wait_times[i] if i < len(wait_times) else 900
                 msg = f"Empty response for {symbol}, waiting {wait_time}s before retry {i+1}"
                 pushover(msg)
-                time.sleep(wait_time)
+                if i < 4:
+                    time.sleep(wait_time)
                 
         except Exception as e:
             error_msg = str(e).lower()
@@ -87,8 +91,8 @@ def get_stock(symbol, period):
     if 'Date' not in df.columns:
         df['Date'] = df.index
     
-    df = df.tail(100)
-    df['Price'] = df['Close']
+    df = df.copy()  # gesamte Historie behalten, gekürzt wird in cut_to_window()
+    df['Price'] = stock_prices_in_eur(stock, df, period)
     
     df_inverted = df.reset_index(drop=True)
     df_inverted.rename(columns={'index': 'Date'}, inplace=True)
@@ -97,6 +101,35 @@ def get_stock(symbol, period):
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
     
     return df_dropped
+
+
+def stock_prices_in_eur(stock, df, period):
+    """Yahoo liefert oft USD/GBP. Unsere Käufe und Diagramme rechnen in EUR."""
+    currency = stock.get_history_metadata().get('currency')
+    if not currency:
+        raise ValueError("Die Kurswährung konnte nicht bestimmt werden.")
+    prices = df['Close'].astype(float)
+    if currency == 'EUR':
+        return prices
+    # London notiert teilweise in Pence statt Pfund.
+    if currency in ('GBp', 'GBX'):
+        currency = 'GBP'
+        prices = prices / 100
+    if len(currency) != 3 or not currency.isalpha():
+        raise ValueError(f"Nicht unterstützte Kurswährung: {currency}")
+    fx = yf.Ticker(f"{currency.upper()}EUR=X").history(period=period, interval='1d', timeout=20)
+    if fx.empty:
+        raise ValueError(f"Kein Wechselkurs für {currency}/EUR verfügbar.")
+    # Je Kurstag den zuletzt verfügbaren täglichen Wechselkurs verwenden.
+    dates = pd.to_datetime(df.index, utc=True).normalize()
+    fx_dates = pd.to_datetime(fx.index, utc=True).normalize()
+    rates = pd.DataFrame({'Date': fx_dates, 'Rate': fx['Close'].to_numpy()})
+    rates = rates.dropna().sort_values('Date').drop_duplicates('Date', keep='last')
+    joined = pd.merge_asof(pd.DataFrame({'Date': dates}).sort_values('Date'), rates,
+                           on='Date', direction='backward', tolerance=pd.Timedelta(days=7))
+    if joined['Rate'].isna().any() or (joined['Rate'] <= 0).any():
+        raise ValueError(f"Unvollständige Wechselkurse für {currency}/EUR.")
+    return prices * joined['Rate'].to_numpy()
 
 
 def get_crypto(symbol, params_historical):
@@ -134,24 +167,24 @@ def get_crypto(symbol, params_historical):
         log_print(f"Failed to fetch {symbol} after 5 attempts")
         return None
     
-    # Process data
-    prices = data['prices']
-    volumes = data.get('total_volumes', [[p[0], 0] for p in prices])
-    
-    last_100_days_data = {
-        pd.Timestamp(price[0], unit='ms').strftime('%Y-%m-%d %H:%M:%S'): 
-        {'Price': price[1], 'Volume': volume[1]}
-        for price, volume in zip(prices, volumes)
-    }
-    
-    df = pd.DataFrame(last_100_days_data).T.reset_index()
-    df.columns = ['Date', 'Price', 'Volume']
-    df = df.tail(100).reset_index(drop=True)
-    df['Date'] = pd.to_datetime(df['Date'])
-    
-    return df
+    # Preise und Volumen anhand des Zeitstempels zuordnen (nicht blind zippen).
+    prices = pd.DataFrame(data['prices'], columns=['Timestamp', 'Price'])
+    volumes = pd.DataFrame(data.get('total_volumes', []), columns=['Timestamp', 'Volume'])
+    df = prices.merge(volumes, on='Timestamp', how='left')
+    df['Date'] = pd.to_datetime(df.pop('Timestamp'), unit='ms', utc=True).dt.tz_localize(None)
+    df['Volume'] = df['Volume'].fillna(0)
+    df = df.sort_values('Date').drop_duplicates('Date', keep='last')  # gekürzt wird in cut_to_window()
+    return df[['Date', 'Price', 'Volume']].reset_index(drop=True)
+
 
 def calc_indicator_fuctions(df):
+    if df is None or df.empty or len(df) < 26:
+        raise ValueError("Mindestens 26 Kurswerte werden benötigt.")
+    for column in ('Price', 'Volume'):
+        if column not in df or not np.isfinite(df[column].astype(float)).all():
+            raise ValueError(f"Fehlende oder ungültige Werte in {column}.")
+    if (df['Price'] <= 0).any() or (df['Volume'] < 0).any():
+        raise ValueError("Kurse müssen positiv und Volumina mindestens null sein.")
    
     # Calculate Fast EMA and Slow EMA
     df['Fast EMA'] = df['Price'].ewm(span=12, adjust=False).mean()
@@ -161,11 +194,7 @@ def calc_indicator_fuctions(df):
     df['Position'] = df['Signal'].diff()
     df['Diff EMA'] = df['Fast EMA'] - df['Slow EMA']
 
-    # Calculate min and max
-    df['High'] = df['Fast EMA'].max()
-    df['Low'] = df['Fast EMA'].min()
-    df['HighP'] = np.where(df['Fast EMA'] == df['High'], 1, 0)
-    df['LowP'] = np.where(df['Fast EMA'] == df['Low'], 1, 0)
+    # Min und Max werden erst in cut_to_window() auf den 100 Werten berechnet.
 
     # Calculate the slope of Fast EMA
     df['Fast EMA Slope'] = df['Fast EMA'].diff()
@@ -194,50 +223,203 @@ def calc_indicator_fuctions(df):
     # Calculate bollinger bands
     df['BB_Mid'], df['BB_Upper'], df['BB_Lower'] = bollinger_bands(df, 'Price', window=20)
 
-    save_csv(df,"test.csv",date_cols=['Date']) #For debugging
     return df
 
+def cut_to_window(df, window=100):
+    # Indikatoren wurden auf der langen Historie berechnet (kein Anlauf mehr am linken Rand).
+    # Ausgewertet und gezeichnet werden nur die letzten 100 Werte.
+    df = df.tail(window).reset_index(drop=True).copy()
+
+    # Calculate min and max (nach dem Kürzen: bleibt das 100-Tage/-Stunden Minimum/Maximum)
+    df['High'] = df['Fast EMA'].max()
+    df['Low'] = df['Fast EMA'].min()
+    df['HighP'] = np.where(df['Fast EMA'] == df['High'], 1, 0)
+    df['LowP'] = np.where(df['Fast EMA'] == df['Low'], 1, 0)
+
+    return df
+
+def support_resistance(df, order=5):
+    """Nächste Resistance über und nächster Support unter dem aktuellen Kurs.
+    Nur Schlusskurs + Volumen -> gleiches Verfahren für Krypto/Aktie und Tage/Stunden.
+    df ist die lange Historie (250 Tage / 450 Stunden), nicht das 100er-Fenster."""
+    p = df['Price'].to_numpy(float)
+    if len(p) < 2 * order + 2:
+        return None, None
+
+    # Umkehrpunkte: höchster/tiefster Wert innerhalb von ±order Werten
+    pivots = []
+    for i in range(order, len(p) - order):
+        window = p[i - order:i + order + 1]
+        if p[i] == window.max() or p[i] == window.min():
+            pivots.append(p[i])
+
+    # Zonenbreite aus typischer Bewegung pro Wert (Stunden schmaler als Tage)
+    width = max(2 * float(np.median(np.abs(np.diff(p) / p[:-1]))), 0.004)
+
+    # Nahe Umkehrpunkte zu Zonen zusammenfassen; eine Zone wächst höchstens auf 2 Breiten
+    zones = []
+    for pivot in sorted(pivots):
+        if zones and pivot <= zones[-1]['low'] * (1 + 2 * width):
+            zones[-1]['high'] = pivot
+            zones[-1]['touches'] += 1
+        else:
+            zones.append({'low': pivot, 'high': pivot, 'touches': 1})
+    for zone in zones:
+        zone['low'], zone['high'] = zone['low'] * (1 - width / 2), zone['high'] * (1 + width / 2)
+        zone['center'] = (zone['low'] + zone['high']) / 2
+
+    # Nächste Zone über/unter dem Kurs; die Stärke (Berührungen) steht später in der Legende
+    price = p[-1]
+    above = [zone for zone in zones if zone['low'] > price]
+    below = [zone for zone in zones if zone['high'] < price]
+    resistance = min(above, key=lambda zone: zone['low']) if above else None
+    support = max(below, key=lambda zone: zone['high']) if below else None
+
+    # Notlösung: Hoch/Tief des geladenen Zeitraums (touches = 0)
+    if resistance is None and p.max() > price:
+        resistance = {'low': p.max(), 'high': p.max(), 'center': p.max(), 'touches': 0}
+    if support is None and p.min() < price:
+        support = {'low': p.min(), 'high': p.min(), 'center': p.min(), 'touches': 0}
+
+    return resistance, support
+
+def formation_signals(df, order=5, recent=30):
+    """Anzeichen für Boden- und Topbildung (für die KI-Frage bei /ai).
+    df ist die lange Historie mit Indikatoren. Nur Schlusskurs, RSI und Volumen."""
+    p = df['Price'].to_numpy(float)
+    rsi = df['RSI14'].to_numpy(float)
+    v = df['Volume'].to_numpy(float)
+    ema = df['Fast EMA'].to_numpy(float)
+    n = len(p)
+    # Umkehrpunkte; die letzten brauchen nur 2 Werte danach, damit frische Tiefs/Hochs zählen
+    lows = [i for i in range(order, n - 2) if p[i] == p[i - order:i + order + 1].min()]
+    highs = [i for i in range(order, n - 2) if p[i] == p[i - order:i + order + 1].max()]
+    tolerance = max(2 * float(np.median(np.abs(np.diff(p) / p[:-1]))), 0.01)   # "gleiche Höhe"
+    volume_median = float(np.median(v[-100:])) or 1.0
+
+    def check(points, bottom):
+        result = {}
+        last_two = points[-2:] if len(points) >= 2 and points[-1] >= n - recent else []
+        if last_two:
+            a, b = last_two
+            between = p[a:b + 1]
+            result['folge'] = p[b] > p[a] if bottom else p[b] < p[a]            # höhere Tiefs / tiefere Hochs
+            result['divergenz'] = bool(p[b] < p[a] and rsi[b] > rsi[a]) if bottom else bool(p[b] > p[a] and rsi[b] < rsi[a])
+            same_level = abs(p[b] / p[a] - 1) <= tolerance
+            gap = between.max() > max(p[a], p[b]) * (1 + 2 * tolerance) if bottom else between.min() < min(p[a], p[b]) * (1 - 2 * tolerance)
+            result['doppel'] = bool(same_level and gap)                         # Doppelboden / Doppeltop
+        else:
+            result['folge'] = result['divergenz'] = result['doppel'] = None     # kein aktuelles Tief/Hoch
+        # Volumen-Höhepunkt am Extrem der letzten 20 Werte (Kapitulation / Kaufrausch)
+        k = n - 20 + int(np.argmax(v[-20:]))
+        extreme = n - 20 + int(np.argmin(p[-20:]) if bottom else np.argmax(p[-20:]))
+        direction = p[k] < p[k - 1] if bottom else p[k] > p[k - 1]
+        result['volumen'] = bool(direction and v[k] >= 1.5 * volume_median and abs(k - extreme) <= 3)
+        # Bestätigung: Kurs zurück über (Boden) bzw. unter (Top) dem EMA12
+        result['bestaetigung'] = bool(p[-1] > ema[-1]) if bottom else bool(p[-1] < ema[-1])
+        return result
+
+    return check(lows, True), check(highs, False)
+
+def trend_phase(prices):
+    """Marktphase aus Tageskursen nach der klassischen Trendregel:
+    Kurs und SMA50 über SMA200 = bullisch, beide darunter = bärisch, sonst Übergang."""
+    p = pd.Series(prices, dtype=float).dropna().reset_index(drop=True)
+    if len(p) < 200:
+        return 'nicht belegbar (weniger als 200 Tageswerte)'
+    sma50, sma200 = p.rolling(50).mean(), p.rolling(200).mean()
+    price, s50, s200 = p.iloc[-1], sma50.iloc[-1], sma200.iloc[-1]
+    if price > s200 and s50 > s200:
+        phase = 'bullisch'
+    elif price < s200 and s50 < s200:
+        phase = 'bärisch'
+    else:
+        phase = 'neutral (Übergang)'
+    before = sma200.iloc[-21]   # Richtung des SMA200 über 20 Tage
+    slope = 'unklar' if pd.isna(before) else 'steigend' if s200 > before else 'fallend'
+
+    # Letzte Kreuzung SMA50/SMA200: Golden Cross (nach oben) / Death Cross (nach unten)
+    above = (sma50 > sma200)[sma200.notna()]
+    changes = above.index[1:][above.iloc[1:].to_numpy() != above.iloc[:-1].to_numpy()]
+    if len(changes):
+        last = changes[-1]
+        cross = f"{'Golden Cross' if above[last] else 'Death Cross'} vor {len(p) - 1 - last} Tagen"
+    else:
+        cross = f"keine SMA50/SMA200-Kreuzung in den letzten {len(above)} Tagen"
+    distance = f"{(price / s200 - 1) * 100:+.1f} %".replace('.', ',')
+    return (f"{phase} (Kurs {distance} zum SMA200, SMA50 {'über' if s50 > s200 else 'unter'} SMA200, "
+            f"SMA200 {slope}; {cross})")
+
+def market_prices(asset_type, symbol):
+    """Leitmarkt für die Marktphase: Bitcoin für Krypto, Börsenindex je Handelsplatz für Aktien."""
+    if asset_type == 'crypto':
+        df = get_crypto('bitcoin', {'vs_currency': 'eur', 'days': '260'})
+        return 'Bitcoin (Leitwert Krypto)', None if df is None else df['Price']
+    suffix = symbol.upper().rsplit('.', 1)[-1] if '.' in symbol else ''
+    ticker, name = {'DE': ('^GDAXI', 'DAX'), 'F': ('^GDAXI', 'DAX'),
+                    'MI': ('FTSEMIB.MI', 'FTSE MIB')}.get(suffix, ('^GSPC', 'S&P 500'))
+    hist = yf.Ticker(ticker).history(period='2y', interval='1d', timeout=20)   # Index in eigener Währung
+    return name, None if hist.empty else hist['Close'].tail(250)
+
 def calc_state_fuctions(state,df):
-        # update balances and indicators into grouped state
+    # update balances and indicators into grouped state
 
-    state.current_balance_eur = state.amount_crypto_stock * df.iloc[-1]['Price']
-    state.yesterday_balance_eur = state.amount_crypto_stock * df.iloc[-2]['Price']
+    # Guard: need at least 3 rows for -1, -2, -3 indexing
+    if df is None or df.empty or len(df) < 3:
+        log_print("calc_state_fuctions: DataFrame too short, skipping calculations")
+        return state
 
-    state.current_profit = state.current_balance_eur - state.buy_balance_eur
-    state.yesterday_profit = state.yesterday_balance_eur - state.buy_balance_eur
+    # Safe reads of prices/emas
+    try:
+        last_price = float(df['Price'].iloc[-1])
+        prev_price = float(df['Price'].iloc[-2])
+        prev2_price = float(df['Price'].iloc[-3])
+    except Exception as e:
+        log_print(f"calc_state_fuctions: Price read error: {e}")
+        return state
+
+    amount = float(getattr(state, 'amount_crypto_stock', 0) or 0)
+    buy_balance = float(getattr(state, 'buy_balance_eur', 0) or 0)
+
+    state.current_balance_eur = amount * last_price
+    state.yesterday_balance_eur = amount * prev_price
+
+    state.current_profit = state.current_balance_eur - buy_balance
+    state.yesterday_profit = state.yesterday_balance_eur - buy_balance
 
     # protect division by zero for profit pct
-    if state.buy_balance_eur:
-        state.current_profit_pct = (state.current_balance_eur - state.buy_balance_eur)/state.buy_balance_eur*100
-        state.yesterday_profit_pct = (state.yesterday_balance_eur - state.buy_balance_eur)/state.buy_balance_eur*100
+    if buy_balance:
+        state.current_profit_pct = state.current_profit / buy_balance * 100
+        state.yesterday_profit_pct = state.yesterday_profit / buy_balance * 100
     else:
-        state.current_profit_pct = 0
-        state.yesterday_profit_pct = 0
+        state.current_profit_pct = 0.0
+        state.yesterday_profit_pct = 0.0
 
-    # price change pct
-    state.current_one_day_price_change_pct = (df['Price'].iloc[-1] - df['Price'].iloc[-2]) / df['Price'].iloc[-2] * 100
-    state.yesterday_one_day_price_change_pct = (df['Price'].iloc[-2] - df['Price'].iloc[-3]) / df['Price'].iloc[-3] * 100
-    
-    state.current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
-    state.yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
+    # price change pct (guard divide by zero)
+    state.current_one_day_price_change_pct = (last_price - prev_price) / prev_price * 100 if prev_price else 0.0
+    state.yesterday_one_day_price_change_pct = (prev_price - prev2_price) / prev2_price * 100 if prev2_price else 0.0
 
-    state.current_seven_days_slope_pct = seven_day_slope_pct(df,True)
-    state.yesterday_seven_days_slope_pct = seven_day_slope_pct(df,False)
+    # EMA diff pct (guard denom)
+    def safe_pct(numer, denom):
+        return (numer / denom * 100) if denom else 0.0
+
+    state.current_EMA_diff_pct = safe_pct(df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1], df['Slow EMA'].iloc[-1])
+    state.yesterday_EMA_diff_pct = safe_pct(df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2], df['Slow EMA'].iloc[-2])
+
+    state.current_seven_days_slope_pct = seven_day_slope_pct(df, True)
+    state.yesterday_seven_days_slope_pct = seven_day_slope_pct(df, False)
 
     state.amount_older_than_one_year = older_than_one_year(state.df_buy_history)
 
-    if state.amount_crypto_stock:
-        state.amount_older_than_one_year_pct = state.amount_older_than_one_year / state.amount_crypto_stock * 100
+    if amount:
+        state.amount_older_than_one_year_pct = state.amount_older_than_one_year / amount * 100
     else:
-        state.amount_older_than_one_year_pct = 0
+        state.amount_older_than_one_year_pct = 0.0
 
-    if state.buy_balance_eur  == 1 and state.amount_crypto_stock == 1: 
-        state.watch_list = True
-        state.zero_line = None
-    else:
-        state.watch_list = False
-        state.zero_line = state.buy_balance_eur/state.amount_crypto_stock
-    
+    # Eine Watchlist braucht keinen künstlichen Kauf von 1 EUR / 1 Stück.
+    state.watch_list = amount <= 0
+    state.zero_line = buy_balance / amount if not state.watch_list else None
+
     return state
         
 
@@ -310,7 +492,7 @@ def save_csv(df, path=None, index=False, date_cols=()):
         lineterminator="\n"
     )
 
-def load_csv(path, index=False, date_cols=()):
+def load_csv(path, index=False):
     df = pd.read_csv(
         path,
         sep=";",
@@ -319,9 +501,19 @@ def load_csv(path, index=False, date_cols=()):
         encoding="utf-8-sig",
         lineterminator="\n"
     )
-    for c in date_cols:
-        if c in df:
-            df[c] = pd.to_datetime(df[c], format="%d.%m.%Y", errors="coerce")
+
+    # erst Date erzeugen
+    df["Price"] = df["Close"]
+    df["Date"] = pd.to_datetime(df["Close time"], format="%Y-%m-%d %H:%M:%S", errors="coerce")
+
+    # dann droppen und zurückgeben
+    columns_to_drop = [
+        "Open time", "Open", "High", "Low", "Close", "Close time",
+        "Quote asset volume", "Number of trades",
+        "Taker buy base asset volume", "Taker buy quote asset volume", "Ignore"
+    ]
+    df = df.drop(columns=[c for c in columns_to_drop if c in df.columns])
+
     return df
 
 def calculate_ma(df, column, window=20):
@@ -342,7 +534,8 @@ def calculate_rsi(df, window=14):
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
 
-    # Return RSI
+    # Ein unveränderter Kurs hat neutralen RSI statt 0/0 (= NaN).
+    rsi = rsi.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
     return rsi
 
 
@@ -356,26 +549,6 @@ def calculate_vwma(df, window=20):
     pv = df['Price'] * df['Volume']
     return pv.rolling(window=window).sum() / df['Volume'].rolling(window=window).sum()
 
-def human_format(x, pos):
-    if x >= 1_000_000_000:
-        return f"{x*1.0/1_000_000_000:.0f}B"
-    elif x >= 1_000_000:
-        return f"{x*1.0/1_000_000:.0f}M"
-    elif x >= 1_000:
-        return f"{x*1.0/1_000:.0f}k"
-    else:
-        return f"{int(x)}"
-    
-def human_format_euro(x, pos):
-    if x >= 1_000_000_000:
-        return f"{x/1_000_000_000:.0f}B €"
-    elif x >= 1_000_000:
-        return f"{x/1_000_000:.0f}M €"
-    elif x >= 1_000:
-        return f"{x/1_000:.0f}k €"
-    else:
-        return f"{int(x)} €"
-
 def human_format(num, pos):
     magnitude = 0
     while abs(num) >= 1000:
@@ -386,12 +559,18 @@ def human_format(num, pos):
 def human_format_euro(num, pos):
     return human_format(num, pos) + '€'
 
-def plot_and_save(df, symbol, data_type, zero_line=None):
+def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
+    if df is None or df.empty:
+        raise ValueError("Kein Diagramm ohne Kursdaten möglich.")
     if df is not None and not df.empty:
     #----------Create
         fig, (ax1, ax3) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
         ax2 = ax1.twinx()
         #fig.patch.set_alpha(0)
+        # Fortlaufende Nummer statt Kalenderdatum: Wochenenden und Nächte ohne Handel
+        # erzeugen so keine Lücken, jeder Balken ist gleich breit.
+        x = pd.Series(np.arange(len(df)), index=df.index)
+        dates = pd.to_datetime(df['Date']).reset_index(drop=True)
 
     #-----------Background
         df_min, df_max = df['Price'].min(), df['Price'].max()
@@ -407,37 +586,99 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
 
     #---------Axis set-up
         from matplotlib.ticker import MaxNLocator
+        # Markierung beim ersten Wert jedes neuen Tages (100h) bzw. Monats (100d).
+        period = dates.dt.strftime('%Y-%m-%d' if data_type=='100h' else '%Y-%m')
+        ticks = [i for i in range(1, len(dates)) if period.iloc[i] != period.iloc[i-1]]
+        # Bei vielen Markierungen (z.B. Aktien-Stundenwerte) nur jede zweite beschriften,
+        # sonst überlagern sich die Datumsangaben. Die senkrechten Linien bleiben alle.
+        labeled = set(ticks[::2]) if len(ticks) > 8 else set(ticks)
         for ax in [ax1, ax2, ax3]:
             #ax1.set_title('100 Hours' if data_type=='100h' else '100 Days', fontsize=14)
-            ax.xaxis.set_major_locator(mdates.DayLocator() if data_type=='100h' else mdates.MonthLocator())
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
+            ax.xaxis.set_major_locator(mticker.FixedLocator(ticks))
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(
+                lambda value, pos: dates.iloc[int(round(value))].strftime('%d.%m') if int(round(value)) in labeled else ''))
             ax.grid(True, axis='x', color='black', alpha=0.4)
             ax.spines['top'].set_visible(False)
             ax.spines['bottom'].set_visible(False)
             ax.spines['left'].set_visible(False)
             ax.spines['right'].set_visible(False)
             #ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+        ax3.grid(False)  # Volumenbalken ohne senkrechte Linien besser sichtbar
 
         ax2.yaxis.set_major_locator(MaxNLocator(nbins=4))
-        ax1.yaxis.set_major_locator(MaxNLocator(nbins=4))
-        ax1.yaxis.set_major_locator(MaxNLocator(nbins=3))
         ax2.yaxis.set_major_formatter(mticker.PercentFormatter())
-        ax1.yaxis.set_major_formatter(mticker.FuncFormatter(human_format_euro))
+        # Prozent-Achse links anzeigen, Kurswerte-Achse ausblenden.
+        ax2.yaxis.tick_left()
+        ax1.tick_params(axis='y', left=False, labelleft=False)
         ax3.yaxis.set_major_formatter(mticker.FuncFormatter(human_format))
         
     #--------------Drawing
         ax1.fill_between(
-            df['Date'], 
+            x,
             df['BB_Lower'], 
             df['BB_Upper'], 
             color='grey', 
             alpha=0.2, 
             label='Bollinger-Bereich'
         )
-        ax1.set_ylim(df['BB_Lower'].min(), df['BB_Upper'].max())
+        # Kurs mit einbeziehen, sonst wird ein Ausbruch aus dem Band abgeschnitten.
+        lower = min(df['BB_Lower'].min(), df['Price'].min())
+        upper = max(df['BB_Upper'].max(), df['Price'].max())
+        if lower == upper:
+            padding = max(abs(lower) * 0.01, 0.01)
+            lower, upper = lower - padding, upper + padding
+        ax1.set_ylim(lower, upper)
+
+        # Rechts 20% der Breite frei lassen, damit das Volume-Profile den Kurs nicht überlagert.
+        vp_share = 0.2
+        ax1.set_xlim(-1, -1 + (len(df) + 1) / (1 - vp_share - 0.02))
+
+        # Volume-Profile (wie TradingView "sichtbare Range"): Volumen je Preisstufe,
+        # rechts im Hintergrund. Breite in Anteil der Diagrammbreite, Höhe in Euro.
+        if 'Volume' in df.columns:
+            profile, edges = np.histogram(df['Price'], bins=24, range=(lower, upper), weights=df['Volume'])
+            if profile.max() > 0:
+                trans = mtransforms.blended_transform_factory(ax1.transAxes, ax1.transData)
+                widths = profile / profile.max() * vp_share      # längster Balken füllt den freien Bereich
+                vp_colors = ['0.45' if i == profile.argmax() else '0.6' for i in range(len(profile))]  # POC etwas dunkler
+                ax1.barh(edges[:-1], widths, height=np.diff(edges) * 0.9, left=1 - widths, align='edge',  # am rechten Rand ausgerichtet
+                         color=vp_colors, alpha=0.3, linewidth=0, transform=trans, zorder=0)
+                # Schwarzer Strich am Ende jedes Balkens: Länge bleibt auch unter Beschriftungen erkennbar.
+                filled = profile > 0
+                ax1.vlines((1 - widths)[filled], edges[:-1][filled], (edges[:-1] + np.diff(edges) * 0.9)[filled],
+                           colors='black', linewidth=0.8, transform=trans, zorder=6)
+
+        # Support/Resistance: Band mit Nummer (R1/S1), ausführlicher Text in der Legende oben rechts.
+        if sr_zones is not None:
+            handles = []
+            for zone, name in zip(sr_zones, ('R1', 'S1')):
+                if zone is None:
+                    continue
+                color = '#c0392b' if name == 'R1' else '#1e8449'
+                alpha = 0.22 if zone['touches'] >= 2 else 0.12   # schwache Zone (1 Berührung) heller
+                pct = (zone['center'] / df['Price'].iloc[-1] - 1) * 100
+                text = f"{name} {human_format_euro(zone['center'], None)} ({pct:+.1f} %)"
+                if zone['touches']:
+                    text += f" · {zone['touches']}×"
+                else:
+                    text += " · Hoch Zeitraum" if name == 'R1' else " · Tief Zeitraum"
+                if zone['high'] >= lower and zone['low'] <= upper:
+                    ax1.axhspan(zone['low'], zone['high'], xmax=1 - vp_share - 0.02, color=color, alpha=alpha, linewidth=0, zorder=0.5)
+                    ax1.text(1 - vp_share - 0.015, zone['center'], name, transform=ax1.get_yaxis_transform(), fontsize=7,
+                             color=color, fontweight='bold', va='center', ha='left', zorder=5)
+                else:
+                    # Zone außerhalb des Bildes: Nummer mit Pfeil am oberen/unteren Rand
+                    y, arrow = (0.97, '▲') if zone['center'] > upper else (0.03, '▼')
+                    ax1.text(1 - vp_share - 0.015, y, f"{arrow} {name}", transform=ax1.transAxes, fontsize=7,
+                             color=color, fontweight='bold', va='center', ha='left', zorder=5)
+                handles.append(mpatches.Patch(color=color, alpha=alpha + 0.1, label=text))
+            if handles:
+                # Legende über dem Diagramm: verdeckt weder Kurs noch Volume-Profile.
+                ax1.legend(handles=handles, loc='lower right', bbox_to_anchor=(1, 1), ncol=len(handles),
+                           fontsize=7, frameon=False, handlelength=1, borderaxespad=0.2)
 
         min_remap = linear_remap(
-            df['BB_Lower'].min(),
+            lower,
             df['Price'].min(),
             df['Price'].max(),
             df['Percentage Deviation'].min(),
@@ -445,100 +686,63 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         )
 
         max_remap = linear_remap(
-            df['BB_Upper'].max(),
+            upper,
             df['Price'].min(),
             df['Price'].max(),
             df['Percentage Deviation'].min(),
             df['Percentage Deviation'].max()
         )
 
+        if min_remap == max_remap:
+            min_remap, max_remap = min_remap - 1, max_remap + 1
         ax2.set_ylim(min_remap, max_remap)
         
-        ax1.plot(df['Date'], df['Price'], label='Price', color='k', linewidth=1.5)
-        ax1.plot(df['Date'], df['Fast EMA'], label='Fast EMA', linestyle=':', color='green')
-        ax1.plot(df['Date'], df['Slow EMA'], label='Slow EMA', linestyle=':', color='red')
-        ax1.plot(df.loc[df['Position']== 1.0, 'Date'], df.loc[df['Position']== 1.0, 'Fast EMA'], '^',  markersize=10, color='green', label='Buy')
-        ax1.plot(df.loc[df['Position']==-1.0, 'Date'], df.loc[df['Position']==-1.0, 'Fast EMA'], 'v',  markersize=10, color='red', label='Sell')
-        ax1.plot(df.loc[df['HighP']==1, 'Date'],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
-        ax1.plot(df.loc[df['LowP']==1,  'Date'],      df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
+        ax1.plot(x, df['Price'], label='Price', color='k', linewidth=1.5)
+        ax1.plot(x, df['Fast EMA'], label='Fast EMA', linestyle=':', color='green')
+        ax1.plot(x, df['Slow EMA'], label='Slow EMA', linestyle=':', color='red')
+        ax1.plot(x[df['Position']== 1.0], df.loc[df['Position']== 1.0, 'Fast EMA'], '^',  markersize=10, color='green', label='Buy')
+        ax1.plot(x[df['Position']==-1.0], df.loc[df['Position']==-1.0, 'Fast EMA'], 'v',  markersize=10, color='red', label='Sell')
+        ax1.plot(x[df['HighP']==1],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
+        ax1.plot(x[df['LowP']==1],       df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
 
-        ax2.plot(df['Date'], df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
+        ax2.plot(x, df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
 
         if 'Volume' in df.columns:
             colors = ['green' if close > open_val else 'red'
                     for open_val, close in zip(df['Price'].shift(1), df['Price'])]
             colors[0] = 'gray'
-            dates_num = mdates.date2num(df['Date'])               # Datum -> float (Tage)
-            if len(dates_num) > 1:
-                delta_days = float(np.median(np.diff(dates_num))) # typischer Abstand
-            else:
-                delta_days = 1.0
-            bar_width = delta_days * 0.8                          # 80% des Abstands
-
-            ax3.bar(dates_num, df['Volume'],
-                    width=bar_width, align='center',
+            # Abstand zwischen zwei Werten ist immer 1 -> Balken 80% davon
+            ax3.bar(x, df['Volume'],
+                    width=0.8, align='center',
                     color=colors, alpha=0.7, linewidth=0)
 
-            ax3.xaxis_date()  # Achse wieder als Datum formatieren
-            ax3.margins(x=0.01)  # etwas Rand, damit nichts abgeschnitten wird 
+            ax3.margins(x=0.01)  # etwas Rand, damit nichts abgeschnitten wird
 
     #-------------Save
         os.makedirs(output_dir, exist_ok=True)
     # Set figure background to white
     fig.patch.set_facecolor('white')
-    plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight', facecolor='white', transparent=False)
+    # dpi=200 ergibt ca. 1200 Pixel Breite, passend zur Telegram-Maximalgröße von 1280 Pixeln.
+    plt.savefig(os.path.join(output_dir, f"{symbol}.png"), dpi=200, bbox_inches='tight', facecolor='white', transparent=False)
     plt.close(fig)
 
-def pushover(message: str, priority: int=0):
-    # Log file (prepend new entry)
-    log_entry = time.strftime("%x %X", time.localtime()) + '  \n' + message + '\n\n'
-    try:
-        with open('logfile.txt', 'r', encoding='utf-8') as f:
-            old_content = f.read()
-    except FileNotFoundError:
-        old_content = ''
-    with open('logfile.txt', 'w', encoding='utf-8') as f:
-        f.write(log_entry + old_content)
+def set_message_queue(queue: mp.Queue):
+    global _message_queue
+    _message_queue = queue
 
-    try:
-        requests.post(
-            "https://api.pushover.net/1/messages.json",
-            data={
-                "title" : "CaSa Alarm", 
-                "token": token_pushover,
-                "user": user_pushover,
-                "message": message,
-                "url_title": "Link",
-                "html": 1,
-                "priority": priority   #-2 lowes -1 low 0 normal 1 high 2 emergency
-            },
-            timeout=10,
-        )
-    except Exception as e:
-        log_print(f"Pushover error: {e}")
+def pushover(message: str, priority: int = 0, html_format=False):
+    log_print(message)
+    if _message_queue:
+        _message_queue.put({'type': 'text', 'message': message, 'priority': priority, 'html': html_format})
+    else:
+        log_print("No queue – message discarded.")
 
-def pushover_image(symbol: str, message: str, priority: int=0):
-
-    file_name = os.path.join(output_dir, symbol + ".png")
-    try:
-        with open(file_name, "rb") as fh:
-            requests.post(
-                "https://api.pushover.net/1/messages.json",
-                data={
-                    "title" : "CaSa Alarm",
-                    "token": token_pushover,
-                    "user": user_pushover,
-                    "url_title": "Link",
-                    "message": message,
-                    "html": 1,
-                    "priority": priority   #-2 lowes -1 low 0 normal 1 high 2 emergency
-                },
-                files={"attachment": ("image.jpg", fh, "image/jpeg")},
-                timeout=30,
-            )
-    except Exception as e:
-        log_print(f"Pushover image error: {e}")
-
+def pushover_image(symbol: str, message: str, priority: int = 0, delete_after_send=False, html_format=False):
+    # html_format=True: Nachricht enthält Telegram-HTML (<b>, <i>, <pre>)
+    if _message_queue:
+        _message_queue.put({'type': 'image', 'symbol': symbol, 'message': message, 'priority': priority, 'output_dir': output_dir, 'delete_after_send': delete_after_send, 'html': html_format})
+    else:
+        log_print("No queue – image discarded.")
 
 def google_trends(search):
     
@@ -550,6 +754,8 @@ def google_trends(search):
             infos = {'tries': int(i), 'function': __name__,'exception': e}
             msg = "Script try number %(tries)s to %(function)s \n\n%(exception)s" %infos
             pushover(msg)
+            if i == 4:
+                raise
             time.sleep(300)
     
     kw_list = [search] # List of keywords to get data
@@ -562,7 +768,9 @@ def google_trends(search):
     df['Date'] = data['date']
     df['Interest'] = data[search]
 
-    return df.tail(1)['Interesse'].values[0], df.tail(2)['Interesse'].values[0]
+    if len(df) < 2:
+        raise ValueError('Zu wenige Google-Trends-Daten.')
+    return df['Interest'].iloc[-1], df['Interest'].iloc[-2]
 
 def seven_day_slope_pct(df, current):
 
@@ -609,10 +817,14 @@ def calc_stat_limits(df, column, window=100, invert=False):
     if column not in df.columns:
         return np.nan, np.nan
 
-    data = df[column].dropna().to_numpy()[-window:]
+    if df.empty or not np.isfinite(df[column].iloc[-1]):
+        return np.nan, np.nan
+    data = df[column].replace([np.inf, -np.inf], np.nan).dropna().to_numpy()[-window:]
     if data.size < 2:
         return np.nan, np.nan
     
+    if np.all(data == data[0]):
+        return 0, 50.0
     # Calculate quantile (percentile) of current_value in data
     quantile = float(np.sum(data <= df[column].iloc[-1])) / len(data)
     quantile_pct = round(quantile * 100, 2)
@@ -638,65 +850,73 @@ def calc_stat_limits(df, column, window=100, invert=False):
     return sig_count, quantile_pct
 
 
+def analysis_details(df):
+    """Gemeinsame Kennwerte für Alarm und /check; diese Funktion versendet nichts."""
+    signals, quantiles = {}, {}
+    for column in ('RSI14', 'SMA7', 'VMA7', 'ROC5', 'VROC5'):
+        count, quantile = calc_stat_limits(df, column, window=100, invert=(column == 'RSI14'))
+        # Fehlendes Volumen ergibt kein verwertbares Momentum: neutral bewerten.
+        # Ein fehlender Preisindikator muss dagegen als Datenfehler auffallen.
+        if not math.isfinite(count) or not math.isfinite(quantile):
+            if column in ('VMA7', 'VROC5'):
+                count, quantile = 0, float('nan')
+            else:
+                raise ValueError(f"Keine ausreichenden Daten für {column}.")
+        signals[column], quantiles[column] = int(count), quantile
+    text1, score = tech_analyse1(signals['RSI14'], 0)
+    text2, score = tech_analyse2(signals['ROC5'], signals['VROC5'], score)
+    text3, score = tech_analyse3(signals['SMA7'], signals['VMA7'], score)
+    score += signals['ROC5']
+
+    def line(column):
+        count, value = signals[column], quantiles[column]
+        if not math.isfinite(value):
+            return f"{column:<6} keine Daten (neutral gewertet)"
+        marks = '+' * count if count > 0 else '-' * abs(count) if count < 0 else '●'
+        return f"{column:<6}{value:>7.2f} %  {marks}"   # feste Breite: Werte stehen untereinander
+
+    def block(lines, text):
+        # Telegram-HTML: Werte in Festbreitenschrift, Überschrift fett, Einschätzung kursiv.
+        # "Trend-Analysis: ..." wird geteilt, damit der lange Satz in eigener Zeile steht.
+        label, sentence = text.split(': ', 1) if ': ' in text else ('', text)
+        head = f"<b>{html.escape(label)}</b>\n" if label else ''
+        return f"{head}<pre>{html.escape(chr(10).join(lines))}</pre>\n<i>{html.escape(sentence)}</i>"
+
+    message = (f"<b>Score: {score}</b>\n\n"
+               f"{block([line('RSI14')], text1)}\n\n"
+               f"{block([line('SMA7'), line('VMA7')], text3)}\n\n"
+               f"{block([line('ROC5'), line('VROC5')], text2)}")
+    # Einschätzungen ohne Überschrift (z.B. für die KI-Frage bei /ai)
+    texts = {'rsi': text1, 'trend': text3.split(': ', 1)[-1], 'short': text2.split(': ', 1)[-1]}
+    return {'score': score, 'quantiles': quantiles, 'message': message, 'texts': texts}
+
+
 def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type):
 
     alarms = {}
     tech_indicators = None  
     score = 0
 
-    # Indicators
-    RSI14_signal_count, RSI14_quantile_pct = calc_stat_limits(df, 'RSI14', window=100, invert=True) 
-    SMA7_signal_count, SMA7_quantile_pct = calc_stat_limits(df, 'SMA7', window=100, invert=False)
-    VMA7_signal_count, VMA7_quantile_pct = calc_stat_limits(df, 'VMA7', window=100, invert=False)
-    ROC5_signal_count, ROC5_quantile_pct = calc_stat_limits(df, 'ROC5', window=100, invert=False)
-    VROC5_signal_count, VROC5_quantile_pct = calc_stat_limits(df, 'VROC5', window=100, invert=False)
-    
+    details = analysis_details(df)
+    score = details['score']
+    tech_indicators = details['quantiles']
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
 
-    # Tech Analysis Score
-    alarm_analysis1, score = tech_analyse1(RSI14_signal_count, score)
-    alarm_analysis2, score = tech_analyse2(ROC5_signal_count, VROC5_signal_count, score)
-    alarm_analysis3, score = tech_analyse3(SMA7_signal_count, VMA7_signal_count, score)
-    score += ROC5_signal_count
-
-    tech_indicators = {
-        'RSI14': RSI14_quantile_pct,
-        'MOM10': ROC5_quantile_pct,
-        'VMOM10': VROC5_quantile_pct,
-        'SMA7': SMA7_quantile_pct,
-        'VMA7': VMA7_quantile_pct,
-    }
-
-    # Helper für Alarm-Erstellung
     def create_alarm(code, buy_sell, indicator, value):
-        color = "green" if buy_sell == "Buy" else "red"
-        symbol_arrow = "&#9650;" if buy_sell == "Buy" else "&#9660;"
         priority = 1 if (score > 5 and buy_sell == "Buy") or (score < -5 and buy_sell == "Sell") else 0
-        
-        arrow_str = lambda cnt: f" {'+' * int(cnt)}" if cnt > 0 else f" {'-' * abs(int(cnt))}" if cnt < 0 else " &#8226;"
-        
-        msg_add = f"Amount >1 year: {round(amount_older_than_one_year,2)} ({round(amount_older_than_one_year_pct,2)} %)" if not watch_list else ""
-        
+        # Telegram-HTML (fett/kursiv/Festbreite), deshalb Texte mit html.escape absichern
         message = (
-            f"Trigger: {indicator} ({data_type})\n"
-            f"Score: {score}\n\n"
-            f"RSI14: {round(RSI14_quantile_pct,2)} %{arrow_str(RSI14_signal_count)}\n{alarm_analysis1}\n\n"
-            f"SMA7: {SMA7_quantile_pct} %{arrow_str(SMA7_signal_count)}\n"
-            f"VMA7: {VMA7_quantile_pct} %{arrow_str(VMA7_signal_count)}\n{alarm_analysis3}\n\n"
-            f"ROC5: {ROC5_quantile_pct} %{arrow_str(ROC5_signal_count)}\n"
-            f"VROC5: {VROC5_quantile_pct} %{arrow_str(VROC5_signal_count)}\n{alarm_analysis2}\n\n"
-            f"{msg_add}\n"
+            f"<b>{html.escape(symbol)} — {buy_sell}</b>\n"
+            f"Trigger: {html.escape(indicator)} ({data_type})\n\n"
+            + details['message']
         )
-        
-        alarms[code] = {
-            "value": value,
-            "priority": priority,
-            "msg": f"<html><body><div style='font-size:28px; font-weight:700; color:{color};'>{symbol} {symbol_arrow}</div>"
-                   f"<div style='color:black; white-space:pre-line;'>{message}</div></body></html>"
-        }
+        if not watch_list:
+            message += "\n\n" + html.escape(f"Amount >1 year: {amount_older_than_one_year:.2f} ({amount_older_than_one_year_pct:.2f} %)")
+        alarms[code] = {"value": value, "priority": priority, "msg": message}
 
-    value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).timestamp())
+    # Nur das Datum: CoinGecko liefert als letzten Wert die aktuelle Uhrzeit.
+    value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).normalize().timestamp())
 
     # Portfolio Alarme (nicht Watchlist)
     if not watch_list:
@@ -823,7 +1043,7 @@ def tech_analyse3(SMA7, VMA7, score):
     
     # Werte aus den Matrizen holen (mit Fallback)
     volume_text = VOLUME_MATRIX.get(VMA7, "error")
-    trend_text = TREND_MATRIX.get(abs(SMA7), "error")
+    trend_text = TREND_MATRIX.get(SMA7, "error")
 
     if SMA7 < 0: 
         VMA7_score = VMA7 * -1  
@@ -850,78 +1070,89 @@ def older_than_one_year(df):
     
     return total_amount
 
-def create_table_image(
-    df,
-    output_path,
-    body_fontsize=7,
-    header_fontsize=5.5,
-    header_color="#3A778A",
-    fig_width=4.5,
-    row_height=0.45,
-    left_col_width=0.22,
-    other_col_width=0.13,
-    dpi=200
-):
-    # Height: Data rows + some space for header
-    fig_height = len(df) * row_height + 0.5
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    ax.axis("off")
+def euro_de(value):
+    # deutsches Zahlenformat: 71.660,12 €
+    return f"{value:,.2f} €".replace(',', 'X').replace('.', ',').replace('X', '.')
 
-    # Color header using colColours (robust with edges='horizontal')
-    table = ax.table(
-        cellText=df.values,
-        colLabels=df.columns,
-        cellLoc="center",
-        loc="center",
-        bbox=[0, 0, 1, 1],
-        edges="horizontal",
-        colColours=[header_color] * len(df.columns),
-    )
+def create_table_image(df, output_path, title='', subtitle='', dpi=200):
+    """Tagesübersicht als moderne Rangliste: sortiert nach 1d P&L, beste Zeile hervorgehoben,
+    1d P&L zusätzlich als Balken (grün nach rechts, rot nach links)."""
+    GREEN, RED, GREY, DARK = '#1e8449', '#c0392b', '#8a8a8a', '#222222'
 
-    # Set column widths
-    col_widths = [left_col_width] + [other_col_width] * (len(df.columns) - 1)
-    total_rows = len(df) + 1  # +1 wegen Header
-    for j in range(total_rows):
-        for i, w in enumerate(col_widths):
-            table[(j, i)].set_width(w)
+    def pct_color(value):
+        return GREEN if value > 0 else RED if value < 0 else GREY
 
-    # Fonts
-    table.auto_set_font_size(False)
-    table.set_fontsize(body_fontsize)
+    df = df.sort_values('1d P&L [%]', ascending=False).reset_index(drop=True)
+    rows = len(df)
+    fig, ax = plt.subplots(figsize=(6.4, 0.95 + rows * 0.42))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(rows + 1.6, -0.2)   # y nach unten: Titel oben, dann Kopfzeile, dann Zeilen
+    ax.axis('off')
 
-    # Format header text
-    for i in range(len(df.columns)):
-        cell = table[(0, i)]
-        cell.set_text_props(weight="bold", color="white", fontsize=header_fontsize)
-        cell.visible_edges = "closed"  # optional: Header komplett umrandet
+    # Spalten (x-Position, Ausrichtung)
+    col = {'rank': (0.03, 'center'), 'name': (0.07, 'left'), 'price': (0.43, 'right'),
+           'bar': (0.47, 0.71), 'd1': (0.81, 'right'), 'd7': (0.91, 'right'), 'rating': (0.965, 'center')}
 
-    # Slight scaling for denser layout
-    table.scale(0.55, 1.0)
+    # Titel
+    ax.text(0.0, 0.25, title, fontsize=12, fontweight='bold', color=DARK, va='center')
+    ax.text(1.0, 0.25, subtitle, fontsize=7.5, color=GREY, va='center', ha='right')
 
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor="white")
-    plt.close()
+    # Kopfzeile
+    header_y = 1.0
+    for key, label in (('rank', '#'), ('name', 'NAME'), ('price', 'KURS'), ('d1', '1D P&L'),
+                       ('d7', '7D'), ('rating', 'RATING')):
+        x, align = col[key]
+        ax.text(x, header_y, label, fontsize=6.5, color=GREY, fontweight='bold', ha=align, va='center')
+    ax.plot([0, 1], [header_y + 0.35, header_y + 0.35], color='#dddddd', linewidth=0.8)
+
+    # Balkenlänge: größter Ausschlag füllt die halbe Balkenspalte
+    bar_left, bar_right = col['bar']
+    bar_mid = (bar_left + bar_right) / 2
+    max_abs = max(df['1d P&L [%]'].abs().max(), 0.01)
+
+    for i, row in df.iterrows():
+        y = header_y + 1 + i
+        d1, d7, rating = row['1d P&L [%]'], row['7d P&L [%]'], int(row['Rating'])
+
+        # Hintergrund: beste Zeile (mit Gewinn) grün getönt, sonst abwechselnd hell
+        if i == 0 and d1 > 0:
+            background = '#e9f6ec'
+        else:
+            background = '#f7f7f7' if i % 2 else 'white'
+        ax.add_patch(mpatches.FancyBboxPatch((0, y - 0.42), 1, 0.84, boxstyle='round,pad=0,rounding_size=0.01',
+                                             facecolor=background, edgecolor='none', zorder=0))
+
+        ax.text(col['rank'][0], y, str(i + 1), fontsize=8, color=GREY, ha='center', va='center')
+        ax.text(col['name'][0], y, row['Name'], fontsize=9, color=DARK, fontweight='bold', ha='left', va='center')
+        ax.text(col['price'][0], y, euro_de(row['Piece [€]']), fontsize=8.5, color=DARK, ha='right', va='center')
+
+        # 1d P&L als Balken ab der Mitte
+        length = d1 / max_abs * (bar_right - bar_left) / 2
+        ax.add_patch(mpatches.Rectangle((min(bar_mid, bar_mid + length), y - 0.15), abs(length), 0.3,
+                                        facecolor=pct_color(d1), edgecolor='none', alpha=0.85, zorder=1))
+        ax.plot([bar_mid, bar_mid], [y - 0.3, y + 0.3], color='#cccccc', linewidth=0.8, zorder=2)
+
+        ax.text(col['d1'][0], y, f"{d1:+.2f} %", fontsize=9, color=pct_color(d1), fontweight='bold', ha='right', va='center')
+        ax.text(col['d7'][0], y, f"{d7:+.1f} %", fontsize=7.5, color=pct_color(d7), ha='right', va='center')
+
+        # Rating als kleines farbiges Feld
+        ax.text(col['rating'][0], y, f"{rating:+d}" if rating else '0', fontsize=7.5, color='white', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=pct_color(rating), edgecolor='none'))
+
+    fig.patch.set_facecolor('white')
+    plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
 
 
 
 
 def log_print(message: str):
-
-    # Print to console
     print(message)
-    
-    # Create log entry with timestamp
-    log_entry = time.strftime("%x %X", time.localtime()) + '  \n' + str(message) + '\n\n'
-    
-    # Read existing content
-    try:
-        with open('logfile.txt', 'r', encoding='utf-8') as f:
-            old_content = f.read()
-    except FileNotFoundError:
-        old_content = ''
-    
-    # Write new entry at the beginning
-    with open('logfile.txt', 'w', encoding='utf-8') as f:
-        f.write(log_entry + old_content)
+    log_entry = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + "  " + str(message) + "\n"
+    with open('logfile.txt', 'a', encoding='utf-8') as file:
+        file.write(log_entry)
+
 
 def filter(alarm_neu, state):
 

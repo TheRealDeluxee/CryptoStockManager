@@ -13,3 +13,6 @@
 desktop.ini
 Thumbs.db
 *.lnk
+/transactions.csv
+/assets.ini
+/events.ini
