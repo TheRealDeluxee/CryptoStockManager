@@ -260,6 +260,76 @@ def read_assets(path="assets.ini", alarm_only=False):
     return entries
 
 
+def read_events(path="events.ini", assets_path="assets.ini"):
+    """Termine aus events.ini: name = symbol; DD/MM/YYYY; Beschreibung.
+    Der Typ (crypto/stock) und der Name kommen aus assets.ini. Fehlende Datei = keine Termine."""
+    config = configparser.ConfigParser(interpolation=None)
+    if not config.read(path, encoding="utf-8-sig") or not config.has_section('events'):
+        return []
+    assets = read_assets(assets_path)
+    events = []
+    for key, value in config.items('events'):
+        parts = [part.strip() for part in value.split(';', 2)]
+        if len(parts) < 2:
+            raise ValueError(f"{path}, Termin '{key}': Format ist symbol; DD/MM/YYYY; Beschreibung")
+        symbol = parts[0].lower()
+        try:
+            date = datetime.strptime(parts[1].replace('.', '/'), '%d/%m/%Y').date()
+        except ValueError:
+            raise ValueError(f"{path}, Termin '{key}': ungültiges Datum '{parts[1]}' (Format DD/MM/YYYY)") from None
+        matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
+        if len(matches) != 1:
+            problem = 'nicht in assets.ini' if not matches else 'als crypto und stock in assets.ini'
+            raise ValueError(f"{path}, Termin '{key}': {parts[0]} ist {problem}.")
+        events.append({'key': key, 'symbol': symbol, 'type': matches[0], 'name': assets[(matches[0], symbol)],
+                       'date': date, 'text': parts[2] if len(parts) > 2 else ''})
+    return sorted(events, key=lambda event: event['date'])
+
+
+def add_event(symbol, date_text, text, path="events.ini", assets_path="assets.ini"):
+    """Neuen Termin unten in events.ini anhängen (für /termin). Gibt (name, Asset-Name, Datum) zurück."""
+    symbol = symbol.strip().lower()
+    assets = read_assets(assets_path)
+    matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
+    if len(matches) != 1:
+        raise ValueError(f"{symbol} ist {'nicht in assets.ini' if not matches else 'als crypto und stock in assets.ini'}.")
+    try:
+        date = datetime.strptime(date_text.strip().replace('.', '/'), '%d/%m/%Y').date()
+    except ValueError:
+        raise ValueError(f"Ungültiges Datum '{date_text}' (Format DD/MM/YYYY).") from None
+    if date < datetime.now().date():
+        raise ValueError('Das Datum liegt in der Vergangenheit.')
+    text = ' '.join(text.split())   # keine Zeilenumbrüche in der ini
+
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding='utf-8-sig') as file:
+            lines = file.read().splitlines()
+    if not any(line.strip().lower() == '[events]' for line in lines):
+        lines.append('[events]')
+    existing = {line.split('=', 1)[0].strip().lower() for line in lines if '=' in line and not line.lstrip().startswith('#')}
+    key = f"{symbol.replace('.', '_')}_{date:%Y%m%d}"
+    number = 2
+    while key in existing:   # Name muss eindeutig sein
+        key = f"{symbol.replace('.', '_')}_{date:%Y%m%d}_{number}"
+        number += 1
+    stock_symbol = symbol.upper() if matches[0] == 'stock' else symbol
+    lines.append(f"{key:<24} = {stock_symbol}; {date:%d/%m/%Y}; {text}".rstrip('; '))
+
+    # Erst vollständig in eine neue Datei schreiben, dann austauschen (wie bei assets.ini)
+    directory = os.path.dirname(os.path.abspath(path))
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=directory, suffix='.tmp', delete=False) as file:
+            temp_path = file.name
+            file.write('\n'.join(lines) + '\n')
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+    return key, assets[(matches[0], symbol)], date
+
+
 def set_alarm(symbol, asset_type, active, path="assets.ini"):
     """Setzt in assets.ini das Alarm-Kennzeichen (1 = an, 0 = aus) für einen Wert.
     Die Datei wird zeilenweise geändert, damit Kommentare und Ausrichtung erhalten bleiben."""

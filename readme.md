@@ -38,6 +38,7 @@ While it's functional and stable, there's still plenty of room for growth. Check
 - **Visual Analytics**: Charts with price, EMAs, Bollinger Bands, buy/sell markers, support/resistance zones, volume bars and a volume profile
 - **Portfolio Tracking**: FIFO bookkeeping from `transactions.csv`, profit calculation and tax-relevant holding periods (>1 year)
 - **AI Prompt**: `/ai` creates a ready-to-copy prompt for ChatGPT or Claude including technical data, bottom/top formation, market phase and your position (no AI API needed)
+- **Event Reminders**: Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/termin`; on the day at 08:00 a reminder plus a daily analysis of the asset is sent
 - **Scheduling**: Hourly (100h) crypto analysis, daily (100d) analysis at 09:30 and 12:30, summary at 18:30
 - **Daily Summaries**: Ranking image sorted by 1-day P&L
 
@@ -62,6 +63,7 @@ While it's functional and stable, there's still plenty of room for growth. Check
 - `assets.ini`: All cryptos and stocks known to the program (must be created manually)
 - `transactions.csv`: Buys and sells, written by the bot (`/buy`, `/sell`, `/sellall`)
 - `ki_frage.txt`: Template for the `/ai` prompt; created automatically, can be edited freely
+- `events.ini`: Important dates with reminder and analysis (optional, also written by `/termin`)
 
 ## Installation
 
@@ -154,6 +156,14 @@ APC.DE         = Apple; stock
 ```
 
 The `1` can also be switched in Telegram with `/alarm`.
+
+### events.ini
+
+```ini
+# Format: name = symbol; DD/MM/YYYY; description
+[events]
+nvda_20261117  = NVDA; 17/11/2026; Q3 earnings after US market close
+```
 
 ### transactions.csv
 

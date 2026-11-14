@@ -2,7 +2,7 @@
 telegram_bot.py
 - Always-on Telegram Bot
 - Sendet Notifications aus notify_queue (Text/Bild) an Telegram
-- Nimmt Commands entgegen (/help /status /analyse /check /ai /alarm /buy /sell /sellall /history /restart)
+- Nimmt Commands entgegen (/help /status /analyse /check /ai /alarm /termin /buy /sell /sellall /history /restart)
   und schickt sie als dict in command_queue an main
 
 Wichtig:
@@ -200,6 +200,7 @@ HELP_TEXT = (
         "\n"
         "<b>Alarme</b>\n"
         "/alarm – Werte in der Alarm-Analyse an- oder ausschalten\n"
+        "/termin – kommende Termine anzeigen oder neuen eintragen\n"
         "\n"
         "<b>Depot</b>\n"
         "/buy – Kauf eintragen\n"
@@ -219,6 +220,7 @@ HELP_TEXT = (
         "<code>/check qcom stock</code>\n"
         "<code>/ai bitcoin</code>\n"
         "<code>/alarm goog an</code>\n"
+        "<code>/termin NVDA 19/11/2026 Q3-Zahlen</code>\n"
         "<code>/analyse daily</code>"
 )
 
@@ -396,6 +398,37 @@ async def _cb_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.edit_message_text(f"{name}: Alarm {'an' if active else 'aus'}.\n"
                                   f"Alarm-Analyse: {count} Werte an. Antippen schaltet um.",
                                   reply_markup=keyboard)
+
+
+async def _cmd_termin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # /termin: kommende Termine anzeigen; /termin <symbol> <DD/MM/YYYY> <beschreibung>: Termin eintragen
+    app = context.application
+    if not _authorized(update, app.bot_data['chat_id']):
+        return
+    try:
+        if not context.args:
+            today = datetime.now().date()
+            upcoming = [event for event in cl.read_events() if event['date'] >= today]
+            lines = ['Kommende Termine:'] if upcoming else ['Keine kommenden Termine.']
+            lines += [f"{event['date']:%d.%m.%Y}  {event['name']}" + (f" – {event['text']}" if event['text'] else '')
+                      for event in upcoming]
+            lines.append('\nEintragen: /termin <symbol> <DD/MM/YYYY> <beschreibung>')
+            await _reply_long(update, '\n'.join(lines))
+            return
+        if len(context.args) < 2:
+            await update.message.reply_text('Format: /termin <symbol> <DD/MM/YYYY> <beschreibung>\n'
+                                            'Beispiel: /termin NVDA 19/11/2026 Q3-Zahlen nach Börsenschluss')
+            return
+        key, name, date = cl.add_event(context.args[0], context.args[1], ' '.join(context.args[2:]))
+    except (OSError, ValueError, configparser.Error) as error:
+        await _reply_long(update, f'Fehler: {error}\nNicht gespeichert.')
+        return
+    if date == datetime.now().date():
+        _cmdq(app).put({'cmd': 'events'})   # Termin heute: Erinnerung und Analyse sofort
+        when = 'Der Termin ist heute: Erinnerung und Tagesanalyse kommen gleich.'
+    else:
+        when = 'Erinnerung mit Tagesanalyse am Termin-Tag um 08:00.'
+    await update.message.reply_text(f"Termin gespeichert: {date:%d.%m.%Y} {name}\n{when}")
 
 
 async def _cmd_analyse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -620,6 +653,7 @@ async def _post_init(app: Application) -> None:
         BotCommand("check", "Tagesanalyse ohne Alarm: Wert per Schaltfläche wählen"),
         BotCommand("ai", "KI-Frage zum Kopieren in ChatGPT oder Claude"),
         BotCommand("alarm", "Werte in die Alarm-Analyse aufnehmen oder entfernen"),
+        BotCommand("termin", "Termine anzeigen oder eintragen: Symbol Datum Text"),
         BotCommand("analyse", "Analyse starten: hourly, daily oder summary"),
         BotCommand("buy", "Kauf speichern: Symbol Typ Betrag Menge Datum"),
         BotCommand("sell", "Verkauf speichern: Symbol Typ Betrag Menge"),
@@ -676,6 +710,7 @@ def run_standalone(notify_q: Queue, command_q: Queue) -> None:
     app.add_handler(CommandHandler("check", _cmd_check))
     app.add_handler(CommandHandler("ai", _cmd_ai))
     app.add_handler(CommandHandler("alarm", _cmd_alarm))
+    app.add_handler(CommandHandler("termin", _cmd_termin))
     app.add_handler(CallbackQueryHandler(_cb_alarm, pattern=r"^alarm\|"))
     app.add_handler(CallbackQueryHandler(_cb_assets, pattern=r"^(check|ai)\|"))
     app.add_handler(CommandHandler("buy", _cmd_buy))

@@ -5,6 +5,7 @@ Die eigentlichen Berechnungen bleiben in classes.py und func.py.
 """
 import configparser
 import copy
+import datetime
 import html
 import math
 import multiprocessing as mp
@@ -22,6 +23,7 @@ import telegram_bot
 MORNING_ANALYSIS = "09:30"
 NOON_ANALYSIS = "12:30"
 EVENING_SUMMARY = "18:30"
+EVENT_REMINDER = "08:00"   # Erinnerung an Termine aus events.ini (mit Tagesanalyse)
 
 # Vorlage für /ai. Wird beim ersten Aufruf als ki_frage.txt angelegt und kann dort
 # mit dem Editor geändert werden. Platzhalter in {Klammern} füllt das Programm.
@@ -113,6 +115,7 @@ class CryptoStockManager:
         self.df_crypto_hh = pd.DataFrame(columns=cols)
         self.df_stock_hh = pd.DataFrame(columns=cols)
         self.last_daily_update = None
+        self.events_done = set()   # heute schon erinnerte Termine (nur im Speicher)
 
     def load_config_items(self):
         """Neue Listen erst vollständig aufbauen, dann die alten ersetzen."""
@@ -343,6 +346,26 @@ class CryptoStockManager:
             message = f'Datenstand: {self.last_daily_update}'  # Titel steht schon im Bild
             func.pushover_image(image_name, message, delete_after_send=True)
 
+    def event_reminders(self):
+        """Termine von heute aus events.ini: Erinnerung senden, danach Tagesanalyse wie /check."""
+        try:
+            events = cl.read_events()
+        except (OSError, ValueError, configparser.Error) as error:
+            func.pushover(f'events.ini konnte nicht gelesen werden: {error}')
+            return
+        today = datetime.date.today()
+        for event in events:
+            if event['date'] != today or event['key'] in self.events_done:
+                continue
+            self.events_done.add(event['key'])
+            text = f"\n{html.escape(event['text'])}" if event['text'] else ''
+            func.pushover(f"<b>Termin heute: {html.escape(event['name'])}</b>{text}\nTagesanalyse folgt.",
+                          priority=1, html_format=True)
+            try:
+                self.single_daily_analysis(event['symbol'], event['type'])
+            except Exception as error:
+                func.pushover(f"Tagesanalyse für {event['name']} fehlgeschlagen: {error}")
+
     def startup_message(self):
         """Kurze Startnachricht: Version, Werte in der Alarm-Analyse, nächste Termine."""
         crypto, stock = len(self.crypto_items_hd), len(self.stock_items_hd)
@@ -360,6 +383,15 @@ class CryptoStockManager:
                 daily = f"jetzt, danach morgen {MORNING_ANALYSIS}"   # nach 12:30 läuft sie beim Start sofort
             summary = EVENING_SUMMARY if now < EVENING_SUMMARY else f"morgen {EVENING_SUMMARY}"
             lines.append(f"Nächste Tagesanalyse: {daily} · Übersicht: {summary}")
+        try:
+            upcoming = [event for event in cl.read_events() if event['date'] >= datetime.date.today()]
+        except (OSError, ValueError, configparser.Error) as error:
+            lines.append(f"events.ini fehlerhaft: {html.escape(str(error))}")
+        else:
+            if upcoming:
+                event = upcoming[0]
+                text = f" – {event['text']}" if event['text'] else ''
+                lines.append(html.escape(f"Nächster Termin: {event['date'].strftime('%d.%m.%Y')} {event['name']}{text}"))
         lines.append("Alle Befehle: /help")
         func.pushover('\n'.join(lines), html_format=True)
 
@@ -383,6 +415,9 @@ class CryptoStockManager:
         elif action == 'reload_transactions':
             self.load_config_items()
             func.pushover('Transaktionen wurden im Hauptprogramm neu geladen.')
+        elif action == 'events':
+            # nach /termin mit heutigem Datum: Erinnerung und Analyse sofort
+            self.event_reminders()
         elif action == 'reload_assets':
             # nach /alarm: geänderte Alarm-Kennzeichen aus assets.ini übernehmen
             self.load_config_items()
@@ -429,6 +464,10 @@ def run_program():
                 schedule.every().day.at(EVENING_SUMMARY).do(manager.send_summary)
                 if time.strftime('%H:%M') >= NOON_ANALYSIS:
                     manager.hundred_day_analysis()
+            # Termine aus events.ini: auch im Testmodus täglich prüfen
+            schedule.every().day.at(EVENT_REMINDER).do(manager.event_reminders)
+            if time.strftime('%H:%M') >= EVENT_REMINDER:
+                manager.event_reminders()   # Start nach 08:00: heutige Termine nachholen
             while not restart:
                 if not bot_process.is_alive():
                     raise RuntimeError('Telegram-Bot ist beendet. Bitte das Protokoll prüfen.')
