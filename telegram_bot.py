@@ -17,6 +17,7 @@ import os
 import tempfile
 from queue import Empty
 import classes as cl
+import func
 from datetime import datetime
 from multiprocessing import Queue
 from typing import Dict, List, Optional
@@ -177,7 +178,9 @@ async def _notify_worker(app: Application) -> None:
                 if item.get('delete_after_send'):
                     os.remove(path)
             elif item.get('type') == 'text':
-                for part in _text_chunks(text):
+                # HTML that fits as a whole (visible text <= 4096) is never split: a cut <pre> block would be invalid
+                fits = parse_mode == 'HTML' and func.telegram_length(text) <= 4096
+                for part in ([text] if fits else _text_chunks(text)):
                     # no link preview: keeps e.g. the start message with the GitHub link compact
                     await app.bot.send_message(chat_id=chat_id, text=part, parse_mode=parse_mode,
                                                link_preview_options=LinkPreviewOptions(is_disabled=True))

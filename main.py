@@ -33,19 +33,17 @@ EVENT_REMINDER = "08:00"   # reminder for events from events.ini (with daily ana
 # Template for /ai. Created as ai_prompt.txt on first use and can be edited there
 # with any editor. The program fills in the placeholders in {curly brackets}.
 AI_PROMPT_FILE = "ai_prompt.txt"
-AI_PROMPT_TEMPLATE = """{name} ({symbol}) – three-month analysis
+AI_PROMPT_TEMPLATE = """Assess {name} ({symbol}, {type}) for a three-month horizon (no day trading) using my technical data and current news. {task}
 
-Assess {name} ({type}) based on my technical data and current news. Investment horizon: three months, no day trading. {task}
-
-A. Technical data from my program (daily values, as of {date})
-Prices in EUR, source: {source}. Compare price levels only with this source.
+A. My program's data (daily values, {date})
+EUR prices from {source}; compare levels only with this source.
 - Position: {position}
 - Price: {price} · 1 day {day} · 7-day trend {week}
-- High/low of the last 250 daily values: {high} / {low}
+- 250-day high/low: {high} / {low}
 - Resistance: {resistance}
 - Support: {support}
 - RSI14: {rsi}
-- MACD (EMA12/EMA26): {macd}
+- MACD (EMA12/26): {macd}
 - Bollinger (20,2): {bollinger}
 - Trend: {trend}
 - Short term: {short_term}
@@ -53,27 +51,27 @@ Prices in EUR, source: {source}. Compare price levels only with this source.
 - Top formation: {top}
 - Market phase {name}: {phase}
 - Market phase {market_name}: {market}
-- Program score: {score} (scale -18 to +18, positive = rather buy)
+- Program score: {score} (-18 to +18, positive = rather buy)
 
 B. News and dates
-Use web search; if you have no web access, say so explicitly. News from the last 14 days, confirmed dates in the next 4 weeks. Older figures only as a dated baseline.
+Web search (if unavailable, say so): news of the last 14 days, confirmed dates of the next 4 weeks; older figures only as dated baseline.
 {research}
 
 C. Rules
-- Check broadly, report selectively: only what supports the recommendation, contradicts it, changes the risk or the entry/exit. Merge signals with the same message.
-- Technicals only from part A, news with date and source. If something essential is missing: write exactly "not verifiable" and what is missing.
-- Treat price levels critically: a period low is only a possible support, a low RSI only shows that a recovery is possible. A bottom is only confirmed after an observable price reaction.
-- Trading plan: with a falling price, buy only after a confirmed bottom, staggered near support. Set the exit below support in advance and say whether a daily close counts. In a bearish phase (asset or overall market) only small tranches, assume a trend change only above the SMA200.
-- After a strong rise wait for a pullback, consider partial profits at resistance, limit the position size. {tax}At most three price zones, few numbers, no disclaimers.
+- Check broadly, report selectively: only what supports, contradicts or changes risk or entry/exit; minor but relevant points in one sentence; merge identical signals.
+- Technicals only from part A; news with date and source. Missing essentials: write exactly "not verifiable" plus what is missing.
+- Price levels critically: a period low is only a possible support, a low RSI only a possible recovery; a bottom needs an observable price reaction.
+- Trading plan: with a falling price buy only after a confirmed bottom, staggered near support; set the exit below support in advance (does a daily close count?). Bearish phase (asset or market): small tranches only; trend change only above SMA200.
+- After a strong rise wait for a pullback; partial profits at resistance; limit position size. {tax}Max. three price zones, few numbers, no disclaimers.
 
 D. Output
-1. Decision in exactly three sentences: (1) {decision}, market phase of {name} and {market_name}, main reason. (2) Support and resistance in euro, is a bottom confirmed? Mention top formation only if decisive. (3) Score 0-10 = (program score + 18) / 36 x 10, plus risk and confidence each high/medium/low.
-2. What drives the decision: at most four points from technicals, news and valuation - what is proven and what it means for me.
-3. Trading plan as a table (scenario | observable signal | my action):
+1. Decision in exactly three sentences: (1) {decision}, both market phases, main reason. (2) Support/resistance in euro; bottom confirmed? Top formation only if decisive. (3) Score 0-10 = (program score + 18) / 36 x 10; risk and confidence (high/medium/low).
+2. Decision drivers: max. four points (technicals, news, valuation): what is proven, what it means for me; assumptions or data gaps only if decisive.
+3. Trading plan table (scenario | observable signal | my action):
 {plan}
-4. Strongest counterargument in at most two sentences, and which development would strengthen it.
-5. At most four confirmed dates in the next 4 weeks as a table (date and German time, event, relevance, source).
-6. Conclusion in at most four simple sentences: what I do now, what I am waiting for, what triggers or rules out {action}. At most two price levels, no score and no abbreviations.
+4. Strongest counterargument (max. two sentences) and what would strengthen it.
+5. Max. four confirmed dates (next 4 weeks) as table: date and German time, event, relevance, source.
+6. Conclusion in max. four simple sentences: what I do now, what I wait for, what triggers or rules out {action}; max. two price levels, no score or abbreviations.
 """
 
 
@@ -230,7 +228,7 @@ class CryptoStockManager:
         def zone_text(zone, extreme):
             if zone is None:
                 return 'none in the loaded period'
-            extra = (f"{zone['touches']} touches according to the program" if zone['touches']
+            extra = (f"{zone['touches']} touches" if zone['touches']
                      else f"only the period {extreme}, no confirmed zone")
             return f"{func.format_euro(zone['center'])} ({pct((zone['center'] / price - 1) * 100)}, {extra})"
 
@@ -239,64 +237,66 @@ class CryptoStockManager:
         # Position with real values (quantity, cost, value, profit/loss)
         def qty(value):
             # crypto always with 8 decimals (as usual on exchanges), stocks without unnecessary zeros
-            return f"{value:.8f}" if asset_type == 'crypto' else f"{value:.8g}"
+            text = f"{value:.8f}" if asset_type == 'crypto' else f"{value:.8g}"
+            return f"{text} {unit[:-1] if value == 1 else unit}"   # "1 share", "2 shares"
 
         state = item.state
         unit = 'shares' if asset_type == 'stock' else 'coins'
         if state.watch_list:
             position = 'no holdings'
         else:
-            position = (f"{qty(state.amount_crypto_stock)} {unit}, average cost {func.format_euro(state.zero_line)} per {unit[:-1]} "
-                        f"(invested {func.format_euro(state.buy_balance_eur)}) · value {func.format_euro(state.current_balance_eur)} · "
-                        f"profit/loss {func.format_euro(state.current_profit)} ({pct(state.current_profit_pct)}) · "
-                        f"held longer than 1 year: {qty(state.amount_older_than_one_year)} {unit}")
+            position = (f"{qty(state.amount_crypto_stock)}, avg. cost {func.format_euro(state.zero_line)} "
+                        f"value {func.format_euro(state.current_balance_eur)}, "
+                        f"P/L {func.format_euro(state.current_profit)} ({pct(state.current_profit_pct)}), "
+                        f"held >1 year: {qty(state.amount_older_than_one_year)}")
 
         # The question and the trading plan depend on whether I hold the asset
         if state.watch_list:
-            task = (f"I have no position in {name}. Decide whether I should buy or wait, "
-                    f"and name the concrete signal that would change this decision.")
+            task = "I have no position: buy or wait? Name the concrete signal that would change this decision."
             decision, action = 'Start with Buy or Wait', 'a buy'
-            plan = ("- Wait | which confirmation is still missing? | what do I do until then?\n"
+            plan = ("- Wait | which confirmation is missing? | what do I do until then?\n"
                     "- First buy | which price reaction confirms the entry? | when do I buy a small first tranche?\n"
-                    "- Plan fails | which price level or event invalidates it? | what do I do before or after a buy?")
+                    "- Plan fails | which price level or event invalidates it? | what do I do before/after a buy?")
         else:
-            task = (f"I hold {name} (see position). Decide whether I should hold, add or reduce, "
-                    f"and name the concrete signal that would change this decision.")
+            task = "I hold a position (see A): hold, add or reduce? Name the concrete signal that would change this decision."
             decision, action = 'Start with Hold, Add or Reduce', 'adding or selling'
-            plan = ("- Hold | which situation confirms holding? | what do I watch?\n"
-                    "- Add | which price reaction confirms adding? | when and how much do I add?\n"
+            plan = ("- Hold | what confirms holding? | what do I watch?\n"
+                    "- Add | which price reaction confirms adding? | when and how much?\n"
                     "- Reduce/exit | which price level or event? | how much do I sell?")
         tax = ('Consider the holding period: selling parts held less than 1 year is taxable in Germany. '
                if asset_type == 'crypto' and not state.watch_list else '')
-        source = 'CoinGecko (average of several exchanges)' if asset_type == 'crypto' else 'Yahoo Finance, converted to EUR if needed'
+        source = 'CoinGecko, average of several exchanges' if asset_type == 'crypto' else 'Yahoo Finance, converted if needed'
 
         # MACD line (EMA12 - EMA26) and last crossover in the 100-value window
         diff = df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]
         crosses = df.index[df['Position'].fillna(0) != 0]
         since = f"crossover {len(df) - 1 - crosses[-1]} days ago" if len(crosses) else 'no crossover in 100 days'
-        macd = f"{'positive (EMA12 above EMA26)' if diff > 0 else 'negative (EMA12 below EMA26)'}, {since}"
+        macd = f"{'positive (EMA12 > EMA26)' if diff > 0 else 'negative (EMA12 < EMA26)'}, {since}"
 
         # Position within the Bollinger band: 0 % = lower band, 100 % = upper band
         lower, upper = df['BB_Lower'].iloc[-1], df['BB_Upper'].iloc[-1]
         band = (price - lower) / (upper - lower) * 100 if upper > lower else 50.0
         where = ('below the lower band' if band < 0 else 'near the lower band' if band < 20 else
                  'above the upper band' if band > 100 else 'near the upper band' if band > 80 else 'in the middle range')
-        bollinger = f"price {where} ({band:.0f} % of the band width)"
+        bollinger = f"price {where} ({band:.0f} % of band width)"
 
         # Bottom/top formation: signs from the long history
         bottom, top = func.formation_signals(full)
 
         def formation_text(signals, names):
-            parts = [f"{label}: {'no recent extreme' if signals[key] is None else 'yes' if signals[key] else 'no'}"
-                     for key, label in names]
-            count = sum(1 for key, _ in names if signals[key])
-            return f"{count} of {len(names)} signs ({', '.join(parts)})"
+            # grouped by result (yes / no / not assessable) instead of one entry per sign: shorter, same content
+            groups = {'yes': [], 'no': [], 'not assessable (no recent extreme)': []}
+            for key, label in names:
+                result = 'not assessable (no recent extreme)' if signals[key] is None else 'yes' if signals[key] else 'no'
+                groups[result].append(label)
+            parts = [f"{result}: {', '.join(labels)}" for result, labels in groups.items() if labels]
+            return f"{len(groups['yes'])}/{len(names)} – {'; '.join(parts)}"
 
         bottom_text = formation_text(bottom, (('folge', 'higher lows'), ('divergenz', 'bullish RSI divergence'),
-                                              ('doppel', 'double bottom'), ('volumen', 'selling climax at the low'),
+                                              ('doppel', 'double bottom'), ('volumen', 'selling climax at low'),
                                               ('bestaetigung', 'price above EMA12')))
         top_text = formation_text(top, (('folge', 'lower highs'), ('divergenz', 'bearish RSI divergence'),
-                                        ('doppel', 'double top'), ('volumen', 'buying climax at the high'),
+                                        ('doppel', 'double top'), ('volumen', 'buying climax at high'),
                                         ('bestaetigung', 'price below EMA12')))
 
         # Market phase: the asset itself and its leading market (Bitcoin or stock index)
@@ -308,20 +308,18 @@ class CryptoStockManager:
                 market_name, market_prices = func.market_prices(asset_type, symbol)
                 market = func.trend_phase(market_prices) if market_prices is not None else 'not verifiable (no data)'
             except Exception as error:   # leading market is extra information: an error must not stop /ai
-                market_name, market = 'overall market', f'not verifiable ({error})'
+                market_name, market = 'overall market', f'not verifiable ({str(error)[:60]})'
 
         high, low = full['Price'].max(), full['Price'].min()
         if asset_type == 'stock':
-            research = ("- Earnings and outlook: last revenue, last company guidance, analyst consensus, next confirmed "
-                        "date (German time). Separate actuals, guidance and estimates; which statement in the next "
-                        "outlook would change the recommendation.\n"
-                        "- Analyst targets and valuation: significant price target changes (original currency), trailing "
-                        "and forward P/E (with the period of the estimate).\n"
-                        "- Company and industry: management, demand, competition, regulation and exports.")
+            research = ("- Earnings/outlook: last revenue, guidance, consensus, next confirmed date (German time); "
+                        "separate actuals/guidance/estimates; which outlook statement would change the call.\n"
+                        "- Analyst targets/valuation: major target changes (original currency), trailing and forward P/E (estimate period).\n"
+                        "- Company/industry: management, demand, competition, regulation, exports.")
         else:
-            research = ("- Capital flows: ETF inflows and outflows, large wallet movements, exchange balances.\n"
-                        "- Regulation and macro: laws, proceedings, rate decisions, inflation.\n"
-                        "- Project and network: updates, token unlocks, security incidents, competition.")
+            research = ("- Capital flows: ETF in- and outflows, large wallet movements, exchange balances.\n"
+                        "- Regulation/macro: laws, proceedings, rate decisions, inflation.\n"
+                        "- Project/network: updates, token unlocks, security incidents, competition.")
 
         values = {
             'name': name, 'symbol': symbol,
@@ -347,10 +345,10 @@ class CryptoStockManager:
         for key, value in values.items():
             question = question.replace('{' + key + '}', value)
         question = question.strip()
-        message = (f"<b>AI prompt: {html.escape(name)}</b>\n"
-                   f"Copy and paste into ChatGPT or Claude:\n"
+        message = (f"<b>AI prompt: {html.escape(name)}</b> – copy into ChatGPT or Claude\n"
                    f"<pre>{html.escape(question)}</pre>")
-        if len(message) <= 4000:
+        # Telegram counts only the visible text (max. 4096), not the HTML tags
+        if func.telegram_length(message) <= 4096:
             func.pushover(message, html_format=True)
             return
         # Too long for one Telegram message: split into two copyable blocks at a paragraph near the middle
@@ -360,7 +358,7 @@ class CryptoStockManager:
         for number, part in enumerate(parts, 1):
             hint = 'Copy and paste into ChatGPT or Claude:' if number == 1 else 'Paste directly after part 1:'
             text = f"<b>AI prompt: {html.escape(name)} (part {number}/2)</b>\n{hint}\n<pre>{html.escape(part)}</pre>"
-            if len(text) <= 4000:
+            if func.telegram_length(text) <= 4096:
                 func.pushover(text, html_format=True)
             else:   # even half is too long (heavily extended template): send without formatting
                 func.pushover(part)

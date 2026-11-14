@@ -8,6 +8,7 @@ import urllib.request, json
 import random
 import math
 import html
+import re
 
 # --- External Packages ---
 import requests #instal
@@ -345,10 +346,10 @@ def trend_phase(prices):
         last = changes[-1]
         cross = f"{'Golden Cross' if above[last] else 'Death Cross'} {len(p) - 1 - last} days ago"
     else:
-        cross = f"no SMA50/SMA200 crossover in the last {len(above)} days"
+        cross = f"no 50/200 cross in {len(above)} days"
     distance = f"{(price / s200 - 1) * 100:+.1f} %"
-    return (f"{phase} (price {distance} vs. SMA200, SMA50 {'above' if s50 > s200 else 'below'} SMA200, "
-            f"SMA200 {slope}; {cross})")
+    # compact wording: the /ai prompt must fit into one Telegram message
+    return (f"{phase}: price {distance} vs. SMA200, SMA50 {'>' if s50 > s200 else '<'} SMA200 ({slope}), {cross}")
 
 def market_prices(asset_type, symbol):
     """Leading market for the market phase: Bitcoin for crypto, stock index per exchange for stocks."""
@@ -725,6 +726,13 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
     # dpi=200 gives about 1200 pixels width, matching Telegram's maximum size of 1280 pixels.
     plt.savefig(os.path.join(output_dir, f"{symbol}.png"), dpi=200, bbox_inches='tight', facecolor='white', transparent=False)
     plt.close(fig)
+
+def telegram_length(text, html_format=True):
+    """Length as Telegram counts it (limit 4096): visible text after HTML parsing, in UTF-16 units.
+    Tags like <pre> and entities like &amp; do not count."""
+    if html_format:
+        text = html.unescape(re.sub(r'<[^>]+>', '', text))
+    return len(text.encode('utf-16-le')) // 2
 
 def set_message_queue(queue: mp.Queue):
     global _message_queue
