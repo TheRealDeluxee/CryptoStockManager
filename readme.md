@@ -84,6 +84,7 @@ While it's functional and stable, there's still plenty of room for growth. Check
 | `/ai` | AI prompt to copy into ChatGPT or Claude (choose via buttons or `/ai <symbol>`) |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | `/alarm` | Switch assets on/off for the alarm analysis (buttons or `/alarm <symbol> <an\|aus>`) |
+| `/termin` | List upcoming dates, or add one: `/termin <symbol> <DD/MM/YYYY> <text>` |
 | `/buy <symbol> <crypto\|stock> <amount €> <qty> <DD/MM/YYYY>` | Record a buy |
 | `/sell <symbol> <crypto\|stock> <amount €> <qty>` | Record a sell |
 | `/sellall <symbol> [amount €]` | Record the sale of the full position (current price if no amount, confirmation required) |
