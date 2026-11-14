@@ -1,6 +1,8 @@
 import configparser
 import csv
 import math
+import os
+import tempfile
 import uuid
 
 import func
@@ -49,6 +51,7 @@ class GroupedState:
     amount_older_than_one_year_pct: float = 0
     # derived values used in plotting
     zero_line: Optional[float] = None
+    sr_zones: Any = None  # (Resistance, Support) aus der langen Historie
 
 
 class CryptoStock:
@@ -161,18 +164,26 @@ class CryptoStock:
         if data_type not in ('100d', '100h') or self.type not in ('crypto', 'stock'):
             raise ValueError('Unbekannter Anlagetyp oder Analysezeitraum.')
 
+        # Mehr Historie laden als angezeigt wird (Indikatoren, Support/Resistance).
+        # Gekürzt auf 100 Werte wird erst nach der Indikator-Berechnung.
+        # CoinGecko: 2-90 Tage = stündlich, über 90 Tage = täglich -> Auflösung bleibt gleich.
+        # Etwas mehr anfragen und dann auf gleich viele Werte kürzen:
+        # Krypto und Aktien haben so 250 Tageswerte bzw. 450 Stundenwerte.
+        history = {'100d': 250, '100h': 450}
         if self.type == 'crypto':
             if data_type == '100d':
-                self.params_crypto_stock = {'vs_currency': 'eur', 'days': '100'}   
+                self.params_crypto_stock = {'vs_currency': 'eur', 'days': '260'}
             elif data_type == '100h':
-                self.params_crypto_stock = {'vs_currency': 'eur', 'days': '4.17'}
+                self.params_crypto_stock = {'vs_currency': 'eur', 'days': '20'}
             df = func.get_crypto(self.symbol,self.params_crypto_stock)
-        elif self.type == 'stock':   
+        elif self.type == 'stock':
             if data_type == '100d':
-                self.params_crypto_stock = "6mo"
+                self.params_crypto_stock = "2y"
             elif data_type == '100h':
-                self.params_crypto_stock = "1mo"
+                self.params_crypto_stock = "6mo"
             df = func.get_stock(self.symbol,self.params_crypto_stock)
+        if df is not None:
+            df = df.tail(history[data_type]).reset_index(drop=True)
         return df
 
     def process_data(self, df, data_type):
@@ -181,11 +192,14 @@ class CryptoStock:
             raise ValueError(f"Zu wenige Kursdaten für {self.symbol} (mindestens 26 benötigt).")
 
         df = func.calc_indicator_fuctions(df)
+        self.state.sr_zones = func.support_resistance(df)  # vor dem Kürzen: braucht die lange Historie
+        df = func.cut_to_window(df)
         self.state = func.calc_state_fuctions(self.state, df)
         alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type)
         alarms_filter = func.filter(alarms, self.state)
-        
-        return alarms_filter
+
+        # Gekürzte Daten zurückgeben, damit Diagramm und Übersicht dieselben 100 Werte nutzen.
+        return df, alarms_filter
 
     def plot_send(self, df, data_type, alarms_filter):
         if not alarms_filter:
@@ -193,8 +207,8 @@ class CryptoStock:
         # Ein eigenes Bild pro Versand verhindert ein späteres Überschreiben.
         for info in alarms_filter.values():
             image_name = "alarm_" + uuid.uuid4().hex
-            func.plot_and_save(df, image_name, data_type, self.state.zero_line)
-            func.pushover_image(image_name, info['msg'], info['priority'], delete_after_send=True)
+            func.plot_and_save(df, image_name, data_type, self.state.zero_line, self.state.sr_zones)
+            func.pushover_image(image_name, info['msg'], info['priority'], delete_after_send=True, html_format=True)
 
     def get_summary(self, df):
         return {
@@ -218,7 +232,11 @@ def valid_numbers(amount, qty):
     return amount, qty
 
 
-def read_watchlist(path="watchlist.ini"):
+def read_assets(path="assets.ini", alarm_only=False):
+    """Format je Zeile: symbol = Name; crypto|stock; 1
+    Die 1 am Ende heißt: wird in der automatischen Alarm-Analyse ausgewertet.
+    Ohne 1 (oder mit 0) nur für /check und /ai verfügbar.
+    alarm_only=True liefert nur die Werte mit 1."""
     config = configparser.ConfigParser(interpolation=None)
     if not config.read(path, encoding="utf-8-sig"):
         raise FileNotFoundError(f"{path} wurde nicht gefunden.")
@@ -230,10 +248,55 @@ def read_watchlist(path="watchlist.ini"):
             symbol = symbol.strip().lower()
             if not symbol or any(char in symbol for char in '/\\:*?"<>|'):
                 raise ValueError(f"Ungültiges Symbol in [{section}]: {symbol}")
-            entries[(asset_type, symbol)] = value.split(';')[0].strip() or symbol
-    if not entries:
-        raise ValueError("Die Watchlist enthält keine aktiven Symbole.")
+            parts = [part.strip() for part in value.split(';')]
+            alarm = parts[2] if len(parts) > 2 else ''
+            if alarm not in ('', '0', '1'):
+                raise ValueError(f"Ungültiges Alarm-Kennzeichen bei {symbol}: '{alarm}' (erlaubt: 1, 0 oder leer)")
+            if alarm_only and alarm != '1':
+                continue
+            entries[(asset_type, symbol)] = parts[0] or symbol
+    if not entries and not alarm_only:
+        raise ValueError(f"{path} enthält keine aktiven Symbole.")
     return entries
+
+
+def set_alarm(symbol, asset_type, active, path="assets.ini"):
+    """Setzt in assets.ini das Alarm-Kennzeichen (1 = an, 0 = aus) für einen Wert.
+    Die Datei wird zeilenweise geändert, damit Kommentare und Ausrichtung erhalten bleiben."""
+    section_name = 'crypto' if asset_type == 'crypto' else 'stocks'
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    section, found = None, False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            section = stripped[1:-1].strip().lower()
+            continue
+        if section != section_name or stripped.startswith(('#', ';')) or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        if key.strip().lower() != symbol.lower():
+            continue
+        parts = [part.strip() for part in value.split(';')]
+        while len(parts) < 3:
+            parts.append(asset_type if len(parts) == 1 else '')
+        parts[2] = '1' if active else '0'
+        lines[index] = f"{key}= {'; '.join(parts)}"
+        found = True
+        break
+    if not found:
+        raise ValueError(f"{symbol} ist nicht in {path} im Abschnitt [{section_name}] vorhanden.")
+    # Erst vollständig in eine neue Datei schreiben, dann austauschen (wie bei transactions.csv)
+    directory = os.path.dirname(os.path.abspath(path))
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=directory, suffix='.tmp', delete=False) as file:
+            temp_path = file.name
+            file.write('\n'.join(lines) + '\n')
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 def read_transactions(path="transactions.csv"):

@@ -7,6 +7,7 @@ from urllib.parse import quote  # only if you need to encode URL parts
 import urllib.request, json
 import random
 import math
+import html
 
 # --- External Packages ---
 import requests #instal
@@ -22,6 +23,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import matplotlib.patches as mpatches
+import matplotlib.transforms as mtransforms
 import multiprocessing as mp
 
 _message_queue = None
@@ -34,7 +36,7 @@ previous_alarm_change = 0.0
 def get_stock(symbol, period):
     df = pd.DataFrame()
     
-    if period == '1mo':
+    if period == '6mo':
         interval = '1h'
     else:
         interval = '1d'
@@ -89,7 +91,7 @@ def get_stock(symbol, period):
     if 'Date' not in df.columns:
         df['Date'] = df.index
     
-    df = df.tail(100).copy()
+    df = df.copy()  # gesamte Historie behalten, gekürzt wird in cut_to_window()
     df['Price'] = stock_prices_in_eur(stock, df, period)
     
     df_inverted = df.reset_index(drop=True)
@@ -171,7 +173,7 @@ def get_crypto(symbol, params_historical):
     df = prices.merge(volumes, on='Timestamp', how='left')
     df['Date'] = pd.to_datetime(df.pop('Timestamp'), unit='ms', utc=True).dt.tz_localize(None)
     df['Volume'] = df['Volume'].fillna(0)
-    df = df.sort_values('Date').drop_duplicates('Date', keep='last').tail(100)
+    df = df.sort_values('Date').drop_duplicates('Date', keep='last')  # gekürzt wird in cut_to_window()
     return df[['Date', 'Price', 'Volume']].reset_index(drop=True)
 
 
@@ -192,11 +194,7 @@ def calc_indicator_fuctions(df):
     df['Position'] = df['Signal'].diff()
     df['Diff EMA'] = df['Fast EMA'] - df['Slow EMA']
 
-    # Calculate min and max
-    df['High'] = df['Fast EMA'].max()
-    df['Low'] = df['Fast EMA'].min()
-    df['HighP'] = np.where(df['Fast EMA'] == df['High'], 1, 0)
-    df['LowP'] = np.where(df['Fast EMA'] == df['Low'], 1, 0)
+    # Min und Max werden erst in cut_to_window() auf den 100 Werten berechnet.
 
     # Calculate the slope of Fast EMA
     df['Fast EMA Slope'] = df['Fast EMA'].diff()
@@ -226,6 +224,142 @@ def calc_indicator_fuctions(df):
     df['BB_Mid'], df['BB_Upper'], df['BB_Lower'] = bollinger_bands(df, 'Price', window=20)
 
     return df
+
+def cut_to_window(df, window=100):
+    # Indikatoren wurden auf der langen Historie berechnet (kein Anlauf mehr am linken Rand).
+    # Ausgewertet und gezeichnet werden nur die letzten 100 Werte.
+    df = df.tail(window).reset_index(drop=True).copy()
+
+    # Calculate min and max (nach dem Kürzen: bleibt das 100-Tage/-Stunden Minimum/Maximum)
+    df['High'] = df['Fast EMA'].max()
+    df['Low'] = df['Fast EMA'].min()
+    df['HighP'] = np.where(df['Fast EMA'] == df['High'], 1, 0)
+    df['LowP'] = np.where(df['Fast EMA'] == df['Low'], 1, 0)
+
+    return df
+
+def support_resistance(df, order=5):
+    """Nächste Resistance über und nächster Support unter dem aktuellen Kurs.
+    Nur Schlusskurs + Volumen -> gleiches Verfahren für Krypto/Aktie und Tage/Stunden.
+    df ist die lange Historie (250 Tage / 450 Stunden), nicht das 100er-Fenster."""
+    p = df['Price'].to_numpy(float)
+    if len(p) < 2 * order + 2:
+        return None, None
+
+    # Umkehrpunkte: höchster/tiefster Wert innerhalb von ±order Werten
+    pivots = []
+    for i in range(order, len(p) - order):
+        window = p[i - order:i + order + 1]
+        if p[i] == window.max() or p[i] == window.min():
+            pivots.append(p[i])
+
+    # Zonenbreite aus typischer Bewegung pro Wert (Stunden schmaler als Tage)
+    width = max(2 * float(np.median(np.abs(np.diff(p) / p[:-1]))), 0.004)
+
+    # Nahe Umkehrpunkte zu Zonen zusammenfassen; eine Zone wächst höchstens auf 2 Breiten
+    zones = []
+    for pivot in sorted(pivots):
+        if zones and pivot <= zones[-1]['low'] * (1 + 2 * width):
+            zones[-1]['high'] = pivot
+            zones[-1]['touches'] += 1
+        else:
+            zones.append({'low': pivot, 'high': pivot, 'touches': 1})
+    for zone in zones:
+        zone['low'], zone['high'] = zone['low'] * (1 - width / 2), zone['high'] * (1 + width / 2)
+        zone['center'] = (zone['low'] + zone['high']) / 2
+
+    # Nächste Zone über/unter dem Kurs; die Stärke (Berührungen) steht später in der Legende
+    price = p[-1]
+    above = [zone for zone in zones if zone['low'] > price]
+    below = [zone for zone in zones if zone['high'] < price]
+    resistance = min(above, key=lambda zone: zone['low']) if above else None
+    support = max(below, key=lambda zone: zone['high']) if below else None
+
+    # Notlösung: Hoch/Tief des geladenen Zeitraums (touches = 0)
+    if resistance is None and p.max() > price:
+        resistance = {'low': p.max(), 'high': p.max(), 'center': p.max(), 'touches': 0}
+    if support is None and p.min() < price:
+        support = {'low': p.min(), 'high': p.min(), 'center': p.min(), 'touches': 0}
+
+    return resistance, support
+
+def formation_signals(df, order=5, recent=30):
+    """Anzeichen für Boden- und Topbildung (für die KI-Frage bei /ai).
+    df ist die lange Historie mit Indikatoren. Nur Schlusskurs, RSI und Volumen."""
+    p = df['Price'].to_numpy(float)
+    rsi = df['RSI14'].to_numpy(float)
+    v = df['Volume'].to_numpy(float)
+    ema = df['Fast EMA'].to_numpy(float)
+    n = len(p)
+    # Umkehrpunkte; die letzten brauchen nur 2 Werte danach, damit frische Tiefs/Hochs zählen
+    lows = [i for i in range(order, n - 2) if p[i] == p[i - order:i + order + 1].min()]
+    highs = [i for i in range(order, n - 2) if p[i] == p[i - order:i + order + 1].max()]
+    tolerance = max(2 * float(np.median(np.abs(np.diff(p) / p[:-1]))), 0.01)   # "gleiche Höhe"
+    volume_median = float(np.median(v[-100:])) or 1.0
+
+    def check(points, bottom):
+        result = {}
+        last_two = points[-2:] if len(points) >= 2 and points[-1] >= n - recent else []
+        if last_two:
+            a, b = last_two
+            between = p[a:b + 1]
+            result['folge'] = p[b] > p[a] if bottom else p[b] < p[a]            # höhere Tiefs / tiefere Hochs
+            result['divergenz'] = bool(p[b] < p[a] and rsi[b] > rsi[a]) if bottom else bool(p[b] > p[a] and rsi[b] < rsi[a])
+            same_level = abs(p[b] / p[a] - 1) <= tolerance
+            gap = between.max() > max(p[a], p[b]) * (1 + 2 * tolerance) if bottom else between.min() < min(p[a], p[b]) * (1 - 2 * tolerance)
+            result['doppel'] = bool(same_level and gap)                         # Doppelboden / Doppeltop
+        else:
+            result['folge'] = result['divergenz'] = result['doppel'] = None     # kein aktuelles Tief/Hoch
+        # Volumen-Höhepunkt am Extrem der letzten 20 Werte (Kapitulation / Kaufrausch)
+        k = n - 20 + int(np.argmax(v[-20:]))
+        extreme = n - 20 + int(np.argmin(p[-20:]) if bottom else np.argmax(p[-20:]))
+        direction = p[k] < p[k - 1] if bottom else p[k] > p[k - 1]
+        result['volumen'] = bool(direction and v[k] >= 1.5 * volume_median and abs(k - extreme) <= 3)
+        # Bestätigung: Kurs zurück über (Boden) bzw. unter (Top) dem EMA12
+        result['bestaetigung'] = bool(p[-1] > ema[-1]) if bottom else bool(p[-1] < ema[-1])
+        return result
+
+    return check(lows, True), check(highs, False)
+
+def trend_phase(prices):
+    """Marktphase aus Tageskursen nach der klassischen Trendregel:
+    Kurs und SMA50 über SMA200 = bullisch, beide darunter = bärisch, sonst Übergang."""
+    p = pd.Series(prices, dtype=float).dropna().reset_index(drop=True)
+    if len(p) < 200:
+        return 'nicht belegbar (weniger als 200 Tageswerte)'
+    sma50, sma200 = p.rolling(50).mean(), p.rolling(200).mean()
+    price, s50, s200 = p.iloc[-1], sma50.iloc[-1], sma200.iloc[-1]
+    if price > s200 and s50 > s200:
+        phase = 'bullisch'
+    elif price < s200 and s50 < s200:
+        phase = 'bärisch'
+    else:
+        phase = 'neutral (Übergang)'
+    before = sma200.iloc[-21]   # Richtung des SMA200 über 20 Tage
+    slope = 'unklar' if pd.isna(before) else 'steigend' if s200 > before else 'fallend'
+
+    # Letzte Kreuzung SMA50/SMA200: Golden Cross (nach oben) / Death Cross (nach unten)
+    above = (sma50 > sma200)[sma200.notna()]
+    changes = above.index[1:][above.iloc[1:].to_numpy() != above.iloc[:-1].to_numpy()]
+    if len(changes):
+        last = changes[-1]
+        cross = f"{'Golden Cross' if above[last] else 'Death Cross'} vor {len(p) - 1 - last} Tagen"
+    else:
+        cross = f"keine SMA50/SMA200-Kreuzung in den letzten {len(above)} Tagen"
+    distance = f"{(price / s200 - 1) * 100:+.1f} %".replace('.', ',')
+    return (f"{phase} (Kurs {distance} zum SMA200, SMA50 {'über' if s50 > s200 else 'unter'} SMA200, "
+            f"SMA200 {slope}; {cross})")
+
+def market_prices(asset_type, symbol):
+    """Leitmarkt für die Marktphase: Bitcoin für Krypto, Börsenindex je Handelsplatz für Aktien."""
+    if asset_type == 'crypto':
+        df = get_crypto('bitcoin', {'vs_currency': 'eur', 'days': '260'})
+        return 'Bitcoin (Leitwert Krypto)', None if df is None else df['Price']
+    suffix = symbol.upper().rsplit('.', 1)[-1] if '.' in symbol else ''
+    ticker, name = {'DE': ('^GDAXI', 'DAX'), 'F': ('^GDAXI', 'DAX'),
+                    'MI': ('FTSEMIB.MI', 'FTSE MIB')}.get(suffix, ('^GSPC', 'S&P 500'))
+    hist = yf.Ticker(ticker).history(period='2y', interval='1d', timeout=20)   # Index in eigener Währung
+    return name, None if hist.empty else hist['Close'].tail(250)
 
 def calc_state_fuctions(state,df):
     # update balances and indicators into grouped state
@@ -425,7 +559,7 @@ def human_format(num, pos):
 def human_format_euro(num, pos):
     return human_format(num, pos) + '€'
 
-def plot_and_save(df, symbol, data_type, zero_line=None):
+def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
     if df is None or df.empty:
         raise ValueError("Kein Diagramm ohne Kursdaten möglich.")
     if df is not None and not df.empty:
@@ -433,6 +567,10 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
         fig, (ax1, ax3) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
         ax2 = ax1.twinx()
         #fig.patch.set_alpha(0)
+        # Fortlaufende Nummer statt Kalenderdatum: Wochenenden und Nächte ohne Handel
+        # erzeugen so keine Lücken, jeder Balken ist gleich breit.
+        x = pd.Series(np.arange(len(df)), index=df.index)
+        dates = pd.to_datetime(df['Date']).reset_index(drop=True)
 
     #-----------Background
         df_min, df_max = df['Price'].min(), df['Price'].max()
@@ -448,27 +586,35 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
 
     #---------Axis set-up
         from matplotlib.ticker import MaxNLocator
+        # Markierung beim ersten Wert jedes neuen Tages (100h) bzw. Monats (100d).
+        period = dates.dt.strftime('%Y-%m-%d' if data_type=='100h' else '%Y-%m')
+        ticks = [i for i in range(1, len(dates)) if period.iloc[i] != period.iloc[i-1]]
+        # Bei vielen Markierungen (z.B. Aktien-Stundenwerte) nur jede zweite beschriften,
+        # sonst überlagern sich die Datumsangaben. Die senkrechten Linien bleiben alle.
+        labeled = set(ticks[::2]) if len(ticks) > 8 else set(ticks)
         for ax in [ax1, ax2, ax3]:
             #ax1.set_title('100 Hours' if data_type=='100h' else '100 Days', fontsize=14)
-            ax.xaxis.set_major_locator(mdates.DayLocator() if data_type=='100h' else mdates.MonthLocator())
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
+            ax.xaxis.set_major_locator(mticker.FixedLocator(ticks))
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(
+                lambda value, pos: dates.iloc[int(round(value))].strftime('%d.%m') if int(round(value)) in labeled else ''))
             ax.grid(True, axis='x', color='black', alpha=0.4)
             ax.spines['top'].set_visible(False)
             ax.spines['bottom'].set_visible(False)
             ax.spines['left'].set_visible(False)
             ax.spines['right'].set_visible(False)
             #ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+        ax3.grid(False)  # Volumenbalken ohne senkrechte Linien besser sichtbar
 
         ax2.yaxis.set_major_locator(MaxNLocator(nbins=4))
-        ax1.yaxis.set_major_locator(MaxNLocator(nbins=4))
-        ax1.yaxis.set_major_locator(MaxNLocator(nbins=3))
         ax2.yaxis.set_major_formatter(mticker.PercentFormatter())
-        ax1.yaxis.set_major_formatter(mticker.FuncFormatter(human_format_euro))
+        # Prozent-Achse links anzeigen, Kurswerte-Achse ausblenden.
+        ax2.yaxis.tick_left()
+        ax1.tick_params(axis='y', left=False, labelleft=False)
         ax3.yaxis.set_major_formatter(mticker.FuncFormatter(human_format))
         
     #--------------Drawing
         ax1.fill_between(
-            df['Date'], 
+            x,
             df['BB_Lower'], 
             df['BB_Upper'], 
             color='grey', 
@@ -482,6 +628,54 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
             padding = max(abs(lower) * 0.01, 0.01)
             lower, upper = lower - padding, upper + padding
         ax1.set_ylim(lower, upper)
+
+        # Rechts 20% der Breite frei lassen, damit das Volume-Profile den Kurs nicht überlagert.
+        vp_share = 0.2
+        ax1.set_xlim(-1, -1 + (len(df) + 1) / (1 - vp_share - 0.02))
+
+        # Volume-Profile (wie TradingView "sichtbare Range"): Volumen je Preisstufe,
+        # rechts im Hintergrund. Breite in Anteil der Diagrammbreite, Höhe in Euro.
+        if 'Volume' in df.columns:
+            profile, edges = np.histogram(df['Price'], bins=24, range=(lower, upper), weights=df['Volume'])
+            if profile.max() > 0:
+                trans = mtransforms.blended_transform_factory(ax1.transAxes, ax1.transData)
+                widths = profile / profile.max() * vp_share      # längster Balken füllt den freien Bereich
+                vp_colors = ['0.45' if i == profile.argmax() else '0.6' for i in range(len(profile))]  # POC etwas dunkler
+                ax1.barh(edges[:-1], widths, height=np.diff(edges) * 0.9, left=1 - widths, align='edge',  # am rechten Rand ausgerichtet
+                         color=vp_colors, alpha=0.3, linewidth=0, transform=trans, zorder=0)
+                # Schwarzer Strich am Ende jedes Balkens: Länge bleibt auch unter Beschriftungen erkennbar.
+                filled = profile > 0
+                ax1.vlines((1 - widths)[filled], edges[:-1][filled], (edges[:-1] + np.diff(edges) * 0.9)[filled],
+                           colors='black', linewidth=0.8, transform=trans, zorder=6)
+
+        # Support/Resistance: Band mit Nummer (R1/S1), ausführlicher Text in der Legende oben rechts.
+        if sr_zones is not None:
+            handles = []
+            for zone, name in zip(sr_zones, ('R1', 'S1')):
+                if zone is None:
+                    continue
+                color = '#c0392b' if name == 'R1' else '#1e8449'
+                alpha = 0.22 if zone['touches'] >= 2 else 0.12   # schwache Zone (1 Berührung) heller
+                pct = (zone['center'] / df['Price'].iloc[-1] - 1) * 100
+                text = f"{name} {human_format_euro(zone['center'], None)} ({pct:+.1f} %)"
+                if zone['touches']:
+                    text += f" · {zone['touches']}×"
+                else:
+                    text += " · Hoch Zeitraum" if name == 'R1' else " · Tief Zeitraum"
+                if zone['high'] >= lower and zone['low'] <= upper:
+                    ax1.axhspan(zone['low'], zone['high'], xmax=1 - vp_share - 0.02, color=color, alpha=alpha, linewidth=0, zorder=0.5)
+                    ax1.text(1 - vp_share - 0.015, zone['center'], name, transform=ax1.get_yaxis_transform(), fontsize=7,
+                             color=color, fontweight='bold', va='center', ha='left', zorder=5)
+                else:
+                    # Zone außerhalb des Bildes: Nummer mit Pfeil am oberen/unteren Rand
+                    y, arrow = (0.97, '▲') if zone['center'] > upper else (0.03, '▼')
+                    ax1.text(1 - vp_share - 0.015, y, f"{arrow} {name}", transform=ax1.transAxes, fontsize=7,
+                             color=color, fontweight='bold', va='center', ha='left', zorder=5)
+                handles.append(mpatches.Patch(color=color, alpha=alpha + 0.1, label=text))
+            if handles:
+                # Legende über dem Diagramm: verdeckt weder Kurs noch Volume-Profile.
+                ax1.legend(handles=handles, loc='lower right', bbox_to_anchor=(1, 1), ncol=len(handles),
+                           fontsize=7, frameon=False, handlelength=1, borderaxespad=0.2)
 
         min_remap = linear_remap(
             lower,
@@ -503,55 +697,50 @@ def plot_and_save(df, symbol, data_type, zero_line=None):
             min_remap, max_remap = min_remap - 1, max_remap + 1
         ax2.set_ylim(min_remap, max_remap)
         
-        ax1.plot(df['Date'], df['Price'], label='Price', color='k', linewidth=1.5)
-        ax1.plot(df['Date'], df['Fast EMA'], label='Fast EMA', linestyle=':', color='green')
-        ax1.plot(df['Date'], df['Slow EMA'], label='Slow EMA', linestyle=':', color='red')
-        ax1.plot(df.loc[df['Position']== 1.0, 'Date'], df.loc[df['Position']== 1.0, 'Fast EMA'], '^',  markersize=10, color='green', label='Buy')
-        ax1.plot(df.loc[df['Position']==-1.0, 'Date'], df.loc[df['Position']==-1.0, 'Fast EMA'], 'v',  markersize=10, color='red', label='Sell')
-        ax1.plot(df.loc[df['HighP']==1, 'Date'],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
-        ax1.plot(df.loc[df['LowP']==1,  'Date'],      df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
+        ax1.plot(x, df['Price'], label='Price', color='k', linewidth=1.5)
+        ax1.plot(x, df['Fast EMA'], label='Fast EMA', linestyle=':', color='green')
+        ax1.plot(x, df['Slow EMA'], label='Slow EMA', linestyle=':', color='red')
+        ax1.plot(x[df['Position']== 1.0], df.loc[df['Position']== 1.0, 'Fast EMA'], '^',  markersize=10, color='green', label='Buy')
+        ax1.plot(x[df['Position']==-1.0], df.loc[df['Position']==-1.0, 'Fast EMA'], 'v',  markersize=10, color='red', label='Sell')
+        ax1.plot(x[df['HighP']==1],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
+        ax1.plot(x[df['LowP']==1],       df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
 
-        ax2.plot(df['Date'], df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
+        ax2.plot(x, df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
 
         if 'Volume' in df.columns:
             colors = ['green' if close > open_val else 'red'
                     for open_val, close in zip(df['Price'].shift(1), df['Price'])]
             colors[0] = 'gray'
-            dates_num = mdates.date2num(df['Date'])               # Datum -> float (Tage)
-            if len(dates_num) > 1:
-                delta_days = float(np.median(np.diff(dates_num))) # typischer Abstand
-            else:
-                delta_days = 1.0
-            bar_width = delta_days * 0.8                          # 80% des Abstands
-
-            ax3.bar(dates_num, df['Volume'],
-                    width=bar_width, align='center',
+            # Abstand zwischen zwei Werten ist immer 1 -> Balken 80% davon
+            ax3.bar(x, df['Volume'],
+                    width=0.8, align='center',
                     color=colors, alpha=0.7, linewidth=0)
 
-            ax3.xaxis_date()  # Achse wieder als Datum formatieren
-            ax3.margins(x=0.01)  # etwas Rand, damit nichts abgeschnitten wird 
+            ax3.margins(x=0.01)  # etwas Rand, damit nichts abgeschnitten wird
 
     #-------------Save
         os.makedirs(output_dir, exist_ok=True)
     # Set figure background to white
     fig.patch.set_facecolor('white')
-    plt.savefig(os.path.join(output_dir, f"{symbol}.png"), bbox_inches='tight', facecolor='white', transparent=False)
+    # dpi=200 ergibt ca. 1200 Pixel Breite, passend zur Telegram-Maximalgröße von 1280 Pixeln.
+    plt.savefig(os.path.join(output_dir, f"{symbol}.png"), dpi=200, bbox_inches='tight', facecolor='white', transparent=False)
     plt.close(fig)
 
 def set_message_queue(queue: mp.Queue):
     global _message_queue
     _message_queue = queue
 
-def pushover(message: str, priority: int = 0):
+def pushover(message: str, priority: int = 0, html_format=False):
     log_print(message)
     if _message_queue:
-        _message_queue.put({'type': 'text', 'message': message, 'priority': priority})
+        _message_queue.put({'type': 'text', 'message': message, 'priority': priority, 'html': html_format})
     else:
         log_print("No queue – message discarded.")
 
-def pushover_image(symbol: str, message: str, priority: int = 0, delete_after_send=False):
+def pushover_image(symbol: str, message: str, priority: int = 0, delete_after_send=False, html_format=False):
+    # html_format=True: Nachricht enthält Telegram-HTML (<b>, <i>, <pre>)
     if _message_queue:
-        _message_queue.put({'type': 'image', 'symbol': symbol, 'message': message, 'priority': priority, 'output_dir': output_dir, 'delete_after_send': delete_after_send})
+        _message_queue.put({'type': 'image', 'symbol': symbol, 'message': message, 'priority': priority, 'output_dir': output_dir, 'delete_after_send': delete_after_send, 'html': html_format})
     else:
         log_print("No queue – image discarded.")
 
@@ -682,15 +871,24 @@ def analysis_details(df):
     def line(column):
         count, value = signals[column], quantiles[column]
         if not math.isfinite(value):
-            return f"{column}: keine Daten (neutral gewertet)"
+            return f"{column:<6} keine Daten (neutral gewertet)"
         marks = '+' * count if count > 0 else '-' * abs(count) if count < 0 else '●'
-        return f"{column}: {value:.2f} % {marks}"
+        return f"{column:<6}{value:>7.2f} %  {marks}"   # feste Breite: Werte stehen untereinander
 
-    message = (f"📊 Score: {score}\n{'─' * 5}\n"
-               f"{line('RSI14')}\n{text1}\n\n"
-               f"{line('SMA7')}\n{line('VMA7')}\n{text3}\n\n"
-               f"{line('ROC5')}\n{line('VROC5')}\n{text2}")
-    return {'score': score, 'quantiles': quantiles, 'message': message}
+    def block(lines, text):
+        # Telegram-HTML: Werte in Festbreitenschrift, Überschrift fett, Einschätzung kursiv.
+        # "Trend-Analysis: ..." wird geteilt, damit der lange Satz in eigener Zeile steht.
+        label, sentence = text.split(': ', 1) if ': ' in text else ('', text)
+        head = f"<b>{html.escape(label)}</b>\n" if label else ''
+        return f"{head}<pre>{html.escape(chr(10).join(lines))}</pre>\n<i>{html.escape(sentence)}</i>"
+
+    message = (f"<b>Score: {score}</b>\n\n"
+               f"{block([line('RSI14')], text1)}\n\n"
+               f"{block([line('SMA7'), line('VMA7')], text3)}\n\n"
+               f"{block([line('ROC5'), line('VROC5')], text2)}")
+    # Einschätzungen ohne Überschrift (z.B. für die KI-Frage bei /ai)
+    texts = {'rsi': text1, 'trend': text3.split(': ', 1)[-1], 'short': text2.split(': ', 1)[-1]}
+    return {'score': score, 'quantiles': quantiles, 'message': message, 'texts': texts}
 
 
 def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type):
@@ -706,15 +904,15 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
 
     def create_alarm(code, buy_sell, indicator, value):
-        emoji = "🟢" if buy_sell == "Buy" else "🔴"
         priority = 1 if (score > 5 and buy_sell == "Buy") or (score < -5 and buy_sell == "Sell") else 0
+        # Telegram-HTML (fett/kursiv/Festbreite), deshalb Texte mit html.escape absichern
         message = (
-            f"{emoji} {symbol} — {buy_sell}\n"
-            f"🔔 Trigger: {indicator} ({data_type})\n"
+            f"<b>{html.escape(symbol)} — {buy_sell}</b>\n"
+            f"Trigger: {html.escape(indicator)} ({data_type})\n\n"
             + details['message']
         )
         if not watch_list:
-            message += f"\n📅 Amount >1 year: {amount_older_than_one_year:.2f} ({amount_older_than_one_year_pct:.2f} %)"
+            message += "\n\n" + html.escape(f"Amount >1 year: {amount_older_than_one_year:.2f} ({amount_older_than_one_year_pct:.2f} %)")
         alarms[code] = {"value": value, "priority": priority, "msg": message}
 
     # Nur das Datum: CoinGecko liefert als letzten Wert die aktuelle Uhrzeit.
@@ -872,56 +1070,79 @@ def older_than_one_year(df):
     
     return total_amount
 
-def create_table_image(
-    df,
-    output_path,
-    body_fontsize=7,
-    header_fontsize=5.5,
-    header_color="#3A778A",
-    fig_width=4.5,
-    row_height=0.45,
-    left_col_width=0.22,
-    other_col_width=0.13,
-    dpi=200
-):
-    # Height: Data rows + some space for header
-    fig_height = len(df) * row_height + 0.5
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    ax.axis("off")
+def euro_de(value):
+    # deutsches Zahlenformat: 71.660,12 €
+    return f"{value:,.2f} €".replace(',', 'X').replace('.', ',').replace('X', '.')
 
-    # Color header using colColours (robust with edges='horizontal')
-    table = ax.table(
-        cellText=df.values,
-        colLabels=df.columns,
-        cellLoc="center",
-        loc="center",
-        bbox=[0, 0, 1, 1],
-        edges="horizontal",
-        colColours=[header_color] * len(df.columns),
-    )
+def create_table_image(df, output_path, title='', subtitle='', dpi=200):
+    """Tagesübersicht als moderne Rangliste: sortiert nach 1d P&L, beste Zeile hervorgehoben,
+    1d P&L zusätzlich als Balken (grün nach rechts, rot nach links)."""
+    GREEN, RED, GREY, DARK = '#1e8449', '#c0392b', '#8a8a8a', '#222222'
 
-    # Set column widths
-    col_widths = [left_col_width] + [other_col_width] * (len(df.columns) - 1)
-    total_rows = len(df) + 1  # +1 wegen Header
-    for j in range(total_rows):
-        for i, w in enumerate(col_widths):
-            table[(j, i)].set_width(w)
+    def pct_color(value):
+        return GREEN if value > 0 else RED if value < 0 else GREY
 
-    # Fonts
-    table.auto_set_font_size(False)
-    table.set_fontsize(body_fontsize)
+    df = df.sort_values('1d P&L [%]', ascending=False).reset_index(drop=True)
+    rows = len(df)
+    fig, ax = plt.subplots(figsize=(6.4, 0.95 + rows * 0.42))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(rows + 1.6, -0.2)   # y nach unten: Titel oben, dann Kopfzeile, dann Zeilen
+    ax.axis('off')
 
-    # Format header text
-    for i in range(len(df.columns)):
-        cell = table[(0, i)]
-        cell.set_text_props(weight="bold", color="white", fontsize=header_fontsize)
-        cell.visible_edges = "closed"  # optional: Header komplett umrandet
+    # Spalten (x-Position, Ausrichtung)
+    col = {'rank': (0.03, 'center'), 'name': (0.07, 'left'), 'price': (0.43, 'right'),
+           'bar': (0.47, 0.71), 'd1': (0.81, 'right'), 'd7': (0.91, 'right'), 'rating': (0.965, 'center')}
 
-    # Slight scaling for denser layout
-    table.scale(0.55, 1.0)
+    # Titel
+    ax.text(0.0, 0.25, title, fontsize=12, fontweight='bold', color=DARK, va='center')
+    ax.text(1.0, 0.25, subtitle, fontsize=7.5, color=GREY, va='center', ha='right')
 
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor="white")
-    plt.close()
+    # Kopfzeile
+    header_y = 1.0
+    for key, label in (('rank', '#'), ('name', 'NAME'), ('price', 'KURS'), ('d1', '1D P&L'),
+                       ('d7', '7D'), ('rating', 'RATING')):
+        x, align = col[key]
+        ax.text(x, header_y, label, fontsize=6.5, color=GREY, fontweight='bold', ha=align, va='center')
+    ax.plot([0, 1], [header_y + 0.35, header_y + 0.35], color='#dddddd', linewidth=0.8)
+
+    # Balkenlänge: größter Ausschlag füllt die halbe Balkenspalte
+    bar_left, bar_right = col['bar']
+    bar_mid = (bar_left + bar_right) / 2
+    max_abs = max(df['1d P&L [%]'].abs().max(), 0.01)
+
+    for i, row in df.iterrows():
+        y = header_y + 1 + i
+        d1, d7, rating = row['1d P&L [%]'], row['7d P&L [%]'], int(row['Rating'])
+
+        # Hintergrund: beste Zeile (mit Gewinn) grün getönt, sonst abwechselnd hell
+        if i == 0 and d1 > 0:
+            background = '#e9f6ec'
+        else:
+            background = '#f7f7f7' if i % 2 else 'white'
+        ax.add_patch(mpatches.FancyBboxPatch((0, y - 0.42), 1, 0.84, boxstyle='round,pad=0,rounding_size=0.01',
+                                             facecolor=background, edgecolor='none', zorder=0))
+
+        ax.text(col['rank'][0], y, str(i + 1), fontsize=8, color=GREY, ha='center', va='center')
+        ax.text(col['name'][0], y, row['Name'], fontsize=9, color=DARK, fontweight='bold', ha='left', va='center')
+        ax.text(col['price'][0], y, euro_de(row['Piece [€]']), fontsize=8.5, color=DARK, ha='right', va='center')
+
+        # 1d P&L als Balken ab der Mitte
+        length = d1 / max_abs * (bar_right - bar_left) / 2
+        ax.add_patch(mpatches.Rectangle((min(bar_mid, bar_mid + length), y - 0.15), abs(length), 0.3,
+                                        facecolor=pct_color(d1), edgecolor='none', alpha=0.85, zorder=1))
+        ax.plot([bar_mid, bar_mid], [y - 0.3, y + 0.3], color='#cccccc', linewidth=0.8, zorder=2)
+
+        ax.text(col['d1'][0], y, f"{d1:+.2f} %", fontsize=9, color=pct_color(d1), fontweight='bold', ha='right', va='center')
+        ax.text(col['d7'][0], y, f"{d7:+.1f} %", fontsize=7.5, color=pct_color(d7), ha='right', va='center')
+
+        # Rating als kleines farbiges Feld
+        ax.text(col['rating'][0], y, f"{rating:+d}" if rating else '0', fontsize=7.5, color='white', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=pct_color(rating), edgecolor='none'))
+
+    fig.patch.set_facecolor('white')
+    plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
 
 
 
