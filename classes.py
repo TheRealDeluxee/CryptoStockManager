@@ -51,7 +51,7 @@ class GroupedState:
     amount_older_than_one_year_pct: float = 0
     # derived values used in plotting
     zero_line: Optional[float] = None
-    sr_zones: Any = None  # (Resistance, Support) aus der langen Historie
+    sr_zones: Any = None  # (resistance, support) from the long history
 
 
 class CryptoStock:
@@ -68,7 +68,7 @@ class CryptoStock:
         
 
     def buy(self, fiat_eur, amount, date):
-        # Erst prüfen, dann buchen: Ein Fehler darf den Bestand nicht verändern.
+        # Validate first, then book: an error must not change the holdings.
         fiat_eur, amount = valid_numbers(fiat_eur, amount)
         parsed_date = datetime.strptime(str(date).strip(), "%d/%m/%Y")
         self.state.df_buy_history.loc[len(self.state.df_buy_history)] = [parsed_date, fiat_eur, amount]
@@ -79,33 +79,33 @@ class CryptoStock:
 
     def sell(self, fiat_eur, amount, date=None):
         """
-        FIFO sell: reduziert Bestand und Cost-Basis anhand der Kaufhistorie.
+        FIFO sell: reduces holdings and cost basis based on the buy history.
 
         - sell_money += fiat_eur
-        - amount_crypto_stock -= amount (zu große Verkäufe werden abgelehnt)
-        - df_buy_history wird FIFO abgebaut (Amount + Cost [€])
-        - buy_balance_eur wird um die verkaufte FIFO-Cost-Basis reduziert
-        - behebt Pandas FutureWarning durch explizites float-casting
+        - amount_crypto_stock -= amount (sales larger than the holdings are rejected)
+        - df_buy_history is reduced FIFO (Amount + Cost [€])
+        - buy_balance_eur is reduced by the sold FIFO cost basis
+        - avoids the pandas FutureWarning by explicit float casting
         """
         fiat_eur, amount = valid_numbers(fiat_eur, amount)
         available = self.state.amount_crypto_stock
         if amount > available and not math.isclose(amount, available, rel_tol=1e-10, abs_tol=0.0):
-            raise ValueError(f"Verkauf von {amount} nicht möglich: Bestand ist nur {available}.")
+            raise ValueError(f"Cannot sell {amount}: holdings are only {available}.")
         amount = min(amount, available)
         if amount <= 0:
-            raise ValueError("Kein Bestand zum Verkaufen vorhanden.")
+            raise ValueError("No holdings to sell.")
         df = self.state.df_buy_history
         if df.empty or not math.isclose(float(df['Amount'].sum()), available, rel_tol=1e-9, abs_tol=0.0):
-            raise ValueError("Kaufhistorie und Bestand passen nicht zusammen.")
+            raise ValueError("Buy history and holdings do not match.")
 
-        # FIFO: Die ältesten noch offenen Käufe werden zuerst verkauft.
+        # FIFO: the oldest open buys are sold first.
         df = df.sort_values('Date', kind='stable').reset_index(drop=True)
         self.state.sell_money += fiat_eur
         self.state.amount_crypto_stock -= amount
         self.state.watch_list = self.state.amount_crypto_stock <= 0
 
-        # --- WICHTIG: dtypes fixen (verhindert FutureWarning) ---
-        # (kannst du auch einmalig in buy() machen; hier ist es robust)
+        # --- IMPORTANT: fix dtypes (prevents FutureWarning) ---
+        # (could also be done once in buy(); here it is robust)
         df = df.copy()
         if "Amount" in df.columns:
             df["Amount"] = df["Amount"].astype("float64")
@@ -129,7 +129,7 @@ class CryptoStock:
             take = min(row_amount, remaining)
             cost_taken = row_cost * (take / row_amount)
 
-            # offene Cost-Basis reduzieren
+            # reduce open cost basis
             self.state.buy_balance_eur -= cost_taken
 
             remaining -= take
@@ -143,13 +143,13 @@ class CryptoStock:
                 df.at[i, "Amount"] = float(leftover_amount)
                 df.at[i, "Cost [€]"] = float(leftover_cost)
 
-        # Historie bereinigen
+        # clean up history
         if rows_to_drop:
             df = df.drop(index=rows_to_drop).reset_index(drop=True)
 
         self.state.df_buy_history = df
 
-        # numerische Stabilität
+        # numerical stability
         if self.state.buy_balance_eur < 0 and abs(self.state.buy_balance_eur) < 1e-6:
             self.state.buy_balance_eur = 0.0
 
@@ -162,13 +162,13 @@ class CryptoStock:
 
     def get_API_data(self, data_type):
         if data_type not in ('100d', '100h') or self.type not in ('crypto', 'stock'):
-            raise ValueError('Unbekannter Anlagetyp oder Analysezeitraum.')
+            raise ValueError('Unknown asset type or analysis period.')
 
-        # Mehr Historie laden als angezeigt wird (Indikatoren, Support/Resistance).
-        # Gekürzt auf 100 Werte wird erst nach der Indikator-Berechnung.
-        # CoinGecko: 2-90 Tage = stündlich, über 90 Tage = täglich -> Auflösung bleibt gleich.
-        # Etwas mehr anfragen und dann auf gleich viele Werte kürzen:
-        # Krypto und Aktien haben so 250 Tageswerte bzw. 450 Stundenwerte.
+        # Load more history than displayed (indicators, support/resistance).
+        # Cutting to 100 values happens only after the indicator calculation.
+        # CoinGecko: 2-90 days = hourly, more than 90 days = daily -> resolution stays the same.
+        # Request a bit more and then cut to the same number of values:
+        # crypto and stocks both get 250 daily or 450 hourly values.
         history = {'100d': 250, '100h': 450}
         if self.type == 'crypto':
             if data_type == '100d':
@@ -189,22 +189,22 @@ class CryptoStock:
     def process_data(self, df, data_type):
 
         if df is None or df.empty or len(df) < 26:
-            raise ValueError(f"Zu wenige Kursdaten für {self.symbol} (mindestens 26 benötigt).")
+            raise ValueError(f"Not enough price data for {self.symbol} (at least 26 values required).")
 
         df = func.calc_indicator_fuctions(df)
-        self.state.sr_zones = func.support_resistance(df)  # vor dem Kürzen: braucht die lange Historie
+        self.state.sr_zones = func.support_resistance(df)  # before cutting: needs the long history
         df = func.cut_to_window(df)
         self.state = func.calc_state_fuctions(self.state, df)
         alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type)
         alarms_filter = func.filter(alarms, self.state)
 
-        # Gekürzte Daten zurückgeben, damit Diagramm und Übersicht dieselben 100 Werte nutzen.
+        # Return the cut data so that chart and summary use the same 100 values.
         return df, alarms_filter
 
     def plot_send(self, df, data_type, alarms_filter):
         if not alarms_filter:
             return
-        # Ein eigenes Bild pro Versand verhindert ein späteres Überschreiben.
+        # A separate image per message prevents it from being overwritten later.
         for info in alarms_filter.values():
             image_name = "alarm_" + uuid.uuid4().hex
             func.plot_and_save(df, image_name, data_type, self.state.zero_line, self.state.sr_zones)
@@ -220,7 +220,7 @@ class CryptoStock:
         }
 
 
-# Gemeinsame Datei-Prüfungen: Beim Eingeben und Laden gelten dieselben Regeln.
+# Shared file checks: the same rules apply when entering and when loading.
 CSV_HEADER = ["type", "symbol", "name", "action", "amount", "qty", "date"]
 
 
@@ -228,18 +228,18 @@ def valid_numbers(amount, qty):
     amount = float(str(amount).replace(',', '.'))
     qty = float(str(qty).replace(',', '.'))
     if not math.isfinite(amount) or not math.isfinite(qty) or amount <= 0 or qty <= 0:
-        raise ValueError("Betrag und Menge müssen endliche Zahlen größer als null sein.")
+        raise ValueError("Amount and quantity must be finite numbers greater than zero.")
     return amount, qty
 
 
 def read_assets(path="assets.ini", alarm_only=False):
-    """Format je Zeile: symbol = Name; crypto|stock; 1
-    Die 1 am Ende heißt: wird in der automatischen Alarm-Analyse ausgewertet.
-    Ohne 1 (oder mit 0) nur für /check und /ai verfügbar.
-    alarm_only=True liefert nur die Werte mit 1."""
+    """Format per line: symbol = Name; crypto|stock; 1
+    The 1 at the end means: evaluated in the automatic alarm analysis.
+    Without 1 (or with 0) only available for /check and /ai.
+    alarm_only=True returns only the assets with 1."""
     config = configparser.ConfigParser(interpolation=None)
     if not config.read(path, encoding="utf-8-sig"):
-        raise FileNotFoundError(f"{path} wurde nicht gefunden.")
+        raise FileNotFoundError(f"{path} not found.")
     entries = {}
     for section, asset_type in (("crypto", "crypto"), ("stocks", "stock")):
         if not config.has_section(section):
@@ -247,22 +247,22 @@ def read_assets(path="assets.ini", alarm_only=False):
         for symbol, value in config.items(section):
             symbol = symbol.strip().lower()
             if not symbol or any(char in symbol for char in '/\\:*?"<>|'):
-                raise ValueError(f"Ungültiges Symbol in [{section}]: {symbol}")
+                raise ValueError(f"Invalid symbol in [{section}]: {symbol}")
             parts = [part.strip() for part in value.split(';')]
             alarm = parts[2] if len(parts) > 2 else ''
             if alarm not in ('', '0', '1'):
-                raise ValueError(f"Ungültiges Alarm-Kennzeichen bei {symbol}: '{alarm}' (erlaubt: 1, 0 oder leer)")
+                raise ValueError(f"Invalid alarm flag for {symbol}: '{alarm}' (allowed: 1, 0 or empty)")
             if alarm_only and alarm != '1':
                 continue
             entries[(asset_type, symbol)] = parts[0] or symbol
     if not entries and not alarm_only:
-        raise ValueError(f"{path} enthält keine aktiven Symbole.")
+        raise ValueError(f"{path} contains no active symbols.")
     return entries
 
 
 def read_events(path="events.ini", assets_path="assets.ini"):
-    """Termine aus events.ini: name = symbol; DD/MM/YYYY; Beschreibung.
-    Der Typ (crypto/stock) und der Name kommen aus assets.ini. Fehlende Datei = keine Termine."""
+    """Events from events.ini: name = symbol; DD/MM/YYYY; description.
+    Type (crypto/stock) and name come from assets.ini. Missing file = no events."""
     config = configparser.ConfigParser(interpolation=None)
     if not config.read(path, encoding="utf-8-sig") or not config.has_section('events'):
         return []
@@ -271,35 +271,35 @@ def read_events(path="events.ini", assets_path="assets.ini"):
     for key, value in config.items('events'):
         parts = [part.strip() for part in value.split(';', 2)]
         if len(parts) < 2:
-            raise ValueError(f"{path}, Termin '{key}': Format ist symbol; DD/MM/YYYY; Beschreibung")
+            raise ValueError(f"{path}, event '{key}': format is symbol; DD/MM/YYYY; description")
         symbol = parts[0].lower()
         try:
             date = datetime.strptime(parts[1].replace('.', '/'), '%d/%m/%Y').date()
         except ValueError:
-            raise ValueError(f"{path}, Termin '{key}': ungültiges Datum '{parts[1]}' (Format DD/MM/YYYY)") from None
+            raise ValueError(f"{path}, event '{key}': invalid date '{parts[1]}' (format DD/MM/YYYY)") from None
         matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
         if len(matches) != 1:
-            problem = 'nicht in assets.ini' if not matches else 'als crypto und stock in assets.ini'
-            raise ValueError(f"{path}, Termin '{key}': {parts[0]} ist {problem}.")
+            problem = 'not in assets.ini' if not matches else 'listed as crypto and stock in assets.ini'
+            raise ValueError(f"{path}, event '{key}': {parts[0]} is {problem}.")
         events.append({'key': key, 'symbol': symbol, 'type': matches[0], 'name': assets[(matches[0], symbol)],
                        'date': date, 'text': parts[2] if len(parts) > 2 else ''})
     return sorted(events, key=lambda event: event['date'])
 
 
 def add_event(symbol, date_text, text, path="events.ini", assets_path="assets.ini"):
-    """Neuen Termin unten in events.ini anhängen (für /termin). Gibt (name, Asset-Name, Datum) zurück."""
+    """Append a new event at the end of events.ini (for /event). Returns (key, asset name, date)."""
     symbol = symbol.strip().lower()
     assets = read_assets(assets_path)
     matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
     if len(matches) != 1:
-        raise ValueError(f"{symbol} ist {'nicht in assets.ini' if not matches else 'als crypto und stock in assets.ini'}.")
+        raise ValueError(f"{symbol} is {'not in assets.ini' if not matches else 'listed as crypto and stock in assets.ini'}.")
     try:
         date = datetime.strptime(date_text.strip().replace('.', '/'), '%d/%m/%Y').date()
     except ValueError:
-        raise ValueError(f"Ungültiges Datum '{date_text}' (Format DD/MM/YYYY).") from None
+        raise ValueError(f"Invalid date '{date_text}' (format DD/MM/YYYY).") from None
     if date < datetime.now().date():
-        raise ValueError('Das Datum liegt in der Vergangenheit.')
-    text = ' '.join(text.split())   # keine Zeilenumbrüche in der ini
+        raise ValueError('The date is in the past.')
+    text = ' '.join(text.split())   # no line breaks in the ini
 
     lines = []
     if os.path.exists(path):
@@ -310,13 +310,13 @@ def add_event(symbol, date_text, text, path="events.ini", assets_path="assets.in
     existing = {line.split('=', 1)[0].strip().lower() for line in lines if '=' in line and not line.lstrip().startswith('#')}
     key = f"{symbol.replace('.', '_')}_{date:%Y%m%d}"
     number = 2
-    while key in existing:   # Name muss eindeutig sein
+    while key in existing:   # name must be unique
         key = f"{symbol.replace('.', '_')}_{date:%Y%m%d}_{number}"
         number += 1
     stock_symbol = symbol.upper() if matches[0] == 'stock' else symbol
     lines.append(f"{key:<24} = {stock_symbol}; {date:%d/%m/%Y}; {text}".rstrip('; '))
 
-    # Erst vollständig in eine neue Datei schreiben, dann austauschen (wie bei assets.ini)
+    # Write a complete new file first, then replace it (as for assets.ini)
     directory = os.path.dirname(os.path.abspath(path))
     temp_path = None
     try:
@@ -331,8 +331,8 @@ def add_event(symbol, date_text, text, path="events.ini", assets_path="assets.in
 
 
 def set_alarm(symbol, asset_type, active, path="assets.ini"):
-    """Setzt in assets.ini das Alarm-Kennzeichen (1 = an, 0 = aus) für einen Wert.
-    Die Datei wird zeilenweise geändert, damit Kommentare und Ausrichtung erhalten bleiben."""
+    """Sets the alarm flag (1 = on, 0 = off) of an asset in assets.ini.
+    The file is changed line by line so that comments and alignment are kept."""
     section_name = 'crypto' if asset_type == 'crypto' else 'stocks'
     with open(path, encoding='utf-8-sig') as file:
         lines = file.read().splitlines()
@@ -355,8 +355,8 @@ def set_alarm(symbol, asset_type, active, path="assets.ini"):
         found = True
         break
     if not found:
-        raise ValueError(f"{symbol} ist nicht in {path} im Abschnitt [{section_name}] vorhanden.")
-    # Erst vollständig in eine neue Datei schreiben, dann austauschen (wie bei transactions.csv)
+        raise ValueError(f"{symbol} is not in {path} in section [{section_name}].")
+    # Write a complete new file first, then replace it (as for transactions.csv)
     directory = os.path.dirname(os.path.abspath(path))
     temp_path = None
     try:
@@ -374,30 +374,30 @@ def read_transactions(path="transactions.csv"):
         with open(path, newline="", encoding="utf-8-sig") as file:
             reader = csv.DictReader(file, delimiter=';')
             if reader.fieldnames != CSV_HEADER:
-                raise ValueError("transactions.csv hat eine falsche oder fehlende Kopfzeile.")
+                raise ValueError("transactions.csv has a wrong or missing header.")
             rows = list(reader)
     except FileNotFoundError:
         return []
     for line, row in enumerate(rows, 2):
         try:
             if None in row or any(value is None for value in row.values()):
-                raise ValueError("Falsche Anzahl von Spalten.")
+                raise ValueError("Wrong number of columns.")
             row['type'] = row['type'].strip().lower()
             row['symbol'] = row['symbol'].strip().lower()
             row['action'] = row['action'].strip().lower()
             if row['type'] not in ('crypto', 'stock') or not row['symbol']:
-                raise ValueError("Ungültiger Typ oder fehlendes Symbol.")
+                raise ValueError("Invalid type or missing symbol.")
             if row['action'] not in ('buy', 'sell', 'watchlist'):
-                raise ValueError("Unbekannte Aktion.")
+                raise ValueError("Unknown action.")
             if row['action'] == 'watchlist':
                 continue
             valid_numbers(row['amount'], row['qty'])
             row['date'] = row['date'].strip().replace('.', '/')
             parsed_date = datetime.strptime(row['date'], '%d/%m/%Y')
             if parsed_date.date() > datetime.now().date():
-                raise ValueError("Transaktionen dürfen nicht in der Zukunft liegen.")
+                raise ValueError("Transactions must not be in the future.")
         except ValueError as error:
-            raise ValueError(f"transactions.csv, Zeile {line}: {error}") from error
+            raise ValueError(f"transactions.csv, line {line}: {error}") from error
     return rows
 
 
@@ -405,7 +405,7 @@ def apply_transactions(asset, rows):
     matching = [row for row in rows
                 if row['type'] == asset.type and row['symbol'].lower() == asset.symbol.lower()
                 and row['action'] != 'watchlist']
-    # Nachgetragene Käufe zeitlich einordnen; bei gleichem Datum gilt CSV-Reihenfolge.
+    # Sort late-entered buys by date; for the same date the CSV order applies.
     matching.sort(key=lambda row: datetime.strptime(row['date'], '%d/%m/%Y'))
     for row in matching:
         amount, qty = valid_numbers(row['amount'], row['qty'])

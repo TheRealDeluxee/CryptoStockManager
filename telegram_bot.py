@@ -1,12 +1,12 @@
 """
 telegram_bot.py
-- Always-on Telegram Bot
-- Sendet Notifications aus notify_queue (Text/Bild) an Telegram
-- Nimmt Commands entgegen (/help /status /analyse /check /ai /alarm /termin /buy /sell /sellall /history /restart)
-  und schickt sie als dict in command_queue an main
+- Always-on Telegram bot
+- Sends notifications from notify_queue (text/image) to Telegram
+- Accepts commands (/help /status /analyse /check /ai /alarm /event /buy /sell /sellall /history /restart)
+  and sends them as dict via command_queue to main
 
-Wichtig:
-- Bot ist entkoppelt von main. Kein direkter Zugriff auf CryptoStockManager.
+Important:
+- The bot is decoupled from main. No direct access to CryptoStockManager.
 """
 
 import asyncio
@@ -36,7 +36,7 @@ CSV_HEADER = ["type", "symbol", "name", "action", "amount", "qty", "date"]
 def _load_config() -> Dict[str, str]:
     cfg = configparser.ConfigParser()
     if not cfg.read("config.ini", encoding="utf-8-sig"):
-        raise FileNotFoundError("config.ini nicht gefunden")
+        raise FileNotFoundError("config.ini not found")
     token = cfg.get("telegram", "token")
     chat_id = cfg.get("telegram", "chat_id")
     return {"token": token, "chat_id": str(chat_id)}
@@ -47,12 +47,12 @@ def _authorized(update: Update, chat_id: str) -> bool:
 
 
 def _priority_prefix(priority: int) -> str:
-    # Text statt Symbol; leise Nachrichten (-1/-2) ohne Zusatz
-    return {1: "WICHTIG · ", 2: "DRINGEND · "}.get(int(priority), "")
+    # text instead of symbols; silent messages (-1/-2) without prefix
+    return {1: "IMPORTANT · ", 2: "URGENT · "}.get(int(priority), "")
 
 
 # ────────────────────────────────────────────────
-# CSV helpers (wie früher)
+# CSV helpers (as before)
 # ────────────────────────────────────────────────
 def _ensure_csv_exists() -> None:
     if not os.path.exists(_TRANSACTIONS_PATH):
@@ -62,8 +62,8 @@ def _ensure_csv_exists() -> None:
 
 
 def _append_transaction(asset_type, symbol, name, action, amount, qty, date):
-    # Erst eine vollständige neue Datei schreiben, dann atomar austauschen.
-    # main.py kann dadurch keine halb geschriebene CSV-Zeile lesen.
+    # Write a complete new file first, then replace it atomically.
+    # This way main.py can never read a half-written CSV line.
     rows = cl.read_transactions(_TRANSACTIONS_PATH)
     row = {"type": asset_type, "symbol": symbol, "name": name,
            "action": action, "amount": str(amount), "qty": str(qty), "date": date}
@@ -101,7 +101,7 @@ def _asset_name(symbol, asset_type):
     key = (asset_type, symbol.lower())
     if key not in entries:
         section = 'crypto' if asset_type == 'crypto' else 'stocks'
-        raise ValueError(f"Symbol {symbol} ist nicht in assets.ini im Abschnitt [{section}] vorhanden.")
+        raise ValueError(f"Symbol {symbol} is not in assets.ini in section [{section}].")
     return entries[key]
 
 
@@ -124,7 +124,7 @@ def _valid_date(s: str) -> bool:
 # Queue workers
 # ────────────────────────────────────────────────
 def _text_chunks(text, limit=4000):
-    # Telegram begrenzt die Länge; auch Emojis zählen zuverlässig mit.
+    # Telegram limits the length; emojis are counted correctly as well.
     part, units = '', 0
     for char in str(text):
         size = len(char.encode('utf-16-le')) // 2
@@ -152,7 +152,7 @@ async def _notify_worker(app: Application) -> None:
             await asyncio.sleep(0.2)
             continue
         if item is None:
-            # stop() allein beendet run_polling() nicht.
+            # stop() alone does not end run_polling().
             while not app.running:
                 await asyncio.sleep(0.1)
             app.stop_running()
@@ -161,12 +161,12 @@ async def _notify_worker(app: Application) -> None:
             continue
         try:
             text = _priority_prefix(item.get('priority', 0)) + str(item.get('message', ''))
-            parse_mode = 'HTML' if item.get('html') else None  # Analyse-Nachrichten mit fett/kursiv/Festbreite
+            parse_mode = 'HTML' if item.get('html') else None  # analysis messages with bold/italic/monospace
             if item.get('type') == 'image':
                 path = os.path.join(item.get('output_dir', 'plots'), item.get('symbol', 'plot') + '.png')
                 if not os.path.exists(path):
-                    raise FileNotFoundError(f"Diagramm fehlt: {path}")
-                # Längere Kennwerte als eigene Nachricht senden, nichts abschneiden.
+                    raise FileNotFoundError(f"Chart missing: {path}")
+                # Send longer figures as a separate message, cut nothing off.
                 caption_fits = len(text.encode('utf-16-le')) // 2 <= 1000
                 with open(path, 'rb') as photo:
                     await app.bot.send_photo(chat_id=chat_id, photo=photo,
@@ -180,7 +180,7 @@ async def _notify_worker(app: Application) -> None:
                 for part in _text_chunks(text):
                     await app.bot.send_message(chat_id=chat_id, text=part, parse_mode=parse_mode)
         except Exception:
-            logging.exception('Telegram-Nachricht konnte nicht gesendet werden')
+            logging.exception('Telegram message could not be sent')
         await asyncio.sleep(0)
 
 
@@ -191,36 +191,36 @@ def _cmdq(app: Application) -> Queue:
     return app.bot_data["command_q"]  # type: ignore[return-value]
 
 
-# Telegram-HTML: Befehle als normaler Text sind antippbar, Beispiele in Festbreitenschrift.
+# Telegram HTML: commands as plain text are tappable, examples in monospace.
 HELP_TEXT = (
-        "<b>Analyse</b>\n"
-        "/check – Tagesanalyse eines Werts (Auswahl per Schaltfläche)\n"
-        "/ai – KI-Frage zum Kopieren in ChatGPT oder Claude\n"
-        "/analyse – daily, hourly oder summary sofort starten\n"
+        "<b>Analysis</b>\n"
+        "/check – daily analysis of one asset (choose via buttons)\n"
+        "/ai – AI prompt to copy into ChatGPT or Claude\n"
+        "/analyse – start daily, hourly or summary now\n"
         "\n"
-        "<b>Alarme</b>\n"
-        "/alarm – Werte in der Alarm-Analyse an- oder ausschalten\n"
-        "/termin – kommende Termine anzeigen oder neuen eintragen\n"
+        "<b>Alarms and dates</b>\n"
+        "/alarm – switch assets on/off for the alarm analysis\n"
+        "/event – show upcoming dates or add a new one\n"
         "\n"
-        "<b>Depot</b>\n"
-        "/buy – Kauf eintragen\n"
-        "/sell – Verkauf eintragen\n"
-        "/sellall – ganzen Bestand als Verkauf eintragen\n"
-        "/history – Transaktionen eines Werts\n"
-        "/transactions – alle Transaktionen\n"
+        "<b>Portfolio</b>\n"
+        "/buy – record a buy\n"
+        "/sell – record a sell\n"
+        "/sellall – record the sale of the full position\n"
+        "/history – transactions of one asset\n"
+        "/transactions – all transactions\n"
         "\n"
         "<b>System</b>\n"
-        "/status – Bot läuft? Anzahl Transaktionen\n"
-        "/restart – Programm neu starten\n"
+        "/status – bot running? number of transactions\n"
+        "/restart – restart the program\n"
         "\n"
-        "<b>Beispiele</b>\n"
+        "<b>Examples</b>\n"
         "<code>/buy QCOM stock 300 2 14/11/2026</code>\n"
         "<code>/sell bitcoin crypto 650 0.01</code>\n"
         "<code>/sellall qcom 312</code>\n"
         "<code>/check qcom stock</code>\n"
         "<code>/ai bitcoin</code>\n"
-        "<code>/alarm goog an</code>\n"
-        "<code>/termin NVDA 19/11/2026 Q3-Zahlen</code>\n"
+        "<code>/alarm goog on</code>\n"
+        "<code>/event NVDA 17/11/2026 Q3 earnings</code>\n"
         "<code>/analyse daily</code>"
 )
 
@@ -240,13 +240,13 @@ async def _cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         tx_count = _count_transactions()
     except (OSError, UnicodeError, csv.Error, ValueError) as error:
-        await _reply_long(update, f'Bot läuft, aber Transaktionen sind nicht lesbar: {error}')
+        await _reply_long(update, f'Bot is running, but transactions cannot be read: {error}')
         return
     await update.message.reply_text(
-        "✅ *Bot running*\n"
-        f"Time: `{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}`\n"
-        f"Transactions saved: `{tx_count}`\nNur Bot-Status; laufende Analysen können noch warten.",
-        parse_mode="Markdown"
+        "<b>Bot running</b>\n"
+        f"Time: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+        f"Transactions saved: {tx_count}\nBot status only; running analyses may still be in progress.",
+        parse_mode="HTML"
     )
 
 
@@ -254,44 +254,44 @@ async def _cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
-    # Ohne Angaben: Werte aus assets.ini als Schaltflächen anzeigen, Antippen startet die Analyse.
+    # Without arguments: show the assets from assets.ini as buttons, tapping starts the analysis.
     if not context.args:
-        await _reply_asset_buttons(update, 'check', 'Welche Tagesanalyse (ohne Alarm)?')
+        await _reply_asset_buttons(update, 'check', 'Which daily analysis (without alarm)?')
         return
     if len(context.args) != 2 or context.args[1].lower() not in ('crypto', 'stock'):
-        await update.message.reply_text('Format: /check (Auswahl per Schaltfläche) oder /check <symbol> <crypto|stock>')
+        await update.message.reply_text('Format: /check (choose via buttons) or /check <symbol> <crypto|stock>')
         return
     symbol, asset_type = context.args[0].lower(), context.args[1].lower()
     try:
         _asset_name(symbol, asset_type)
     except (OSError, ValueError, configparser.Error) as error:
-        await _reply_long(update, f'Fehler: {error}')
+        await _reply_long(update, f'Error: {error}')
         return
-    # Wie /analyse: Das Hauptprogramm übernimmt die Berechnung.
+    # Like /analyse: the main program does the calculation.
     _cmdq(app).put({'cmd': 'check', 'symbol': symbol, 'type': asset_type})
-    await update.message.reply_text(f'Tagesanalyse für {symbol} vorgemerkt (ohne Alarm).')
+    await update.message.reply_text(f'Daily analysis for {symbol} queued (without alarm).')
 
 
 async def _reply_asset_buttons(update, cmd, question):
-    # Werte aus assets.ini als Schaltflächen; callback_data = "<cmd>|<typ>|<symbol>" (für /check und /ai)
+    # Assets from assets.ini as buttons; callback_data = "<cmd>|<type>|<symbol>" (for /check and /ai)
     try:
         entries = cl.read_assets()
     except (OSError, ValueError, configparser.Error) as error:
-        await _reply_long(update, f'Fehler: {error}')
+        await _reply_long(update, f'Error: {error}')
         return
     buttons = [InlineKeyboardButton(('🪙 ' if asset_type == 'crypto' else '📈 ') + name,
                                     callback_data=f'{cmd}|{asset_type}|{symbol}')
                for (asset_type, symbol), name in entries.items()]
-    keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]  # 2 Schaltflächen pro Zeile
+    keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]  # 2 buttons per row
     await update.message.reply_text(question, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-_BUTTON_REPLIES = {'check': 'Tagesanalyse für {name} vorgemerkt (ohne Alarm).',
-                   'ai': 'KI-Frage für {name} wird erstellt …'}
+_BUTTON_REPLIES = {'check': 'Daily analysis for {name} queued (without alarm).',
+                   'ai': 'Creating AI prompt for {name} …'}
 
 
 async def _cb_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Klick auf eine Schaltfläche aus /check oder /ai
+    # Tap on a button from /check or /ai
     query = update.callback_query
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
@@ -300,86 +300,86 @@ async def _cb_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await query.answer()
     cmd, asset_type, symbol = query.data.split('|', 2)
     try:
-        name = _asset_name(symbol, asset_type)  # assets.ini kann sich inzwischen geändert haben
+        name = _asset_name(symbol, asset_type)  # assets.ini may have changed in the meantime
     except (OSError, ValueError, configparser.Error) as error:
-        await query.edit_message_text(f'Fehler: {error}')
+        await query.edit_message_text(f'Error: {error}')
         return
     _cmdq(app).put({'cmd': cmd, 'symbol': symbol, 'type': asset_type})
-    # Schaltflächen entfernen, damit nicht versehentlich doppelt gestartet wird
+    # Remove the buttons so that nothing is started twice by accident
     await query.edit_message_text(_BUTTON_REPLIES[cmd].format(name=name))
 
 
 async def _cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /ai: Frage für ChatGPT/Claude erzeugen (Text zum Kopieren, keine API)
+    # /ai: create a prompt for ChatGPT/Claude (text to copy, no API)
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
     if not context.args:
-        await _reply_asset_buttons(update, 'ai', 'KI-Frage zu welchem Wert?')
+        await _reply_asset_buttons(update, 'ai', 'AI prompt for which asset?')
         return
     if len(context.args) > 2 or (len(context.args) == 2 and context.args[1].lower() not in ('crypto', 'stock')):
-        await update.message.reply_text('Format: /ai (Auswahl per Schaltfläche) oder /ai <symbol> [crypto|stock]')
+        await update.message.reply_text('Format: /ai (choose via buttons) or /ai <symbol> [crypto|stock]')
         return
     symbol = context.args[0].lower()
     try:
         entries = cl.read_assets()
     except (OSError, ValueError, configparser.Error) as error:
-        await _reply_long(update, f'Fehler: {error}')
+        await _reply_long(update, f'Error: {error}')
         return
-    # Typ darf fehlen: wird in assets.ini gesucht
+    # The type may be omitted: it is looked up in assets.ini
     types = [context.args[1].lower()] if len(context.args) == 2 else ['crypto', 'stock']
     matches = [asset_type for asset_type in types if (asset_type, symbol) in entries]
     if len(matches) != 1:
-        problem = 'nicht in assets.ini' if not matches else 'als crypto und stock vorhanden, bitte Typ angeben'
-        await update.message.reply_text(f'Fehler: {symbol} ist {problem}.')
+        problem = 'not in assets.ini' if not matches else 'listed as crypto and stock, please add the type'
+        await update.message.reply_text(f'Error: {symbol} is {problem}.')
         return
     _cmdq(app).put({'cmd': 'ai', 'symbol': symbol, 'type': matches[0]})
     await update.message.reply_text(_BUTTON_REPLIES['ai'].format(name=entries[(matches[0], symbol)]))
 
 
 def _alarm_keyboard():
-    # Alle Werte aus assets.ini mit aktuellem Alarm-Zustand; Antippen schaltet um
+    # All assets from assets.ini with their current alarm state; tapping toggles
     entries = cl.read_assets()
     active = cl.read_assets(alarm_only=True)
-    buttons = [InlineKeyboardButton(f"{name}: {'an' if key in active else 'aus'}",
+    buttons = [InlineKeyboardButton(f"{name}: {'on' if key in active else 'off'}",
                                     callback_data=f'alarm|{key[0]}|{key[1]}')
                for key, name in entries.items()]
     return InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)]), len(active)
 
 
 async def _cmd_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /alarm: Wert in die automatische Alarm-Analyse aufnehmen (1) oder herausnehmen (0)
+    # /alarm: add an asset to the automatic alarm analysis (1) or remove it (0)
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
     try:
         if not context.args:
             keyboard, count = _alarm_keyboard()
-            await update.message.reply_text(f'Alarm-Analyse: {count} Werte an. Antippen schaltet um.',
+            await update.message.reply_text(f'Alarm analysis: {count} assets on. Tap to toggle.',
                                             reply_markup=keyboard)
             return
-        switch = {'an': True, 'on': True, '1': True, 'aus': False, 'off': False, '0': False}
+        switch = {'on': True, '1': True, 'an': True, 'off': False, '0': False, 'aus': False}
         if len(context.args) != 2 or context.args[1].lower() not in switch:
-            await update.message.reply_text('Format: /alarm (Auswahl per Schaltfläche) oder /alarm <symbol> <an|aus>')
+            await update.message.reply_text('Format: /alarm (choose via buttons) or /alarm <symbol> <on|off>')
             return
         symbol, active = context.args[0].lower(), switch[context.args[1].lower()]
         entries = cl.read_assets()
         matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in entries]
         if len(matches) != 1:
-            problem = 'nicht in assets.ini' if not matches else 'als crypto und stock vorhanden, bitte über die Schaltflächen wählen'
-            await update.message.reply_text(f'Fehler: {symbol} ist {problem}.')
+            problem = 'not in assets.ini' if not matches else 'listed as crypto and stock, please use the buttons'
+            await update.message.reply_text(f'Error: {symbol} is {problem}.')
             return
         cl.set_alarm(symbol, matches[0], active)
     except (OSError, ValueError, configparser.Error) as error:
-        await _reply_long(update, f'Fehler: {error}\nNicht geändert.')
+        await _reply_long(update, f'Error: {error}\nNot changed.')
         return
     _cmdq(app).put({'cmd': 'reload_assets'})
     name = entries[(matches[0], symbol)]
-    await update.message.reply_text(f"{name}: Alarm {'an' if active else 'aus'}. Das Hauptprogramm lädt neu.")
+    await update.message.reply_text(f"{name}: alarm {'on' if active else 'off'}. The main program reloads.")
 
 
 async def _cb_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Klick auf eine Schaltfläche aus /alarm: Zustand umschalten, Schaltflächen bleiben für weitere Änderungen
+    # Tap on a button from /alarm: toggle the state, buttons stay for further changes
     query = update.callback_query
     app = context.application
     await query.answer()
@@ -388,20 +388,20 @@ async def _cb_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _, asset_type, symbol = query.data.split('|', 2)
     try:
         name = _asset_name(symbol, asset_type)
-        active = (asset_type, symbol) not in cl.read_assets(alarm_only=True)   # umschalten
+        active = (asset_type, symbol) not in cl.read_assets(alarm_only=True)   # toggle
         cl.set_alarm(symbol, asset_type, active)
         keyboard, count = _alarm_keyboard()
     except (OSError, ValueError, configparser.Error) as error:
-        await query.edit_message_text(f'Fehler: {error}\nNicht geändert.')
+        await query.edit_message_text(f'Error: {error}\nNot changed.')
         return
     _cmdq(app).put({'cmd': 'reload_assets'})
-    await query.edit_message_text(f"{name}: Alarm {'an' if active else 'aus'}.\n"
-                                  f"Alarm-Analyse: {count} Werte an. Antippen schaltet um.",
+    await query.edit_message_text(f"{name}: alarm {'on' if active else 'off'}.\n"
+                                  f"Alarm analysis: {count} assets on. Tap to toggle.",
                                   reply_markup=keyboard)
 
 
-async def _cmd_termin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /termin: kommende Termine anzeigen; /termin <symbol> <DD/MM/YYYY> <beschreibung>: Termin eintragen
+async def _cmd_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # /event: show upcoming dates; /event <symbol> <DD/MM/YYYY> <description>: add a date
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
@@ -409,26 +409,26 @@ async def _cmd_termin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if not context.args:
             today = datetime.now().date()
             upcoming = [event for event in cl.read_events() if event['date'] >= today]
-            lines = ['Kommende Termine:'] if upcoming else ['Keine kommenden Termine.']
-            lines += [f"{event['date']:%d.%m.%Y}  {event['name']}" + (f" – {event['text']}" if event['text'] else '')
+            lines = ['Upcoming events:'] if upcoming else ['No upcoming events.']
+            lines += [f"{event['date']:%d/%m/%Y}  {event['name']}" + (f" – {event['text']}" if event['text'] else '')
                       for event in upcoming]
-            lines.append('\nEintragen: /termin <symbol> <DD/MM/YYYY> <beschreibung>')
+            lines.append('\nAdd: /event <symbol> <DD/MM/YYYY> <description>')
             await _reply_long(update, '\n'.join(lines))
             return
         if len(context.args) < 2:
-            await update.message.reply_text('Format: /termin <symbol> <DD/MM/YYYY> <beschreibung>\n'
-                                            'Beispiel: /termin NVDA 19/11/2026 Q3-Zahlen nach Börsenschluss')
+            await update.message.reply_text('Format: /event <symbol> <DD/MM/YYYY> <description>\n'
+                                            'Example: /event NVDA 17/11/2026 Q3 earnings after market close')
             return
         key, name, date = cl.add_event(context.args[0], context.args[1], ' '.join(context.args[2:]))
     except (OSError, ValueError, configparser.Error) as error:
-        await _reply_long(update, f'Fehler: {error}\nNicht gespeichert.')
+        await _reply_long(update, f'Error: {error}\nNot saved.')
         return
     if date == datetime.now().date():
-        _cmdq(app).put({'cmd': 'events'})   # Termin heute: Erinnerung und Analyse sofort
-        when = 'Der Termin ist heute: Erinnerung und Tagesanalyse kommen gleich.'
+        _cmdq(app).put({'cmd': 'events'})   # event today: reminder and analysis immediately
+        when = 'The event is today: reminder and daily analysis follow shortly.'
     else:
-        when = 'Erinnerung mit Tagesanalyse am Termin-Tag um 08:00.'
-    await update.message.reply_text(f"Termin gespeichert: {date:%d.%m.%Y} {name}\n{when}")
+        when = 'Reminder with daily analysis on the day of the event at 08:00.'
+    await update.message.reply_text(f"Event saved: {date:%d/%m/%Y} {name}\n{when}")
 
 
 async def _cmd_analyse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -438,14 +438,11 @@ async def _cmd_analyse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     arg = context.args[0].lower() if context.args else "hourly"
     if arg not in ("hourly", "daily", "summary"):
-        await update.message.reply_text(
-            "❌ Unknown argument.\nUse `/analyse hourly|daily|summary`",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text("Unknown argument. Use: /analyse hourly|daily|summary")
         return
 
     _cmdq(app).put({"cmd": "analyse", "mode": arg})
-    await update.message.reply_text(f"Analyse vorgemerkt: {arg}")
+    await update.message.reply_text(f"Analysis queued: {arg}")
 
 
 async def _cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -454,7 +451,7 @@ async def _cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     _cmdq(app).put({"cmd": "restart_main"})
-    await update.message.reply_text("🔄 main wird neu gestartet…", parse_mode="Markdown")
+    await update.message.reply_text("Restarting the main program …")
 
 
 async def _save_trade(update, context, action):
@@ -464,29 +461,29 @@ async def _save_trade(update, context, action):
     expected = 5 if action == 'buy' else 4
     if len(context.args) != expected:
         date_help = ' <DD/MM/YYYY>' if action == 'buy' else ''
-        await update.message.reply_text(f'Format: /{action} <symbol> <crypto|stock> <betrag> <menge>{date_help}')
+        await update.message.reply_text(f'Format: /{action} <symbol> <crypto|stock> <amount> <quantity>{date_help}')
         return
     symbol, asset_type, amount_text, qty_text = context.args[:4]
     asset_type = asset_type.lower()
     if asset_type not in ('crypto', 'stock'):
-        await update.message.reply_text('Fehler: Typ muss crypto oder stock sein. Nicht gespeichert.')
+        await update.message.reply_text('Error: type must be crypto or stock. Not saved.')
         return
     symbol = symbol.lower() if asset_type == 'crypto' else symbol.upper()
     date = context.args[4] if action == 'buy' else datetime.now().strftime('%d/%m/%Y')
     try:
         if not _valid_date(date):
-            raise ValueError('Datum ungültig oder in der Zukunft. Format: DD/MM/YYYY.')
+            raise ValueError('Invalid date or date in the future. Format: DD/MM/YYYY.')
         amount, qty = cl.valid_numbers(amount_text, qty_text)
         name = _asset_name(symbol, asset_type)
         _append_transaction(asset_type, symbol, name, action, amount, qty, date)
     except (OSError, UnicodeError, csv.Error, configparser.Error, ValueError) as error:
-        await _reply_long(update, f'Fehler: {error}\nTransaktion nicht gespeichert.')
+        await _reply_long(update, f'Error: {error}\nTransaction not saved.')
         return
     _cmdq(app).put({'cmd': 'reload_transactions'})
-    label = 'Kauf' if action == 'buy' else 'Verkauf'
+    label = 'Buy' if action == 'buy' else 'Sell'
     await update.message.reply_text(
-        f'{label} gespeichert: {symbol}\nBetrag: {amount:.2f} €\nMenge: {qty}\nDatum: {date}\n'
-        'Das Hauptprogramm lädt die Transaktionen neu.', parse_mode=None)
+        f'{label} saved: {symbol}\nAmount: {amount:.2f} €\nQuantity: {qty}\nDate: {date}\n'
+        'The main program reloads the transactions.', parse_mode=None)
 
 
 async def _cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -498,67 +495,67 @@ async def _cmd_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _holding(symbol, asset_type, name):
-    # Aktueller Bestand laut transactions.csv (FIFO wie im Hauptprogramm)
+    # Current holdings according to transactions.csv (FIFO as in the main program)
     asset = cl.apply_transactions(cl.CryptoStock(symbol, name, asset_type), cl.read_transactions(_TRANSACTIONS_PATH))
     return asset.state.amount_crypto_stock
 
 
 def _current_price(symbol, asset_type, name):
-    # Letzter Kurs in EUR; blockiert bei API-Wiederholungen -> nur über asyncio.to_thread aufrufen
+    # Latest price in EUR; blocks during API retries -> only call via asyncio.to_thread
     df = cl.CryptoStock(symbol, name, asset_type).get_API_data('100d')
     if df is None or df.empty:
-        raise ValueError('Kein aktueller Kurs verfügbar. Bitte Betrag angeben: /sellall <symbol> <betrag>')
+        raise ValueError('No current price available. Please add the amount: /sellall <symbol> <amount>')
     return float(df['Price'].iloc[-1])
 
 
 async def _cmd_sellall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /sellall <symbol> [betrag]: kompletten Bestand als Verkauf eintragen (nach Bestätigung)
+    # /sellall <symbol> [amount]: record the full position as a sale (after confirmation)
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
     if len(context.args) not in (1, 2):
-        await update.message.reply_text('Format: /sellall <symbol> [betrag in €]\nOhne Betrag wird der aktuelle Kurs verwendet.')
+        await update.message.reply_text('Format: /sellall <symbol> [amount in €]\nWithout an amount the current price is used.')
         return
     symbol = context.args[0].lower()
     try:
         entries = cl.read_assets()
         matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in entries]
         if len(matches) != 1:
-            raise ValueError(f"{symbol} ist {'nicht in assets.ini' if not matches else 'als crypto und stock vorhanden'}.")
+            raise ValueError(f"{symbol} is {'not in assets.ini' if not matches else 'listed as crypto and stock'}.")
         asset_type = matches[0]
         name = entries[(asset_type, symbol)]
         symbol = symbol.lower() if asset_type == 'crypto' else symbol.upper()
         qty = _holding(symbol, asset_type, name)
         if qty <= 0:
-            raise ValueError(f'Kein Bestand von {name} vorhanden.')
+            raise ValueError(f'No holdings of {name}.')
         if len(context.args) == 2:
             amount, _ = cl.valid_numbers(context.args[1], qty)
-            source = 'dein Betrag'
+            source = 'your amount'
         else:
-            await update.message.reply_text(f'Aktueller Kurs für {name} wird abgefragt …')
+            await update.message.reply_text(f'Fetching the current price for {name} …')
             price = await asyncio.to_thread(_current_price, symbol, asset_type, name)
             amount = round(price * qty, 2)
-            source = f'aktueller Kurs {price:.2f} €'
+            source = f'current price {price:.2f} €'
     except (OSError, UnicodeError, csv.Error, configparser.Error, ValueError) as error:
-        await _reply_long(update, f'Fehler: {error}\nNichts gespeichert.')
+        await _reply_long(update, f'Error: {error}\nNothing saved.')
         return
 
-    # Erst nach Bestätigung speichern; Auftrag wird bis dahin im Bot gemerkt
+    # Save only after confirmation; until then the order is kept in the bot
     pending_id = os.urandom(4).hex()
     app.bot_data.setdefault('sellall', {})[pending_id] = (asset_type, symbol, name, amount, qty)
-    unit = 'Coins' if asset_type == 'crypto' else 'Stück'
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Verkauf speichern', callback_data=f'sellall|{pending_id}|ja'),
-                                      InlineKeyboardButton('Abbrechen', callback_data=f'sellall|{pending_id}|nein')]])
+    unit = 'coins' if asset_type == 'crypto' else 'shares'
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Save sale', callback_data=f'sellall|{pending_id}|ja'),
+                                      InlineKeyboardButton('Cancel', callback_data=f'sellall|{pending_id}|nein')]])
     await update.message.reply_text(
-        f"Gesamten Bestand von {name} als Verkauf eintragen?\n"
-        f"Menge: {qty:.8g} {unit}\nBetrag: {amount:.2f} € ({source})\n"
-        f"Datum: {datetime.now().strftime('%d/%m/%Y')}\n"
-        f"Wenn du einen anderen Erlös hattest: /sellall {symbol} <betrag>",
+        f"Record the full position of {name} as a sale?\n"
+        f"Quantity: {qty:.8g} {unit}\nAmount: {amount:.2f} € ({source})\n"
+        f"Date: {datetime.now().strftime('%d/%m/%Y')}\n"
+        f"If your proceeds were different: /sellall {symbol} <amount>",
         reply_markup=keyboard)
 
 
 async def _cb_sellall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Bestätigung aus /sellall
+    # Confirmation from /sellall
     query = update.callback_query
     app = context.application
     await query.answer()
@@ -567,21 +564,21 @@ async def _cb_sellall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     _, pending_id, answer = query.data.split('|', 2)
     order = app.bot_data.get('sellall', {}).pop(pending_id, None)
     if order is None:
-        await query.edit_message_text('Auftrag nicht mehr vorhanden (bereits erledigt oder Bot neu gestartet). Nichts gespeichert.')
+        await query.edit_message_text('Order no longer available (already done or bot restarted). Nothing saved.')
         return
     if answer != 'ja':
-        await query.edit_message_text('Abgebrochen. Nichts gespeichert.')
+        await query.edit_message_text('Cancelled. Nothing saved.')
         return
     asset_type, symbol, name, amount, qty = order
     date = datetime.now().strftime('%d/%m/%Y')
     try:
         _append_transaction(asset_type, symbol, name, 'sell', amount, qty, date)
     except (OSError, UnicodeError, csv.Error, configparser.Error, ValueError) as error:
-        await query.edit_message_text(f'Fehler: {error}\nNichts gespeichert.')
+        await query.edit_message_text(f'Error: {error}\nNothing saved.')
         return
     _cmdq(app).put({'cmd': 'reload_transactions'})
-    await query.edit_message_text(f'Verkauf gespeichert: {name}\nBetrag: {amount:.2f} €\nMenge: {qty:.8g}\nDatum: {date}\n'
-                                  'Das Hauptprogramm lädt die Transaktionen neu.')
+    await query.edit_message_text(f'Sale saved: {name}\nAmount: {amount:.2f} €\nQuantity: {qty:.8g}\nDate: {date}\n'
+                                  'The main program reloads the transactions.')
 
 
 async def _cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -592,20 +589,20 @@ async def _cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         rows = cl.read_transactions(_TRANSACTIONS_PATH)
     except (OSError, UnicodeError, csv.Error, ValueError) as error:
-        await _reply_long(update, f'Transaktionen konnten nicht gelesen werden: {error}')
+        await _reply_long(update, f'Transactions could not be read: {error}')
         return
 
     if not rows:
-        await update.message.reply_text("Noch keine Transaktionen gespeichert.")
+        await update.message.reply_text("No transactions saved yet.")
         return
 
-    lines = [f"Transaktionen: {len(rows)}"]
+    lines = [f"Transactions: {len(rows)}"]
     for index, row in enumerate(rows, 1):
         lines.append(
             f"{index}. {row.get('date', '')} | {row.get('symbol', '')} "
             f"({row.get('type', '')}) | {row.get('name', '')} | "
             f"{row.get('action', '').upper()} | "
-            f"{row.get('amount', '')} EUR | Menge: {row.get('qty', '')}"
+            f"{row.get('amount', '')} EUR | quantity: {row.get('qty', '')}"
         )
 
     await _reply_long(update, "\n".join(lines))
@@ -617,22 +614,22 @@ async def _cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     if not context.args:
-        await update.message.reply_text("❌ Symbol missing. Example: `/history bitcoin`", parse_mode="Markdown")
+        await update.message.reply_text("Symbol missing. Example: /history bitcoin")
         return
 
     symbol = context.args[0].strip()
     try:
         rows = _get_history(symbol)
     except (OSError, UnicodeError, csv.Error, ValueError) as error:
-        await _reply_long(update, f'Historie konnte nicht gelesen werden: {error}')
+        await _reply_long(update, f'History could not be read: {error}')
         return
     if not rows:
-        await _reply_long(update, f'Keine Transaktionen für {symbol} gefunden.')
+        await _reply_long(update, f'No transactions found for {symbol}.')
         return
-    lines = [f'Historie: {symbol.upper()}']
+    lines = [f'History: {symbol.upper()}']
     for row in rows:
         lines.append(f"{row['date']} | {row['type']} | {row['action'].upper()} | "
-                     f"{row['amount']} EUR | Menge: {row['qty']}")
+                     f"{row['amount']} EUR | quantity: {row['qty']}")
     await _reply_long(update, '\n'.join(lines))
 
 
@@ -640,35 +637,35 @@ async def _cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # Entry
 # ────────────────────────────────────────────────
 async def _post_init(app: Application) -> None:
-    # In post_init läuft bereits ein Eventloop -> kein "no running loop"
+    # An event loop is already running in post_init -> no "no running loop"
     loop = asyncio.get_running_loop()
     app.bot_data["_notify_task"] = loop.create_task(_notify_worker(app))
-    logging.info("Notify-Worker task gestartet")
+    logging.info("Notify worker task started")
 
     # Register the menu only for the configured chat.
     commands = [
-        BotCommand("start", "Hilfe anzeigen"),
-        BotCommand("help", "Alle Befehle und ihre Parameter anzeigen"),
-        BotCommand("status", "Bot-Status und Anzahl der Transaktionen"),
-        BotCommand("check", "Tagesanalyse ohne Alarm: Wert per Schaltfläche wählen"),
-        BotCommand("ai", "KI-Frage zum Kopieren in ChatGPT oder Claude"),
-        BotCommand("alarm", "Werte in die Alarm-Analyse aufnehmen oder entfernen"),
-        BotCommand("termin", "Termine anzeigen oder eintragen: Symbol Datum Text"),
-        BotCommand("analyse", "Analyse starten: hourly, daily oder summary"),
-        BotCommand("buy", "Kauf speichern: Symbol Typ Betrag Menge Datum"),
-        BotCommand("sell", "Verkauf speichern: Symbol Typ Betrag Menge"),
-        BotCommand("sellall", "Ganzen Bestand verkaufen: Symbol [Betrag]"),
-        BotCommand("history", "Transaktionen eines Symbols anzeigen"),
-        BotCommand("transactions", "Alle gespeicherten Transaktionen anzeigen"),
-        BotCommand("restart", "Programm neu starten"),
+        BotCommand("start", "Show help"),
+        BotCommand("help", "Show all commands and their parameters"),
+        BotCommand("status", "Bot status and number of transactions"),
+        BotCommand("check", "Daily analysis without alarm: choose asset via buttons"),
+        BotCommand("ai", "AI prompt to copy into ChatGPT or Claude"),
+        BotCommand("alarm", "Add assets to or remove them from the alarm analysis"),
+        BotCommand("event", "Show or add dates: symbol date text"),
+        BotCommand("analyse", "Start analysis: hourly, daily or summary"),
+        BotCommand("buy", "Record a buy: symbol type amount quantity date"),
+        BotCommand("sell", "Record a sell: symbol type amount quantity"),
+        BotCommand("sellall", "Sell the full position: symbol [amount]"),
+        BotCommand("history", "Show transactions of a symbol"),
+        BotCommand("transactions", "Show all saved transactions"),
+        BotCommand("restart", "Restart the program"),
     ]
     try:
         await app.bot.set_my_commands(
             commands, scope=BotCommandScopeChat(chat_id=int(app.bot_data["chat_id"]))
         )
     except Exception:
-        logging.exception("Telegram-Befehlsmenue konnte nicht aktualisiert werden")
-    # Keine eigene Startnachricht mehr: Das Hauptprogramm meldet den Start (Version, Werte, Termine).
+        logging.exception("Telegram command menu could not be updated")
+    # No separate start message: the main program announces the start (version, assets, dates).
 
 
 
@@ -683,9 +680,9 @@ async def _post_stop(app):
 
 
 async def _on_error(update, context):
-    logging.error('Fehler bei Telegram-Befehl', exc_info=context.error)
+    logging.error('Error in Telegram command', exc_info=context.error)
     if isinstance(update, Update) and _authorized(update, context.application.bot_data['chat_id']):
-        await update.effective_message.reply_text('Der Befehl ist fehlgeschlagen. Bitte das Programmprotokoll prüfen.')
+        await update.effective_message.reply_text('The command failed. Please check the program log.')
 
 
 def run_standalone(notify_q: Queue, command_q: Queue) -> None:
@@ -710,7 +707,7 @@ def run_standalone(notify_q: Queue, command_q: Queue) -> None:
     app.add_handler(CommandHandler("check", _cmd_check))
     app.add_handler(CommandHandler("ai", _cmd_ai))
     app.add_handler(CommandHandler("alarm", _cmd_alarm))
-    app.add_handler(CommandHandler("termin", _cmd_termin))
+    app.add_handler(CommandHandler(["event", "termin"], _cmd_event))   # /termin still works as before
     app.add_handler(CallbackQueryHandler(_cb_alarm, pattern=r"^alarm\|"))
     app.add_handler(CallbackQueryHandler(_cb_assets, pattern=r"^(check|ai)\|"))
     app.add_handler(CommandHandler("buy", _cmd_buy))
@@ -723,10 +720,10 @@ def run_standalone(notify_q: Queue, command_q: Queue) -> None:
 
     app.add_error_handler(_on_error)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.info(f"Telegram Bot gestartet (chat_id={chat_id})")
+    logging.info(f"Telegram bot started (chat_id={chat_id})")
     app.run_polling(stop_signals=None)
-    logging.info("Telegram Bot beendet")
+    logging.info("Telegram bot stopped")
 
 
 if __name__ == '__main__':
-    print('Bitte main.py starten. telegram_bot.py wird vom Hauptprogramm aufgerufen.')
+    print('Please start main.py. telegram_bot.py is started by the main program.')

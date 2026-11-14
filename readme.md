@@ -59,13 +59,13 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 
 **Planning and Research**
 - `/ai` creates a detailed prompt for ChatGPT or Claude: technical data, support/resistance, bottom/top formation, market phase of the asset and its leading market, your position and common investment rules – no AI API needed, just copy and paste
-- Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/termin`: reminder plus daily analysis on the day
+- Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/event`: reminder plus daily analysis on the day
 
 ## What's New
 
 - Telegram bot instead of Pushover: notifications, charts and commands in one chat
 - Redesigned charts (trading-day axis, 200 dpi, volume profile, support/resistance) and daily ranking image
-- New commands: `/check` and `/ai` with buttons, `/alarm`, `/sellall`, `/termin`
+- New commands: `/check` and `/ai` with buttons, `/alarm`, `/sellall`, `/event`
 - `assets.ini` replaces the old watchlist; `; 1` marks assets for the alarm analysis
 - AI prompt with bottom/top formation and market phase (SMA50/SMA200, Golden/Death Cross)
 - Event reminders with automatic daily analysis
@@ -96,8 +96,8 @@ After the start, the bot sends a short message with the version, the number of m
 | `/ai` | AI prompt to copy into ChatGPT or Claude (buttons or `/ai <symbol>`) |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | **Alarms and Dates** | |
-| `/alarm` | Switch assets on/off for the alarm analysis (buttons or `/alarm <symbol> <an\|aus>`) |
-| `/termin` | List upcoming dates, or add one: `/termin <symbol> <DD/MM/YYYY> <text>` |
+| `/alarm` | Switch assets on/off for the alarm analysis (buttons or `/alarm <symbol> <on\|off>`) |
+| `/event` | List upcoming dates, or add one: `/event <symbol> <DD/MM/YYYY> <text>` |
 | **Portfolio** | |
 | `/buy <symbol> <crypto\|stock> <amount €> <qty> <DD/MM/YYYY>` | Record a buy |
 | `/sell <symbol> <crypto\|stock> <amount €> <qty>` | Record a sell (today) |
@@ -129,7 +129,7 @@ If the program is started after 12:30, the daily analysis runs immediately; miss
 | Trigger | Signal | Meaning |
 |---|---|---|
 | Cross-EMA | Buy / Sell | Fast EMA (12) crosses the slow EMA (26) upwards / downwards (daily only) |
-| Positiv-5 / Negative-5 | Buy / Sell | 5-period rate of change above / below `seven_day_price_change` |
+| Positive-5 / Negative-5 | Buy / Sell | 5-period rate of change above / below `seven_day_price_change` |
 | 100-Minimum / 100-Maximum | Buy / Sell | Fast EMA has formed a new 100-day low / high (daily only) |
 
 Alarms are only sent for assets you own. Messages with a score above +5 (buy) or below -5 (sell) are marked as important.
@@ -171,7 +171,7 @@ token = YOUR_TELEGRAM_BOT_TOKEN
 chat_id = YOUR_CHAT_ID
 
 [alarm]
-seven_day_price_change = 7      # threshold for Positiv-5 / Negative-5 alarms (%)
+seven_day_price_change = 7      # threshold for Positive-5 / Negative-5 alarms (%)
 previous_alarm_change = 3       # minimum change before the same alarm is sent again
 one_day_price_change = 10       # currently not used
 one_day_profit_limit = -2       # currently not used
@@ -207,7 +207,7 @@ The `1` can also be switched in Telegram with `/alarm`.
 nvda_20261117  = NVDA; 17/11/2026; Q3 earnings after US market close
 ```
 
-Entries can also be added with `/termin`. Past dates are ignored.
+Entries can also be added with `/event`. Past dates are ignored.
 
 ### transactions.csv
 
@@ -219,9 +219,9 @@ crypto;bitcoin;Bitcoin;buy;500.0;0.01;01/01/2024
 stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
 ```
 
-### ki_frage.txt
+### ai_prompt.txt
 
-Template for the `/ai` prompt. It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{kurs}`, `{support}`, `{boden}` or `{markt}` are filled in by the program.
+Template for the `/ai` prompt. It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program.
 
 `config.ini`, `assets.ini`, `events.ini` and `transactions.csv` contain personal data and are excluded from Git via `.gitignore`.
 

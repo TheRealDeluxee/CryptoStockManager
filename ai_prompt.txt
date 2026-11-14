@@ -1,0 +1,41 @@
+{name} ({symbol}) – three-month analysis
+
+Assess {name} ({type}) based on my technical data and current news. Investment horizon: three months, no day trading. {task}
+
+A. Technical data from my program (daily values, as of {date})
+Prices in EUR, source: {source}. Compare price levels only with this source.
+- Position: {position}
+- Price: {price} · 1 day {day} · 7-day trend {week}
+- High/low of the last 250 daily values: {high} / {low}
+- Resistance: {resistance}
+- Support: {support}
+- RSI14: {rsi}
+- MACD (EMA12/EMA26): {macd}
+- Bollinger (20,2): {bollinger}
+- Trend: {trend}
+- Short term: {short_term}
+- Bottom formation: {bottom}
+- Top formation: {top}
+- Market phase {name}: {phase}
+- Market phase {market_name}: {market}
+- Program score: {score} (scale -18 to +18, positive = rather buy)
+
+B. News and dates
+Use web search; if you have no web access, say so explicitly. News from the last 14 days, confirmed dates in the next 4 weeks. Older figures only as a dated baseline.
+{research}
+
+C. Rules
+- Check broadly, report selectively: only what supports the recommendation, contradicts it, changes the risk or the entry/exit. Merge signals with the same message.
+- Technicals only from part A, news with date and source. If something essential is missing: write exactly "not verifiable" and what is missing.
+- Treat price levels critically: a period low is only a possible support, a low RSI only shows that a recovery is possible. A bottom is only confirmed after an observable price reaction.
+- Trading plan: with a falling price, buy only after a confirmed bottom, staggered near support. Set the exit below support in advance and say whether a daily close counts. In a bearish phase (asset or overall market) only small tranches, assume a trend change only above the SMA200.
+- After a strong rise wait for a pullback, consider partial profits at resistance, limit the position size. {tax}At most three price zones, few numbers, no disclaimers.
+
+D. Output
+1. Decision in exactly three sentences: (1) {decision}, market phase of {name} and {market_name}, main reason. (2) Support and resistance in euro, is a bottom confirmed? Mention top formation only if decisive. (3) Score 0-10 = (program score + 18) / 36 x 10, plus risk and confidence each high/medium/low.
+2. What drives the decision: at most four points from technicals, news and valuation - what is proven and what it means for me.
+3. Trading plan as a table (scenario | observable signal | my action):
+{plan}
+4. Strongest counterargument in at most two sentences, and which development would strengthen it.
+5. At most four confirmed dates in the next 4 weeks as a table (date and German time, event, relevance, source).
+6. Conclusion in at most four simple sentences: what I do now, what I am waiting for, what triggers or rules out {action}. At most two price levels, no score and no abbreviations.
