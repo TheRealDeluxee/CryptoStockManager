@@ -21,7 +21,7 @@ from datetime import datetime
 from multiprocessing import Queue
 from typing import Dict, List, Optional
 
-from telegram import Update, BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 logging.basicConfig(
@@ -178,7 +178,9 @@ async def _notify_worker(app: Application) -> None:
                     os.remove(path)
             elif item.get('type') == 'text':
                 for part in _text_chunks(text):
-                    await app.bot.send_message(chat_id=chat_id, text=part, parse_mode=parse_mode)
+                    # no link preview: keeps e.g. the start message with the GitHub link compact
+                    await app.bot.send_message(chat_id=chat_id, text=part, parse_mode=parse_mode,
+                                               link_preview_options=LinkPreviewOptions(is_disabled=True))
         except Exception:
             logging.exception('Telegram message could not be sent')
         await asyncio.sleep(0)

@@ -23,6 +23,7 @@ import telegram_bot
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
 VERSION = "0.1.0"
+GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
 
 MORNING_ANALYSIS = "09:30"
 NOON_ANALYSIS = "12:30"
@@ -426,6 +427,7 @@ class CryptoStockManager:
                 text = f" – {event['text']}" if event['text'] else ''
                 lines.append(html.escape(f"Next event: {event['date'].strftime('%d/%m/%Y')} {event['name']}{text}"))
         lines.append("All commands: /help")
+        lines.append(f'<a href="{GITHUB_URL}">CaSa on GitHub</a>')
         func.pushover('\n'.join(lines), html_format=True)
 
     def handle_command(self, command):
