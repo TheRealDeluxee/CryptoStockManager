@@ -191,30 +191,40 @@ def _cmdq(app: Application) -> Queue:
     return app.bot_data["command_q"]  # type: ignore[return-value]
 
 
+# Telegram-HTML: Befehle als normaler Text sind antippbar, Beispiele in Festbreitenschrift.
 HELP_TEXT = (
-        "🤖 *CaSa Bot*\n"
-        "────────────────────────\n"
-        "`/analyse <hourly|daily|summary>`\n"
-        "`/check`  (Auswahl per Schaltfläche, daily ohne Alarm)\n"
-        "`/check <symbol> <crypto|stock>`\n"
-        "`/ai`  (KI-Frage zum Kopieren in ChatGPT/Claude)\n"
-        "`/ai <symbol>`\n"
-        "`/alarm`  (Werte in Alarm-Analyse an/aus schalten)\n"
-        "`/alarm <symbol> <an|aus>`\n"
-        "`/buy <symbol> <crypto|stock> <amount> <qty> <DD/MM/YYYY>`\n"
-        "`/sell <symbol> <crypto|stock> <amount> <qty>`\n"
-        "`/sellall <symbol> [betrag]`  (ganzen Bestand verkaufen)\n"
-        "`/history <symbol>`\n"
-        "`/transactions`  (alle Transaktionen anzeigen)\n"
-        "`/status`\n"
-        "`/restart`  (main neu starten + reload transactions)\n"
-        "`/start`  (Hilfe anzeigen)\n"
-        "`/help`"
+        "<b>Analyse</b>\n"
+        "/check – Tagesanalyse eines Werts (Auswahl per Schaltfläche)\n"
+        "/ai – KI-Frage zum Kopieren in ChatGPT oder Claude\n"
+        "/analyse – daily, hourly oder summary sofort starten\n"
+        "\n"
+        "<b>Alarme</b>\n"
+        "/alarm – Werte in der Alarm-Analyse an- oder ausschalten\n"
+        "\n"
+        "<b>Depot</b>\n"
+        "/buy – Kauf eintragen\n"
+        "/sell – Verkauf eintragen\n"
+        "/sellall – ganzen Bestand als Verkauf eintragen\n"
+        "/history – Transaktionen eines Werts\n"
+        "/transactions – alle Transaktionen\n"
+        "\n"
+        "<b>System</b>\n"
+        "/status – Bot läuft? Anzahl Transaktionen\n"
+        "/restart – Programm neu starten\n"
+        "\n"
+        "<b>Beispiele</b>\n"
+        "<code>/buy QCOM stock 300 2 14/11/2026</code>\n"
+        "<code>/sell bitcoin crypto 650 0.01</code>\n"
+        "<code>/sellall qcom 312</code>\n"
+        "<code>/check qcom stock</code>\n"
+        "<code>/ai bitcoin</code>\n"
+        "<code>/alarm goog an</code>\n"
+        "<code>/analyse daily</code>"
 )
 
 
 async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
 
 async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _cmd_help(update, context)
@@ -624,15 +634,7 @@ async def _post_init(app: Application) -> None:
         )
     except Exception:
         logging.exception("Telegram-Befehlsmenue konnte nicht aktualisiert werden")
-
-    try:
-        await app.bot.send_message(
-            chat_id=app.bot_data["chat_id"],
-            text="Programm gestartet.\n\n" + HELP_TEXT,
-            parse_mode="Markdown",
-        )
-    except Exception:
-        logging.exception("Telegram-Starthilfe konnte nicht gesendet werden")
+    # Keine eigene Startnachricht mehr: Das Hauptprogramm meldet den Start (Version, Werte, Termine).
 
 
 

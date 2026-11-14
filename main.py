@@ -343,6 +343,26 @@ class CryptoStockManager:
             message = f'Datenstand: {self.last_daily_update}'  # Titel steht schon im Bild
             func.pushover_image(image_name, message, delete_after_send=True)
 
+    def startup_message(self):
+        """Kurze Startnachricht: Version, Werte in der Alarm-Analyse, nächste Termine."""
+        crypto, stock = len(self.crypto_items_hd), len(self.stock_items_hd)
+        lines = [f"<b>CaSa gestartet</b> · Version {html.escape(str(self.version))}",
+                 f"{crypto + stock} Werte in der Alarm-Analyse ({crypto} Krypto, {stock} Aktien)"]
+        if self.test_mode == 1:
+            lines.append("Testmodus: alle Analysen laufen einmal sofort")
+        else:
+            now = time.strftime('%H:%M')
+            if now < MORNING_ANALYSIS:
+                daily = MORNING_ANALYSIS
+            elif now < NOON_ANALYSIS:
+                daily = NOON_ANALYSIS
+            else:
+                daily = f"jetzt, danach morgen {MORNING_ANALYSIS}"   # nach 12:30 läuft sie beim Start sofort
+            summary = EVENING_SUMMARY if now < EVENING_SUMMARY else f"morgen {EVENING_SUMMARY}"
+            lines.append(f"Nächste Tagesanalyse: {daily} · Übersicht: {summary}")
+        lines.append("Alle Befehle: /help")
+        func.pushover('\n'.join(lines), html_format=True)
+
     def handle_command(self, command):
         """True bedeutet: Hauptschleife soll einen sauberen Neustart ausführen."""
         action = command.get('cmd')
@@ -396,7 +416,7 @@ def run_program():
             bot_process = mp.Process(target=telegram_bot.run_standalone,
                                      args=(notify_q, command_q), daemon=True)
             bot_process.start()
-            func.pushover(f'Initialisierung abgeschlossen — Version {manager.version}')
+            manager.startup_message()
             schedule.clear()
             if manager.test_mode == 1:
                 manager.hundred_hour_analysis()
