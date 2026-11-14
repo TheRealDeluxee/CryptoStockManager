@@ -28,18 +28,17 @@ EVENT_REMINDER = "08:00"   # Erinnerung an Termine aus events.ini (mit Tagesanal
 # Vorlage für /ai. Wird beim ersten Aufruf als ki_frage.txt angelegt und kann dort
 # mit dem Editor geändert werden. Platzhalter in {Klammern} füllt das Programm.
 KI_FRAGE_DATEI = "ki_frage.txt"
-KI_FRAGE_VORLAGE = """Du bist ein erfahrener Analyst für {typ} (Technische Analyse und Nachrichtenlage).
-Bewerte {name} ({symbol}) für einen Anlagehorizont von 3 Monaten (Swing/Position, kein Daytrading).
-Nutze die Websuche. Wenn du keinen Zugriff hast, schreibe das ausdrücklich.
+KI_FRAGE_VORLAGE = """{name} ({symbol}) – Analyse für drei Monate
 
-MEINE AUSGANGSLAGE
-{position}
+Bewerte {name} ({typ}) anhand meiner technischen Daten und aktueller Nachrichten. Anlagehorizont: drei Monate, kein Daytrading. {aufgabe}
 
-A) TECHNISCHE DATEN aus meinem Analyse-Programm (Tageswerte, Stand {datum}):
-- Kurs: {kurs} | 1 Tag: {tag} | 7 Tage (Trend): {woche}
+A. Technische Daten aus meinem Programm (Tageswerte, Stand {datum})
+Kurse in EUR, Quelle: {quelle}. Vergleiche Kursmarken nur mit dieser Quelle.
+- Ausgangslage: {position}
+- Kurs: {kurs} · 1 Tag {tag} · 7-Tage-Trend {woche}
 - Hoch/Tief der letzten 250 Tageswerte: {hoch} / {tief}
 - Widerstand: {resistance}
-- Support: {support}
+- Unterstützung: {support}
 - RSI14: {rsi}
 - MACD (EMA12/EMA26): {macd}
 - Bollinger (20,2): {bollinger}
@@ -48,37 +47,28 @@ A) TECHNISCHE DATEN aus meinem Analyse-Programm (Tageswerte, Stand {datum}):
 - Bodenbildung: {boden}
 - Topbildung: {top}
 - Marktphase {name}: {phase}
-- Gesamtmarkt {markt_name}: {markt}
-- Score meines Programms: {score} (Skala -18 bis +18, positiv = eher Kauf)
+- Marktphase {markt_name}: {markt}
+- Programm-Score: {score} (Skala -18 bis +18, positiv = eher Kauf)
 
-B) NACHRICHTEN: Recherchiere die letzten 14 Tage zu {name}, besonders: {recherche}
+B. Nachrichten und Termine
+Nutze die Websuche; ohne Webzugriff sage das ausdrücklich. Nachrichten der letzten 14 Tage, bestätigte Termine der nächsten 4 Wochen. Ältere Zahlen nur als datierte Vergleichsbasis.
+{recherche}
 
-REGELN (strikt)
-- Technische Zahlen nur aus Teil A, keine eigenen Kurs- oder Indikatorwerte.
-- Nachrichten nur mit Quelle und Datum, sonst nicht verwenden.
-- Fehlt etwas: exakt "nicht belegbar" schreiben und nennen, was fehlt.
-- Klare Sprache, wenige Zahlen, maximal 2-3 Preiszonen, keine Disclaimer.
+C. Regeln
+- Prüfe breit, berichte gezielt: nur was die Empfehlung begründet, ihr widerspricht, das Risiko oder den Ein-/Ausstieg verändert. Gleiche Signale zusammenfassen.
+- Technik nur aus Teil A, Nachrichten mit Datum und Quelle. Fehlt Wesentliches: exakt "nicht belegbar" und was fehlt.
+- Kursmarken kritisch: Ein Periodentief ist nur eine mögliche Unterstützung, ein niedriger RSI zeigt nur, dass eine Erholung möglich ist. Ein Boden gilt erst nach beobachtbarer Kursreaktion als bestätigt.
+- Handelsplan: Bei fallendem Kurs erst nach bestätigtem Boden kaufen, gestaffelt nahe der Unterstützung. Ausstieg unter der Unterstützung vorher festlegen und sagen, ob ein Tagesschluss zählt. Bei bärischer Phase (Wert oder Gesamtmarkt) nur kleine Tranchen, Trendwechsel erst über dem SMA200.
+- Nach starkem Anstieg auf Rücksetzer warten, am Widerstand Teilgewinne erwägen, Position begrenzen. {steuer}Höchstens drei Preiszonen, wenige Zahlen, keine Disclaimer.
 
-INVESTITIONSREGELN (bei der Strategie beachten)
-- Bei fallendem Kurs erst nach bestätigter Bodenbildung kaufen, nicht ins fallende Messer greifen.
-- In einer bärischen Marktphase (Wert oder Gesamtmarkt) nur vorsichtig und in kleinen Teilen kaufen; einen Trendwechsel erst bei Kurs über dem SMA200 annehmen.
-- Gestaffelt am Support kaufen, Ausstieg unterhalb des Supports vorher festlegen.
-- Gewinne an Widerständen teilweise sichern; nach starkem Anstieg keine FOMO-Käufe.
-- Keine einzelne Position übergewichten.
-- Bei Kryptowährungen die Haltedauer beachten: unter 1 Jahr Haltedauer ist ein Verkauf steuerpflichtig.
-
-AUSGABEFORMAT (strikt)
-1) Genau 3 Sätze auf Deutsch:
-   Satz 1: Marktphase (bullisch/neutral/bärisch für {name} und den Gesamtmarkt) + Empfehlung für meine Ausgangslage (Kaufen/Aufstocken, Halten oder Reduzieren/Verkaufen) mit 2-3 Hauptgründen aus Technik und Nachrichten.
-   Satz 2: Wichtigste Zonen in einfachen Worten: Support und Widerstand aus Teil A, dazu ob eine Boden- oder Topbildung erkennbar ist.
-   Satz 3: Score 0-10 + Strategie in einem Satz + Risiko-Label (1-3 Wörter) + Sicherheit (hoch/mittel/niedrig).
-2) Danach drei Blöcke mit Überschrift:
-   Fakten: (Teil A und Nachrichten mit Quelle und Datum)
-   Annahmen:
-   Schlussfolgerungen:
-3) Gegenargument: das stärkste Argument gegen deine Empfehlung.
-4) Ausstieg: bei welchem Kurs oder Ereignis deine Empfehlung nicht mehr gilt.
-5) Termine: Ereignisse der nächsten 4 Wochen, die den Kurs bewegen könnten (mit Quelle).
+D. Ausgabe
+1. Entscheidung in genau drei Sätzen: (1) {entscheidung}, Marktphase von {name} und {markt_name}, wichtigster Grund. (2) Unterstützung und Widerstand in Euro, ist ein Boden bestätigt? Topbildung nur, wenn entscheidend. (3) Score 0-10 = (Programm-Score + 18) / 36 x 10, dazu Risiko und Sicherheit je hoch/mittel/niedrig.
+2. Was die Entscheidung trägt: höchstens vier Punkte aus Technik, Nachrichten und Bewertung - was belegt ist und was es für mich bedeutet.
+3. Handelsplan als Tabelle (Szenario | beobachtbares Signal | meine Handlung):
+{plan}
+4. Stärkstes Gegenargument in höchstens zwei Sätzen, und welche Entwicklung es stärken würde.
+5. Höchstens vier bestätigte Termine der nächsten 4 Wochen als Tabelle (Datum und deutsche Uhrzeit, Ereignis, Bedeutung, Quelle).
+6. Fazit in höchstens vier einfachen Sätzen: was ich jetzt tue, worauf ich warte, was {aktion} auslöst oder ausschließt. Höchstens zwei Kursmarken, ohne Score und Fachkürzel.
 """
 
 
@@ -232,10 +222,11 @@ class CryptoStockManager:
         def pct(value):
             return f"{value:+.1f} %".replace('.', ',')
 
-        def zone_text(zone):
+        def zone_text(zone, extreme):
             if zone is None:
                 return 'keine im geladenen Zeitraum'
-            extra = f"{zone['touches']} Berührungen" if zone['touches'] else 'Hoch/Tief des Zeitraums'
+            extra = (f"{zone['touches']} Berührungen laut Programm" if zone['touches']
+                     else f"nur {extreme} des Zeitraums, keine bestätigte Zone")
             return f"{func.euro_de(zone['center'])} ({pct((zone['center'] / price - 1) * 100)}, {extra})"
 
         resistance, support = sr_zones if sr_zones else (None, None)
@@ -248,13 +239,31 @@ class CryptoStockManager:
         state = item.state
         unit = 'Stück' if asset_type == 'stock' else 'Coins'
         if state.watch_list:
-            position = 'Kein Bestand, ich beobachte nur.'
+            position = 'kein Bestand'
         else:
-            position = (f"Bestand: {qty(state.amount_crypto_stock)} {unit}, Einstand {func.euro_de(state.zero_line)} je {unit[:-1] if unit == 'Coins' else unit} "
-                        f"(investiert {func.euro_de(state.buy_balance_eur)})\n"
-                        f"Aktueller Wert: {func.euro_de(state.current_balance_eur)}, "
-                        f"Gewinn/Verlust: {func.euro_de(state.current_profit)} ({pct(state.current_profit_pct)})\n"
-                        f"Länger als 1 Jahr gehalten: {qty(state.amount_older_than_one_year)} {unit}")
+            position = (f"{qty(state.amount_crypto_stock)} {unit}, Einstand {func.euro_de(state.zero_line)} je {unit[:-1] if unit == 'Coins' else unit} "
+                        f"(investiert {func.euro_de(state.buy_balance_eur)}) · Wert {func.euro_de(state.current_balance_eur)} · "
+                        f"Gewinn/Verlust {func.euro_de(state.current_profit)} ({pct(state.current_profit_pct)}) · "
+                        f"länger als 1 Jahr gehalten: {qty(state.amount_older_than_one_year)} {unit}")
+
+        # Fragestellung und Handelsplan hängen davon ab, ob ich den Wert besitze
+        if state.watch_list:
+            aufgabe = (f"Ich habe keine Position in {name}. Entscheide, ob ich kaufen oder abwarten sollte, "
+                       f"und nenne das konkrete Signal, das diese Entscheidung ändern würde.")
+            entscheidung, aktion = 'Beginne mit Kaufen oder Abwarten', 'einen Kauf'
+            plan = ("- Abwarten | welche Bestätigung fehlt noch? | was tue ich bis dahin?\n"
+                    "- Erster Kauf | welche Kursreaktion bestätigt den Einstieg? | wann kaufe ich eine kleine erste Tranche?\n"
+                    "- Plan fällt aus | welche Kursmarke oder welches Ereignis macht ihn hinfällig? | was tue ich vor bzw. nach einem Kauf?")
+        else:
+            aufgabe = (f"Ich besitze {name} (siehe Ausgangslage). Entscheide, ob ich halten, aufstocken oder reduzieren sollte, "
+                       f"und nenne das konkrete Signal, das diese Entscheidung ändern würde.")
+            entscheidung, aktion = 'Beginne mit Halten, Aufstocken oder Reduzieren', 'einen Zukauf oder Verkauf'
+            plan = ("- Halten | welche Lage bestätigt das Halten? | was beobachte ich?\n"
+                    "- Aufstocken | welche Kursreaktion bestätigt einen Zukauf? | wann und wie viel kaufe ich nach?\n"
+                    "- Reduzieren/Ausstieg | welche Kursmarke oder welches Ereignis? | wie viel verkaufe ich?")
+        steuer = ('Haltedauer beachten: Ein Verkauf von Teilen unter 1 Jahr Haltedauer ist steuerpflichtig. '
+                  if asset_type == 'crypto' and not state.watch_list else '')
+        quelle = 'CoinGecko (Durchschnitt mehrerer Börsen)' if asset_type == 'crypto' else 'Yahoo Finance, Kurse ggf. in EUR umgerechnet'
 
         # MACD-Linie (EMA12 - EMA26) und letzte Kreuzung im 100er-Fenster
         diff = df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]
@@ -288,7 +297,7 @@ class CryptoStockManager:
         # Marktphase: eigener Wert und Leitmarkt (Bitcoin bzw. Börsenindex)
         phase = func.trend_phase(full['Price'])
         if asset_type == 'crypto' and symbol == 'bitcoin':
-            market_name, market = 'Bitcoin (Leitwert Krypto)', 'wie oben, Bitcoin ist selbst der Leitwert'
+            market_name, market = 'Krypto-Gesamtmarkt', 'wie oben, Bitcoin ist selbst der Leitwert'
         else:
             try:
                 market_name, market_prices = func.market_prices(asset_type, symbol)
@@ -297,13 +306,23 @@ class CryptoStockManager:
                 market_name, market = 'Gesamtmarkt', f'nicht belegbar ({error})'
 
         high, low = full['Price'].max(), full['Price'].min()
-        recherche = ('Quartalszahlen und nächster Termin, Prognose, Analystenziele, Bewertung (KGV), Branchennews'
-                     if asset_type == 'stock' else
-                     'ETF-Zu- und -Abflüsse, Regulierung, Netzwerk-Updates, Token-Freigaben (Unlocks), große Wallet-Bewegungen')
+        if asset_type == 'stock':
+            recherche = ("- Quartalszahlen und Ausblick: letzter Umsatz, letzte Unternehmensprognose, Analystenkonsens, nächster "
+                         "bestätigter Termin (deutsche Uhrzeit). Ist, Prognose und Schätzung trennen; welche Aussage im nächsten "
+                         "Ausblick die Empfehlung ändern würde.\n"
+                         "- Analystenziele und Bewertung: wesentliche Kursziel-Änderungen (Originalwährung), KGV rückblickend "
+                         "und erwartet (mit Zeitraum der Schätzung).\n"
+                         "- Unternehmen und Branche: Management, Nachfrage, Wettbewerb, Regulierung und Exporte.")
+        else:
+            recherche = ("- Kapitalflüsse: ETF-Zu- und -Abflüsse, große Wallet-Bewegungen, Bestände auf Börsen.\n"
+                         "- Regulierung und Makro: Gesetze, Verfahren, Zinsentscheide, Inflation.\n"
+                         "- Projekt und Netzwerk: Updates, Token-Freigaben (Unlocks), Sicherheitsvorfälle, Konkurrenz.")
 
         values = {
             'name': name, 'symbol': symbol,
-            'typ': 'Kryptowährungen' if asset_type == 'crypto' else 'Aktien',
+            'typ': 'Kryptowährung' if asset_type == 'crypto' else 'Aktie',
+            'aufgabe': aufgabe, 'entscheidung': entscheidung, 'aktion': aktion, 'plan': plan,
+            'steuer': steuer, 'quelle': quelle,
             'datum': time.strftime('%d.%m.%Y %H:%M'),
             'position': position,
             'kurs': func.euro_de(price),
@@ -311,7 +330,7 @@ class CryptoStockManager:
             'woche': pct(item.state.current_seven_days_slope_pct),
             'hoch': f"{func.euro_de(high)} ({pct((price / high - 1) * 100)})",
             'tief': f"{func.euro_de(low)} ({pct((price / low - 1) * 100)})",
-            'resistance': zone_text(resistance), 'support': zone_text(support),
+            'resistance': zone_text(resistance, 'Hoch'), 'support': zone_text(support, 'Tief'),
             'score': str(details['score']),
             'rsi': f"{df['RSI14'].iloc[-1]:.0f} ({details['texts']['rsi']})",
             'macd': macd, 'bollinger': bollinger,
@@ -322,14 +341,24 @@ class CryptoStockManager:
         # Einfaches Ersetzen statt format(): weitere {Klammern} in der Datei stören so nicht.
         for key, value in values.items():
             question = question.replace('{' + key + '}', value)
+        question = question.strip()
         message = (f"<b>KI-Frage: {html.escape(name)}</b>\n"
                    f"Kopieren und in ChatGPT oder Claude einfügen:\n"
-                   f"<pre>{html.escape(question.strip())}</pre>")
+                   f"<pre>{html.escape(question)}</pre>")
         if len(message) <= 4000:
             func.pushover(message, html_format=True)
-        else:
-            # Telegram teilt längere Texte; ein geteilter <pre>-Block wäre ungültig -> ohne Formatierung senden
-            func.pushover(question.strip())
+            return
+        # Zu lang für eine Telegram-Nachricht: an einem Absatz nahe der Mitte in zwei kopierbare Blöcke teilen
+        breaks = [i for i in range(len(question)) if question.startswith('\n\n', i)]
+        cut = min(breaks, key=lambda i: abs(i - len(question) / 2)) if breaks else len(question) // 2
+        parts = (question[:cut].strip(), question[cut:].strip())
+        for number, part in enumerate(parts, 1):
+            hint = 'Kopieren und in ChatGPT oder Claude einfügen:' if number == 1 else 'Direkt im Anschluss an Teil 1 einfügen:'
+            text = f"<b>KI-Frage: {html.escape(name)} (Teil {number}/2)</b>\n{hint}\n<pre>{html.escape(part)}</pre>"
+            if len(text) <= 4000:
+                func.pushover(text, html_format=True)
+            else:   # auch die Hälfte ist zu lang (stark erweiterte Vorlage): ohne Formatierung senden
+                func.pushover(part)
 
     def send_summary(self):
         if self.df_crypto_hd.empty and self.df_stock_hd.empty:

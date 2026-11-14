@@ -1,15 +1,14 @@
-Du bist ein erfahrener Analyst für {typ} (Technische Analyse und Nachrichtenlage).
-Bewerte {name} ({symbol}) für einen Anlagehorizont von 3 Monaten (Swing/Position, kein Daytrading).
-Nutze die Websuche. Wenn du keinen Zugriff hast, schreibe das ausdrücklich.
+{name} ({symbol}) – Analyse für drei Monate
 
-MEINE AUSGANGSLAGE
-{position}
+Bewerte {name} ({typ}) anhand meiner technischen Daten und aktueller Nachrichten. Anlagehorizont: drei Monate, kein Daytrading. {aufgabe}
 
-A) TECHNISCHE DATEN aus meinem Analyse-Programm (Tageswerte, Stand {datum}):
-- Kurs: {kurs} | 1 Tag: {tag} | 7 Tage (Trend): {woche}
+A. Technische Daten aus meinem Programm (Tageswerte, Stand {datum})
+Kurse in EUR, Quelle: {quelle}. Vergleiche Kursmarken nur mit dieser Quelle.
+- Ausgangslage: {position}
+- Kurs: {kurs} · 1 Tag {tag} · 7-Tage-Trend {woche}
 - Hoch/Tief der letzten 250 Tageswerte: {hoch} / {tief}
 - Widerstand: {resistance}
-- Support: {support}
+- Unterstützung: {support}
 - RSI14: {rsi}
 - MACD (EMA12/EMA26): {macd}
 - Bollinger (20,2): {bollinger}
@@ -18,34 +17,25 @@ A) TECHNISCHE DATEN aus meinem Analyse-Programm (Tageswerte, Stand {datum}):
 - Bodenbildung: {boden}
 - Topbildung: {top}
 - Marktphase {name}: {phase}
-- Gesamtmarkt {markt_name}: {markt}
-- Score meines Programms: {score} (Skala -18 bis +18, positiv = eher Kauf)
+- Marktphase {markt_name}: {markt}
+- Programm-Score: {score} (Skala -18 bis +18, positiv = eher Kauf)
 
-B) NACHRICHTEN: Recherchiere die letzten 14 Tage zu {name}, besonders: {recherche}
+B. Nachrichten und Termine
+Nutze die Websuche; ohne Webzugriff sage das ausdrücklich. Nachrichten der letzten 14 Tage, bestätigte Termine der nächsten 4 Wochen. Ältere Zahlen nur als datierte Vergleichsbasis.
+{recherche}
 
-REGELN (strikt)
-- Technische Zahlen nur aus Teil A, keine eigenen Kurs- oder Indikatorwerte.
-- Nachrichten nur mit Quelle und Datum, sonst nicht verwenden.
-- Fehlt etwas: exakt "nicht belegbar" schreiben und nennen, was fehlt.
-- Klare Sprache, wenige Zahlen, maximal 2-3 Preiszonen, keine Disclaimer.
+C. Regeln
+- Prüfe breit, berichte gezielt: nur was die Empfehlung begründet, ihr widerspricht, das Risiko oder den Ein-/Ausstieg verändert. Gleiche Signale zusammenfassen.
+- Technik nur aus Teil A, Nachrichten mit Datum und Quelle. Fehlt Wesentliches: exakt "nicht belegbar" und was fehlt.
+- Kursmarken kritisch: Ein Periodentief ist nur eine mögliche Unterstützung, ein niedriger RSI zeigt nur, dass eine Erholung möglich ist. Ein Boden gilt erst nach beobachtbarer Kursreaktion als bestätigt.
+- Handelsplan: Bei fallendem Kurs erst nach bestätigtem Boden kaufen, gestaffelt nahe der Unterstützung. Ausstieg unter der Unterstützung vorher festlegen und sagen, ob ein Tagesschluss zählt. Bei bärischer Phase (Wert oder Gesamtmarkt) nur kleine Tranchen, Trendwechsel erst über dem SMA200.
+- Nach starkem Anstieg auf Rücksetzer warten, am Widerstand Teilgewinne erwägen, Position begrenzen. {steuer}Höchstens drei Preiszonen, wenige Zahlen, keine Disclaimer.
 
-INVESTITIONSREGELN (bei der Strategie beachten)
-- Bei fallendem Kurs erst nach bestätigter Bodenbildung kaufen, nicht ins fallende Messer greifen.
-- In einer bärischen Marktphase (Wert oder Gesamtmarkt) nur vorsichtig und in kleinen Teilen kaufen; einen Trendwechsel erst bei Kurs über dem SMA200 annehmen.
-- Gestaffelt am Support kaufen, Ausstieg unterhalb des Supports vorher festlegen.
-- Gewinne an Widerständen teilweise sichern; nach starkem Anstieg keine FOMO-Käufe.
-- Keine einzelne Position übergewichten.
-- Bei Kryptowährungen die Haltedauer beachten: unter 1 Jahr Haltedauer ist ein Verkauf steuerpflichtig.
-
-AUSGABEFORMAT (strikt)
-1) Genau 3 Sätze auf Deutsch:
-   Satz 1: Marktphase (bullisch/neutral/bärisch für {name} und den Gesamtmarkt) + Empfehlung für meine Ausgangslage (Kaufen/Aufstocken, Halten oder Reduzieren/Verkaufen) mit 2-3 Hauptgründen aus Technik und Nachrichten.
-   Satz 2: Wichtigste Zonen in einfachen Worten: Support und Widerstand aus Teil A, dazu ob eine Boden- oder Topbildung erkennbar ist.
-   Satz 3: Score 0-10 + Strategie in einem Satz + Risiko-Label (1-3 Wörter) + Sicherheit (hoch/mittel/niedrig).
-2) Danach drei Blöcke mit Überschrift:
-   Fakten: (Teil A und Nachrichten mit Quelle und Datum)
-   Annahmen:
-   Schlussfolgerungen:
-3) Gegenargument: das stärkste Argument gegen deine Empfehlung.
-4) Ausstieg: bei welchem Kurs oder Ereignis deine Empfehlung nicht mehr gilt.
-5) Termine: Ereignisse der nächsten 4 Wochen, die den Kurs bewegen könnten (mit Quelle).
+D. Ausgabe
+1. Entscheidung in genau drei Sätzen: (1) {entscheidung}, Marktphase von {name} und {markt_name}, wichtigster Grund. (2) Unterstützung und Widerstand in Euro, ist ein Boden bestätigt? Topbildung nur, wenn entscheidend. (3) Score 0-10 = (Programm-Score + 18) / 36 x 10, dazu Risiko und Sicherheit je hoch/mittel/niedrig.
+2. Was die Entscheidung trägt: höchstens vier Punkte aus Technik, Nachrichten und Bewertung - was belegt ist und was es für mich bedeutet.
+3. Handelsplan als Tabelle (Szenario | beobachtbares Signal | meine Handlung):
+{plan}
+4. Stärkstes Gegenargument in höchstens zwei Sätzen, und welche Entwicklung es stärken würde.
+5. Höchstens vier bestätigte Termine der nächsten 4 Wochen als Tabelle (Datum und deutsche Uhrzeit, Ereignis, Bedeutung, Quelle).
+6. Fazit in höchstens vier einfachen Sätzen: was ich jetzt tue, worauf ich warte, was {aktion} auslöst oder ausschließt. Höchstens zwei Kursmarken, ohne Score und Fachkürzel.
