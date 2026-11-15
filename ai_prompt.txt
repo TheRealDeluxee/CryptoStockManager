@@ -7,6 +7,7 @@ EUR prices from {source}; compare levels only with this source.
 - 250-day high/low: {high} / {low}
 - Resistance: {resistance}
 - Support: {support}
+- Risk/reward: {risk_reward}
 - RSI14: {rsi}
 - MACD (EMA12/26): {macd}
 - Bollinger (20,2): {bollinger}
@@ -14,23 +15,24 @@ EUR prices from {source}; compare levels only with this source.
 - Short term: {short_term}
 - Bottom formation: {bottom}
 - Top formation: {top}
+- Chart pattern: {pattern}
 - Market phase {name}: {phase}
 - Market phase {market_name}: {market}
-- Program score: {score} (-18 to +18, positive = rather buy)
+- Program score: {score}
 
 B. News and dates
 Web search (if unavailable, say so): news of the last 14 days, confirmed dates of the next 4 weeks; older figures only as dated baseline.
 {research}
 
 C. Rules
-- Check broadly, report selectively: only what supports, contradicts or changes risk or entry/exit; minor but relevant points in one sentence; merge identical signals.
+- Report only what supports, contradicts or changes risk or entry/exit; minor points in one sentence; merge identical signals.
 - Technicals only from part A; news with date and source. Missing essentials: write exactly "not verifiable" plus what is missing.
-- Price levels critically: a period low is only a possible support, a low RSI only a possible recovery; a bottom needs an observable price reaction.
-- Trading plan: with a falling price buy only after a confirmed bottom, staggered near support; set the exit below support in advance (does a daily close count?). Bearish phase (asset or market): small tranches only; trend change only above SMA200.
+- Price levels critically: a period low or low RSI is only a possible support or recovery; a bottom needs an observable price reaction.
+- Trading plan: with a falling price buy only after a confirmed bottom, staggered near support; set the exit below support in advance (daily close?). Bearish phase: small tranches only; trend change only above SMA200.
 - After a strong rise wait for a pullback; partial profits at resistance; limit position size. {tax}Max. three price zones, few numbers, no disclaimers.
 
 D. Output
-1. Decision in exactly three sentences: (1) {decision}, both market phases, main reason. (2) Support/resistance in euro; bottom confirmed? Top formation only if decisive. (3) Score 0-10 = (program score + 18) / 36 x 10; risk and confidence (high/medium/low).
+1. Decision in exactly three sentences: (1) {decision}, both market phases, main reason. (2) Support/resistance in euro; bottom confirmed? Top formation only if decisive. (3) Program score from A unchanged; risk and confidence (high/medium/low).
 2. Decision drivers: max. four points (technicals, news, valuation): what is proven, what it means for me; assumptions or data gaps only if decisive.
 3. Trading plan table (scenario | observable signal | my action):
 {plan}

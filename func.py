@@ -9,6 +9,7 @@ import random
 import math
 import html
 import re
+import warnings
 
 # --- External Packages ---
 import requests #instal
@@ -18,6 +19,10 @@ from scipy.stats import linregress #Install
 from scipy.stats import zscore
 from pytrends.request import TrendReq #Install
 import yfinance as yf #Install
+# yfinance itself still uses "inplace=True", which pandas 3.1 marks as deprecated. Harmless; only this
+# one notice is hidden (CaSa's own code does not use inplace), all other warnings stay visible.
+# Must come after "import yfinance": yfinance switches its own deprecation warnings on when imported.
+warnings.filterwarnings('ignore', message=r'The inplace keyword .* is deprecated')
 import matplotlib #Install
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -61,7 +66,8 @@ def get_stock(symbol, period):
             else:
                 wait_time = wait_times[i] if i < len(wait_times) else 900
                 # only in the log: a failed analysis is reported once at the end (_analyse_items)
-                log_print(f"Empty response for {symbol}, waiting {wait_time}s before retry {i+1}")
+                log_print(f"Yahoo {symbol}: empty response (attempt {i+1}/5)"
+                          + (f", waiting {wait_time} s" if i < 4 else ""), 'WARN')
                 if i < 4:
                     time.sleep(wait_time)
                 
@@ -74,15 +80,9 @@ def get_stock(symbol, period):
             else:
                 wait_time = 30  # Shorter wait time for other errors
             
-            infos = {
-                'sym': symbol, 
-                'tries': int(i + 1), 
-                'function': 'get_stock',
-                'exception': e,
-                'wait_time': wait_time
-            }
-            msg = "Script try number %(tries)s to %(function)s of symbol %(sym)s\nWaiting %(wait_time)ss\n\n%(exception)s" % infos
-            log_print(msg)   # only in the log, see above
+            # only in the log: a failed analysis is reported once at the end (_analyse_items)
+            log_print(f"Yahoo {symbol}: {str(e).strip()[:150]} (attempt {i+1}/5)"
+                      + (f", waiting {wait_time} s" if i < 4 else ""), 'WARN')
             
             if i < 4:  # Do not wait after the last attempt
                 time.sleep(wait_time)
@@ -102,7 +102,7 @@ def get_stock(symbol, period):
     df['PriceLow'] = df['Low'] * factor
 
     df_inverted = df.reset_index(drop=True)
-    df_inverted.rename(columns={'index': 'Date'}, inplace=True)
+    df_inverted = df_inverted.rename(columns={'index': 'Date'})
     
     columns_to_drop = ['Close', 'Adj Close', 'Open', 'High', 'Low', 'Dividends', 'Stock Splits', 'Capital Gains']
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
@@ -166,7 +166,9 @@ def get_crypto(symbol, params_historical):
                     break
                 wait_time = wait_times[i]
             
-            log_print(f"Retry {i+1} for {symbol}, waiting {wait_time}s (Status: {response.status_code})")
+            reason = 'too many requests' if response.status_code == 429 else f'HTTP {response.status_code}'
+            log_print(f"CoinGecko {symbol}: {reason} (attempt {i+1}/5)"
+                      + (f", waiting {wait_time} s" if i < 4 else ""), 'WARN')
             if i < 4:
                 time.sleep(wait_time)
                 
@@ -174,12 +176,13 @@ def get_crypto(symbol, params_historical):
             raise   # wrong key: report immediately instead of waiting through all retries
         except Exception as e:
             wait_time = wait_times[min(i, len(wait_times)-1)]
-            log_print(f"Error for {symbol} (try {i+1}): {e}. Waiting {wait_time}s")
+            log_print(f"CoinGecko {symbol}: {str(e).strip()[:150]} (attempt {i+1}/5)"
+                      + (f", waiting {wait_time} s" if i < 4 else ""), 'WARN')
             if i < 4:
                 time.sleep(wait_time)
     
     if not data or 'prices' not in data or not data['prices']:
-        log_print(f"Failed to fetch {symbol} after 5 attempts")
+        log_print(f"CoinGecko {symbol}: no data after 5 attempts", 'ERROR')
         return None
     
     # Match prices and volumes by timestamp (do not zip blindly).
@@ -454,7 +457,7 @@ def chart_pattern(df, recent=60):
                     f"It may {direction} to about {format_euro(target)}. "
                     f"The signal is wrong if the price goes {'above' if f['top'] else 'below'} {format_euro(f['stop'])}.")
     else:
-        sentence = (f"{f['name']} forming ({meaning}). Not a signal yet: only if the price closes "
+        sentence = (f"{f['name']} forming ({meaning}). {'Sell' if f['top'] else 'Buy'} only if the price closes "
                     f"{'below' if f['top'] else 'above'} {format_euro(neck_now)}, it may {direction} to about {format_euro(target)}.")
 
     ago = lambda i: n - 1 - i
@@ -465,13 +468,34 @@ def chart_pattern(df, recent=60):
             'neck': [(ago(i), v) for i, v in f['neck']],
             'at': None if f['at'] is None else (ago(f['at']), float(p[f['at']]))}
 
+def current_price(symbol, asset_type):
+    """Latest price in EUR for price alerts (one small request instead of the full history)."""
+    if asset_type == 'crypto':
+        headers = {'x-cg-demo-api-key': coingecko_api_key} if coingecko_api_key else {}
+        response = requests.get('https://api.coingecko.com/api/v3/simple/price', headers=headers, timeout=20,
+                                params={'ids': symbol, 'vs_currencies': 'eur'})
+        response.raise_for_status()
+        price = response.json().get(symbol, {}).get('eur')
+        if price is None:
+            raise ValueError(f'CoinGecko has no price for {symbol}.')
+        return float(price)
+    info = yf.Ticker(symbol).fast_info
+    price, currency = float(info['last_price']), info['currency']
+    if currency in ('GBp', 'GBX'):   # London partly quotes in pence
+        price, currency = price / 100, 'GBP'
+    if currency != 'EUR':
+        price *= float(yf.Ticker(f"{currency.upper()}EUR=X").fast_info['last_price'])
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError(f'No valid price for {symbol}.')
+    return price
+
 def next_earnings_date(symbol):
     """Next quarterly results date of a stock from Yahoo, or None if unknown.
     Yahoo sometimes still returns the last date before the next one is announced: past dates are ignored."""
     try:
         calendar = yf.Ticker(symbol).calendar
     except Exception as error:
-        log_print(f"Earnings date for {symbol} not available: {error}")
+        log_print(f"Yahoo {symbol}: earnings date not available ({error})", 'WARN')
         return None
     dates = calendar.get('Earnings Date', []) if isinstance(calendar, dict) else []
     upcoming = [day for day in dates if day >= datetime.now().date()]
@@ -522,7 +546,7 @@ def calc_state_fuctions(state,df):
 
     # Guard: need at least 3 rows for -1, -2, -3 indexing
     if df is None or df.empty or len(df) < 3:
-        log_print("calc_state_fuctions: DataFrame too short, skipping calculations")
+        log_print("calc_state_fuctions: DataFrame too short, skipping calculations", 'WARN')
         return state
 
     # Safe reads of prices/emas
@@ -531,7 +555,7 @@ def calc_state_fuctions(state,df):
         prev_price = float(df['Price'].iloc[-2])
         prev2_price = float(df['Price'].iloc[-3])
     except Exception as e:
-        log_print(f"calc_state_fuctions: Price read error: {e}")
+        log_print(f"calc_state_fuctions: Price read error: {e}", 'WARN')
         return state
 
     amount = float(getattr(state, 'amount_crypto_stock', 0) or 0)
@@ -965,19 +989,29 @@ def set_message_queue(queue: mp.Queue):
 
 def pushover(message: str, priority: int = 0, html_format=False, buttons=None):
     # buttons: optional Telegram buttons below the message, as rows of (label, callback_data)
-    log_print(message)
+    log_message('message', message)
     if _message_queue:
         _message_queue.put({'type': 'text', 'message': message, 'priority': priority, 'html': html_format,
                             'buttons': buttons})
     else:
-        log_print("No queue – message discarded.")
+        log_print("No queue – message discarded.", 'WARN')
+
+def pushover_photo(path: str, message: str, html_format=False):
+    """Send a fixed image file (e.g. the logo) with the message as caption; the file is never deleted."""
+    log_message('photo', message)
+    if _message_queue:
+        _message_queue.put({'type': 'image', 'path': path, 'message': message, 'priority': 0,
+                            'delete_after_send': False, 'html': html_format})
+    else:
+        log_print("No queue – image discarded.", 'WARN')
 
 def pushover_image(symbol: str, message: str, priority: int = 0, delete_after_send=False, html_format=False):
     # html_format=True: message contains Telegram HTML (<b>, <i>, <pre>)
+    log_message('chart', message)
     if _message_queue:
         _message_queue.put({'type': 'image', 'symbol': symbol, 'message': message, 'priority': priority, 'output_dir': output_dir, 'delete_after_send': delete_after_send, 'html': html_format})
     else:
-        log_print("No queue – image discarded.")
+        log_print("No queue – image discarded.", 'WARN')
 
 def google_trends(search):
     
@@ -1010,7 +1044,7 @@ def google_trends(search):
 def seven_day_slope_pct(df, current):
 
     if len(df) < 8:
-        log_print(f"seven_day_slope_pct: DataFrame has only {len(df)} rows, need at least 8")
+        log_print(f"seven_day_slope_pct: DataFrame has only {len(df)} rows, need at least 8", 'WARN')
         return 0.0
     
     try:
@@ -1022,11 +1056,11 @@ def seven_day_slope_pct(df, current):
         
         # Validation
         if len(y) != 7:
-            log_print(f"seven_day_slope_pct: Expected 7 values, got {len(y)}")
+            log_print(f"seven_day_slope_pct: Expected 7 values, got {len(y)}", 'WARN')
             return 0.0
             
         if np.any(np.isnan(y)):
-            log_print("seven_day_slope_pct: NaN values in price data")
+            log_print("seven_day_slope_pct: NaN values in price data", 'WARN')
             return 0.0
         
         # ✅ Problem 4b fix: direct np.arange(7) instead of index reset
@@ -1038,14 +1072,14 @@ def seven_day_slope_pct(df, current):
         y_end = slope * 6 + intercept
         
         if y_start == 0:
-            log_print("seven_day_slope_pct: y_start is 0")
+            log_print("seven_day_slope_pct: y_start is 0", 'WARN')
             return 0.0
         
         return (y_end / y_start - 1) * 100
         
     except Exception as e:
         # ✅ Problem 4c fix: graceful error handling
-        log_print(f"seven_day_slope_pct: Error - {e}")
+        log_print(f"seven_day_slope_pct: Error - {e}", 'WARN')
         return 0.0
 
 def calc_stat_limits(df, column, window=100, invert=False):
@@ -1085,8 +1119,52 @@ def calc_stat_limits(df, column, window=100, invert=False):
     return sig_count, quantile_pct
 
 
-def analysis_details(df, pattern=None):
-    """Shared figures for alarms and /check; this function sends nothing."""
+def risk_reward(price, sr_zones):
+    """Room to the nearest resistance vs. distance to the nearest support (R1/S1).
+    Information only (ℹ️, no traffic light): in the backtest a "good" ratio did not lead to better results,
+    because a price near resistance is usually a strong one. Useful for stop and target, not as a signal.
+    Returns a dict: mark, short (sentence for the message), text (details for the AI prompt), lines (block figures)."""
+    resistance, support = sr_zones if sr_zones else (None, None)
+    up = (resistance['center'] / price - 1) * 100 if resistance else None
+    down = (1 - support['center'] / price) * 100 if support else None
+    lines = [f"{'R1':<6}{format_euro(resistance['center']):>13}  ({up:+.1f} %)" if resistance
+             else f"{'R1':<6}{'none':>13}  (price near its high)",
+             f"{'S1':<6}{format_euro(support['center']):>13}  ({-down:+.1f} %)" if support
+             else f"{'S1':<6}{'none':>13}  (price near its low)"]
+    if up is not None and down:
+        lines.append(f"{'Ratio':<6}{f'{up / down:.1f} : 1':>13}")
+    if resistance is None and support is None:
+        text = 'no resistance or support zone found'
+    elif resistance is None:
+        text = f"no resistance above (price near its high), {-down:+.1f} % to support ({format_euro(support['center'])})"
+    elif support is None:
+        text = f"{up:+.1f} % to resistance ({format_euro(resistance['center'])}), no support below (price near its low)"
+    else:
+        text = (f"{up:+.1f} % to resistance ({format_euro(resistance['center'])}), "
+                f"{-down:+.1f} % to support ({format_euro(support['center'])}), ratio {up / down:.1f} : 1")
+    short = text[0].upper() + text[1:] + '.'
+    return {'mark': 'ℹ️', 'short': short, 'text': text, 'lines': lines}
+
+
+def score_rank(full, window=100):
+    """Score 1-10 as a rank: today's score compared with the scores of the last `window` values of the
+    same asset (10 = among the strongest 10 %). full = long history with indicators."""
+    scores = []
+    for end in range(max(30, len(full) - window + 1), len(full) + 1):
+        try:
+            scores.append(analysis_details(cut_to_window(full.iloc[:end]))['score'])
+        except ValueError:
+            continue
+    if len(scores) < 20:
+        return None
+    today = scores[-1]
+    return max(1, math.ceil(sum(s <= today for s in scores) / len(scores) * 10))
+
+
+def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
+    """Shared figures for alarms and /check; this function sends nothing.
+    rank: score 1-10 from score_rank(); unit: 'days' (daily analysis) or 'hours' (hourly analysis);
+    sr_zones: (resistance, support) from support_resistance() for the risk/reward line."""
     signals, quantiles = {}, {}
     for column in ('RSI14', 'SMA7', 'VMA7', 'ROC5', 'VROC5'):
         count, quantile = calc_stat_limits(df, column, window=100, invert=(column == 'RSI14'))
@@ -1098,44 +1176,102 @@ def analysis_details(df, pattern=None):
             else:
                 raise ValueError(f"Not enough data for {column}.")
         signals[column], quantiles[column] = int(count), quantile
-    text1, score = tech_analyse1(signals['RSI14'], 0)
-    text2, score = tech_analyse2(signals['ROC5'], signals['VROC5'], score)
+    # Score parts: each assessment sentence raises (🟢) or lowers (🔴) the score
+    text1, part_rsi = tech_analyse1(signals['RSI14'], 0)
+    text2, score = tech_analyse2(signals['ROC5'], signals['VROC5'], part_rsi)
+    part_short = score - part_rsi + signals['ROC5']
     text3, score = tech_analyse3(signals['SMA7'], signals['VMA7'], score)
+    part_trend = score - part_rsi - (part_short - signals['ROC5'])
     score += signals['ROC5']
 
     def line(column):
-        count, value = signals[column], quantiles[column]
-        if not math.isfinite(value):
-            return f"{column:<6} no data (rated neutral)"
+        # real value first, in brackets its position within the last 100 values (as "376.25 €  (+6.4 %)")
+        count, quantile = signals[column], quantiles[column]
+        current = df[column].iloc[-1] if column in df else float('nan')
+        if not math.isfinite(quantile) or not math.isfinite(current):
+            return f"{column:<6}{'no data':>13}  (rated neutral)"
+        shown = (f"{current:.1f}" if column == 'RSI14' else format_euro(current) if column == 'SMA7' else
+                 human_format(current, None) if column == 'VMA7' else f"{current:+.1f} %")
         marks = '+' * count if count > 0 else '-' * abs(count) if count < 0 else '●'
-        return f"{column:<6}{value:>7.2f} %  {marks}"   # fixed width: values are aligned
+        return f"{column:<6}{shown:>13}  ({quantile:.0f} %)  {marks}"   # fixed width: values are aligned
 
-    def block(lines, text):
-        # Telegram HTML: values in monospace, header bold, assessment italic.
-        # "Trend-Analysis: ..." is split so that the long sentence gets its own line.
-        label, sentence = text.split(': ', 1) if ': ' in text else ('', text)
-        head = f"<b>{html.escape(label)}</b>\n" if label else ''
-        return f"{head}<pre>{html.escape(chr(10).join(lines))}</pre>\n<i>{html.escape(sentence)}</i>"
+    def block(lines, label):
+        # Telegram HTML: header bold, values in monospace (the assessment sentence is in the summary above)
+        return f"<b>{html.escape(label)}</b>\n<pre>{html.escape(chr(10).join(lines))}</pre>"
 
+    def mark(part):
+        return '🟢' if part > 0 else '🔴' if part < 0 else '🟡'
+
+    # Summary: score 1-10, then one traffic-light line per block below, in the same order
+    price = float(df['Price'].iloc[-1])
+    sma200 = df['SMA200'].iloc[-1] if 'SMA200' in df else float('nan')
+    period = '200-day' if unit == 'days' else '200-hour'
+    if not math.isfinite(sma200):
+        long_mark, long_text = '🟡', 'Unknown (less than 200 values).'
+        long_lines = [f"{'Price':<6}{format_euro(price):>13}", f"{'SMA200':<6}{'not available':>13}"]
+    else:
+        long_mark, long_text = (('🟢', f"Above the {period} average: uptrend.") if price > sma200 else
+                                ('🔴', f"Below the {period} average: downtrend."))
+        long_lines = [f"{'Price':<6}{format_euro(price):>13}",
+                      f"{'SMA200':<6}{format_euro(float(sma200)):>13}  ({(price / sma200 - 1) * 100:+.1f} %)"]
+    # Room to resistance vs. distance to support: is an entry still worth it?
+    rr = risk_reward(price, sr_zones) if sr_zones is not None else None
+
+    # RSI from the real value (30/70 limits); the comparison with the last 100 values only in brackets
+    rsi_now = float(df['RSI14'].iloc[-1])
+    relative = (f" (low compared with the last 100 {unit})" if signals['RSI14'] >= 2 else
+                f" (high compared with the last 100 {unit})" if signals['RSI14'] <= -2 else '')
+    if rsi_now >= 70:
+        rsi_mark, rsi_text = '🔴', f"RSI {rsi_now:.0f}: overbought – risk of a pullback{relative}."
+    elif rsi_now <= 30:
+        rsi_mark, rsi_text = '🟢', f"RSI {rsi_now:.0f}: oversold – rebound possible{relative}."
+    else:
+        rsi_mark, rsi_text = '🟡', f"RSI {rsi_now:.0f}: neutral{relative}."
+
+    # Pattern only as a short status here (🟢 buy signal, 🔴 sell signal, 🟡 not yet / none);
+    # the full description follows in the Pattern-Analysis block.
     pattern_text = pattern['sentence'] if pattern else 'No chart pattern detected.'
-    message = (f"<b>Score: {score}</b>\n\n"
-               f"<b>Pattern:</b> {html.escape(pattern_text)}\n\n"
-               f"{block([line('RSI14')], text1)}\n\n"
-               f"{block([line('SMA7'), line('VMA7')], text3)}\n\n"
-               f"{block([line('ROC5'), line('VROC5')], text2)}")
+    if not pattern:
+        pattern_mark, pattern_short = '🟡', 'None detected.'
+    elif pattern['status'] != 'breakout':
+        pattern_mark, pattern_short = '🟡', 'Not a signal yet.'
+    else:
+        pattern_mark, pattern_short = ('🔴', 'Sell signal.') if pattern['top'] else ('🟢', 'Buy signal.')
+    # One entry per block: (traffic light, name, short sentence at the top, block content below)
+    sections = [(long_mark, 'Long-term-Analysis', long_text, block(long_lines, 'Long-term-Analysis'))]
+    if rr:
+        sections.append((rr['mark'], 'Risk/Reward-Analysis', rr['short'], block(rr['lines'], 'Risk/Reward-Analysis')))
+    sections += [
+        (rsi_mark, 'RSI-Analysis', rsi_text, block([line('RSI14')], 'RSI-Analysis')),
+        (mark(part_trend), 'Trend-Analysis', text3.split(': ', 1)[-1],
+         block([line('SMA7'), line('VMA7')], 'Trend-Analysis')),
+        (mark(part_short), 'Short-term-Analysis', text2.split(': ', 1)[-1],
+         block([line('ROC5'), line('VROC5')], 'Short-term-Analysis')),
+        (pattern_mark, 'Pattern-Analysis', pattern_short,
+         f"<b>Pattern-Analysis</b>\n{html.escape(pattern_text)}" if pattern else ''),
+    ]
+    if rank is None:
+        head = f"<b>Score: {score}</b>"
+    elif rank == 1:
+        head = f"<b>Score {rank}/10</b> – among the weakest 10 % of the last 100 {unit}"
+    else:
+        head = f"<b>Score {rank}/10</b> – stronger than {(rank - 1) * 10} % of the last 100 {unit}"
+    summary = head + "\n" + "\n".join(f"{light} <b>{name}:</b> {html.escape(sentence)}"
+                                      for light, name, sentence, _ in sections)
+    message = summary + "\n\n" + "\n\n".join(content for *_, content in sections if content)
     # assessments without header (e.g. for the /ai prompt)
-    texts = {'rsi': text1, 'trend': text3.split(': ', 1)[-1], 'short': text2.split(': ', 1)[-1],
+    texts = {'rsi': rsi_text, 'trend': text3.split(': ', 1)[-1], 'short': text2.split(': ', 1)[-1],
              'pattern': pattern_text}
-    return {'score': score, 'quantiles': quantiles, 'message': message, 'texts': texts}
+    return {'score': score, 'rank': rank, 'quantiles': quantiles, 'message': message, 'texts': texts}
 
 
-def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type, pattern=None):
+def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type, pattern=None, rank=None, sr_zones=None):
 
     alarms = {}
     tech_indicators = None  
     score = 0
 
-    details = analysis_details(df, pattern)
+    details = analysis_details(df, pattern, rank, 'days' if data_type == '100d' else 'hours', sr_zones)
     score = details['score']
     tech_indicators = details['quantiles']
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
@@ -1146,7 +1282,8 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
         priority = 1 if important and ((score > 5 and buy_sell == "Buy") or (score < -5 and buy_sell == "Sell")) else 0
         # Telegram HTML (bold/italic/monospace), therefore escape texts with html.escape
         message = (
-            f"<b>{html.escape(symbol)} — {buy_sell}</b>\n"
+            # "Potential": a signal, not a recommendation (most alarms are right in about 60 % of cases)
+            f"<b>{html.escape(symbol)} — Potential {buy_sell.lower()}</b>\n"
             f"Trigger: {html.escape(indicator)} ({data_type})\n\n"
             + details['message']
         )
@@ -1353,7 +1490,7 @@ def create_table_image(df, output_path, title='', subtitle='', dpi=200):
     # header
     header_y = 1.0
     for key, label in (('rank', '#'), ('name', 'NAME'), ('price', 'PRICE'), ('d1', '1D P&L'),
-                       ('d7', '7D'), ('rating', 'RATING')):
+                       ('d7', '7D'), ('rating', 'SCORE')):
         x, align = col[key]
         ax.text(x, header_y, label, fontsize=6.5, color=GREY, fontweight='bold', ha=align, va='center')
     ax.plot([0, 1], [header_y + 0.35, header_y + 0.35], color='#dddddd', linewidth=0.8)
@@ -1388,10 +1525,11 @@ def create_table_image(df, output_path, title='', subtitle='', dpi=200):
         ax.text(col['d1'][0], y, f"{d1:+.2f} %", fontsize=9, color=pct_color(d1), fontweight='bold', ha='right', va='center')
         ax.text(col['d7'][0], y, f"{d7:+.1f} %", fontsize=7.5, color=pct_color(d7), ha='right', va='center')
 
-        # rating as a small coloured badge
-        ax.text(col['rating'][0], y, f"{rating:+d}" if rating else '0', fontsize=7.5, color='white', fontweight='bold',
+        # score 1-10 as a small coloured badge: green from 8, red up to 3, grey in between (– = not available)
+        badge = GREEN if rating >= 8 else RED if 1 <= rating <= 3 else GREY
+        ax.text(col['rating'][0], y, str(rating) if rating else '–', fontsize=7.5, color='white', fontweight='bold',
                 ha='center', va='center',
-                bbox=dict(boxstyle='round,pad=0.3', facecolor=pct_color(rating), edgecolor='none'))
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=badge, edgecolor='none'))
 
     fig.patch.set_facecolor('white')
     plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
@@ -1400,11 +1538,38 @@ def create_table_image(df, output_path, title='', subtitle='', dpi=200):
 
 
 
-def log_print(message: str):
-    print(message)
-    log_entry = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + "  " + str(message) + "\n"
-    with open('logfile.txt', 'a', encoding='utf-8') as file:
-        file.write(log_entry)
+LOG_FILE = 'logfile.txt'
+LOG_MAX_BYTES = 1_000_000   # larger: renamed to logfile.old.txt, a new log starts
+
+def log_print(message, level='INFO'):
+    """One clear line per event for error analysis and monitoring:
+    2026-11-15 16:38:37  WARN   CoinGecko near: too many requests, retry 1 in 60 s
+    level: ERROR (something failed), WARN (problem, program continues), INFO (status).
+    HTML tags are removed; further lines are indented under the message."""
+    text = _strip_telegram_html(message)
+    lines = text.splitlines() or ['']
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    entry = f"{stamp}  {level:<5}  {lines[0]}\n" + ''.join(f"{'':28}{line}\n" for line in lines[1:])
+    print(entry, end='')
+    try:
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > LOG_MAX_BYTES:
+            os.replace(LOG_FILE, 'logfile.old.txt')
+        with open(LOG_FILE, 'a', encoding='utf-8') as file:
+            file.write(entry)
+    except OSError:
+        pass   # the log must never stop the program
+
+
+def _strip_telegram_html(message):
+    # Only the Telegram tags (<b>, <i>, <pre>, <a href=...> ...), not e.g. "<module>" in a traceback
+    text = re.sub(r'</?(?:b|i|u|s|pre|code|a)(?:\s[^>]*)?>', '', str(message))
+    return html.unescape(text).strip()
+
+
+def log_message(kind, message):
+    """Telegram message as a short status line (first visible line only, not the whole text)."""
+    first = _strip_telegram_html(message).split('\n', 1)[0]
+    log_print(f"Telegram {kind}: {first[:100]}")
 
 
 def filter(alarm_neu, state):

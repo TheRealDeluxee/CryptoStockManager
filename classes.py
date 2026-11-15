@@ -53,6 +53,7 @@ class GroupedState:
     zero_line: Optional[float] = None
     sr_zones: Any = None  # (resistance, support) from the long history
     pattern: Any = None   # chart pattern (func.chart_pattern) or None
+    score_rank: Any = None   # score 1-10 as rank (func.score_rank) or None
 
 
 class CryptoStock:
@@ -195,9 +196,10 @@ class CryptoStock:
         df = func.calc_indicator_fuctions(df)
         self.state.sr_zones = func.support_resistance(df)  # before cutting: needs the long history
         self.state.pattern = func.chart_pattern(df)
+        self.state.score_rank = func.score_rank(df)   # 1-10 vs. the last 100 values, before cutting
         df = func.cut_to_window(df)
         self.state = func.calc_state_fuctions(self.state, df)
-        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type, self.state.pattern)
+        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type, self.state.pattern, self.state.score_rank, self.state.sr_zones)
         alarms_filter = func.filter(alarms, self.state)
 
         # Return the cut data so that chart and summary use the same 100 values.
@@ -218,7 +220,7 @@ class CryptoStock:
             'Piece [€]': round(float(df['Price'].iloc[-1]), 2),
             '7d P&L [%]': round(self.state.current_seven_days_slope_pct, 2),
             '1d P&L [%]': round(self.state.current_one_day_price_change_pct, 2),
-            'Rating': self.state.score
+            'Rating': self.state.score_rank or 0   # score 1-10 (0 = not available)
         }
 
 
@@ -330,6 +332,135 @@ def add_event(symbol, date_text, text, path="events.ini", assets_path="assets.in
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
     return key, assets[(matches[0], symbol)], date
+
+
+def _write_lines(path, lines):
+    # Write a complete new file first, then replace it: a crash never leaves a half-written file
+    directory = os.path.dirname(os.path.abspath(path))
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=directory, suffix='.tmp', delete=False) as file:
+            temp_path = file.name
+            file.write('\n'.join(lines) + '\n')
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def _delete_ini_entry(path, section_name, key, what):
+    """Remove one entry (one line) from a section. Comments and all other entries stay as they are."""
+    if not os.path.exists(path):
+        raise ValueError(f"{path} not found.")
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    section, index = None, None
+    for number, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            section = stripped[1:-1].strip().lower()
+            continue
+        if section == section_name and '=' in line and not stripped.startswith(('#', ';')) \
+                and line.split('=', 1)[0].strip().lower() == key.strip().lower():
+            index = number
+            break
+    if index is None:
+        raise ValueError(f"{what} '{key}' is not in {path} (already deleted?).")
+    removed = lines.pop(index)
+    _write_lines(path, lines)
+    return removed
+
+
+def delete_event(key, path="events.ini"):
+    """Remove one event from events.ini (for /event). Returns the removed line."""
+    return _delete_ini_entry(path, 'events', key, 'Event')
+
+
+# ── Price alerts (valuealert.ini) ──────────────────────────────────────────
+VALUE_ALERT_HEADER = """# CaSa price alerts: message when a price reaches your mark
+#
+# Format: name = symbol; below|above; price in EUR; note
+# name   = free choice, must be unique in the file
+# symbol = as in assets.ini (e.g. APC.DE or bitcoin)
+# below  = alert when the price falls to the mark or lower, above = rises to the mark or higher
+# note   = any text, e.g. your plan for this price
+#
+# Checked every hour (stocks Monday to Friday 08:00-22:00). When the mark is reached you get a message
+# with your note and the daily analysis; the alert is then removed.
+# Alerts can also be added and deleted in Telegram with /price_alert.
+
+[alerts]"""
+
+
+def parse_price(text):
+    """'320.82', '320,82', '€320.82' or '1.234,50' -> float."""
+    cleaned = text.strip().replace('€', '').replace('EUR', '').strip()
+    if ',' in cleaned and '.' in cleaned:   # 1.234,50 or 1,234.50
+        cleaned = cleaned.replace('.', '').replace(',', '.') if cleaned.rfind(',') > cleaned.rfind('.') else cleaned.replace(',', '')
+    else:
+        cleaned = cleaned.replace(',', '.')
+    try:
+        price = float(cleaned)
+    except ValueError:
+        raise ValueError(f"Invalid price '{text}' (e.g. 320.82).") from None
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError('The price must be greater than 0.')
+    return price
+
+
+def read_value_alerts(path="valuealert.ini", assets_path="assets.ini"):
+    """Price alerts from valuealert.ini. Type (crypto/stock) and name come from assets.ini. Missing file = no alerts."""
+    config = configparser.ConfigParser(interpolation=None)
+    if not config.read(path, encoding="utf-8-sig") or not config.has_section('alerts'):
+        return []
+    assets = read_assets(assets_path)
+    alerts = []
+    for key, value in config.items('alerts'):
+        parts = [part.strip() for part in value.split(';', 3)]
+        if len(parts) < 3 or parts[1].lower() not in ('below', 'above'):
+            raise ValueError(f"{path}, alert '{key}': format is symbol; below|above; price; note")
+        symbol = parts[0].lower()
+        matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
+        if len(matches) != 1:
+            problem = 'not in assets.ini' if not matches else 'listed as crypto and stock in assets.ini'
+            raise ValueError(f"{path}, alert '{key}': {parts[0]} is {problem}.")
+        alerts.append({'key': key, 'symbol': symbol, 'type': matches[0], 'name': assets[(matches[0], symbol)],
+                       'direction': parts[1].lower(), 'price': parse_price(parts[2]),
+                       'note': parts[3] if len(parts) > 3 else ''})
+    return sorted(alerts, key=lambda alert: (alert['name'], alert['price']))
+
+
+def add_value_alert(symbol, direction, price, note, path="valuealert.ini", assets_path="assets.ini"):
+    """Append a price alert (for /price_alert); the file is created with explanations if missing.
+    Returns (key, asset name, asset type)."""
+    symbol = symbol.strip().lower()
+    assets = read_assets(assets_path)
+    matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
+    if len(matches) != 1:
+        raise ValueError(f"{symbol} is {'not in assets.ini' if not matches else 'listed as crypto and stock in assets.ini'}.")
+    if direction not in ('below', 'above'):
+        raise ValueError("Direction must be 'below' or 'above'.")
+    note = ' '.join(note.split())   # no line breaks in the ini
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding='utf-8-sig') as file:
+            lines = file.read().splitlines()
+    if not any(line.strip().lower() == '[alerts]' for line in lines):
+        lines += VALUE_ALERT_HEADER.splitlines() if not lines else ['', '[alerts]']
+    existing = {line.split('=', 1)[0].strip().lower() for line in lines if '=' in line and not line.lstrip().startswith('#')}
+    base = f"{symbol.replace('.', '_').replace('-', '_')}_{direction}_{price:.2f}".replace('.', '_')
+    key, number = base, 2
+    while key in existing:   # name must be unique
+        key, number = f"{base}_{number}", number + 1
+    shown_symbol = symbol.upper() if matches[0] == 'stock' else symbol
+    lines.append(f"{key:<28} = {shown_symbol}; {direction}; {price:.2f}; {note}".rstrip('; '))
+    _write_lines(path, lines)
+    return key, assets[(matches[0], symbol)], matches[0]
+
+
+def delete_value_alert(key, path="valuealert.ini"):
+    """Remove one price alert (for /price_alert and after it was triggered). Returns the removed line."""
+    return _delete_ini_entry(path, 'alerts', key, 'Alert')
 
 
 def set_alarm(symbol, asset_type, active, path="assets.ini"):

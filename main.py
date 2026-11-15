@@ -10,7 +10,9 @@ import html
 import math
 import multiprocessing as mp
 import os
+import re
 import time
+import traceback
 import uuid
 from queue import Empty
 
@@ -22,8 +24,11 @@ import telegram_bot
 
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
+LOGO_FILE = "logo.png"   # shown in the start message (in Git as logo.png)
+# Recommended number of assets with 1 for the free APIs (see README "How many assets with 1?")
+MAX_CRYPTO, MAX_CRYPTO_WITH_KEY, MAX_STOCKS = 8, 12, 30
 
 MORNING_ANALYSIS = "09:30"
 NOON_ANALYSIS = "12:30"
@@ -42,6 +47,7 @@ EUR prices from {source}; compare levels only with this source.
 - 250-day high/low: {high} / {low}
 - Resistance: {resistance}
 - Support: {support}
+- Risk/reward: {risk_reward}
 - RSI14: {rsi}
 - MACD (EMA12/26): {macd}
 - Bollinger (20,2): {bollinger}
@@ -49,23 +55,24 @@ EUR prices from {source}; compare levels only with this source.
 - Short term: {short_term}
 - Bottom formation: {bottom}
 - Top formation: {top}
+- Chart pattern: {pattern}
 - Market phase {name}: {phase}
 - Market phase {market_name}: {market}
-- Program score: {score} (-18 to +18, positive = rather buy)
+- Program score: {score}
 
 B. News and dates
 Web search (if unavailable, say so): news of the last 14 days, confirmed dates of the next 4 weeks; older figures only as dated baseline.
 {research}
 
 C. Rules
-- Check broadly, report selectively: only what supports, contradicts or changes risk or entry/exit; minor but relevant points in one sentence; merge identical signals.
+- Report only what supports, contradicts or changes risk or entry/exit; minor points in one sentence; merge identical signals.
 - Technicals only from part A; news with date and source. Missing essentials: write exactly "not verifiable" plus what is missing.
-- Price levels critically: a period low is only a possible support, a low RSI only a possible recovery; a bottom needs an observable price reaction.
-- Trading plan: with a falling price buy only after a confirmed bottom, staggered near support; set the exit below support in advance (does a daily close count?). Bearish phase (asset or market): small tranches only; trend change only above SMA200.
+- Price levels critically: a period low or low RSI is only a possible support or recovery; a bottom needs an observable price reaction.
+- Trading plan: with a falling price buy only after a confirmed bottom, staggered near support; set the exit below support in advance (daily close?). Bearish phase: small tranches only; trend change only above SMA200.
 - After a strong rise wait for a pullback; partial profits at resistance; limit position size. {tax}Max. three price zones, few numbers, no disclaimers.
 
 D. Output
-1. Decision in exactly three sentences: (1) {decision}, both market phases, main reason. (2) Support/resistance in euro; bottom confirmed? Top formation only if decisive. (3) Score 0-10 = (program score + 18) / 36 x 10; risk and confidence (high/medium/low).
+1. Decision in exactly three sentences: (1) {decision}, both market phases, main reason. (2) Support/resistance in euro; bottom confirmed? Top formation only if decisive. (3) Program score from A unchanged; risk and confidence (high/medium/low).
 2. Decision drivers: max. four points (technicals, news, valuation): what is proven, what it means for me; assumptions or data gaps only if decisive.
 3. Trading plan table (scenario | observable signal | my action):
 {plan}
@@ -141,9 +148,9 @@ class CryptoStockManager:
         for row in rows:
             key = (row['type'], row['symbol'])
             if key not in all_entries:
-                func.log_print(f"Inactive transaction: {row['symbol']} is missing in assets.ini and is not analysed.")
+                func.log_print(f"Inactive transaction: {row['symbol']} is missing in assets.ini and is not analysed.", 'WARN')
             elif key not in entries and row['action'] != 'watchlist':
-                func.log_print(f"Note: {row['symbol']} is held, but without 1 it is not part of the alarm analysis.")
+                func.log_print(f"{row['symbol']} is held, but without 1 it is not part of the alarm analysis.", 'WARN')
         self.crypto_items_hh, self.crypto_items_hd = crypto_hh, crypto_hd
         self.stock_items_hh, self.stock_items_hd = stock_hh, stock_hd
         # Daily tables are kept: price, P&L and rating do not depend on the holdings.
@@ -154,8 +161,8 @@ class CryptoStockManager:
         # Numbers work independently of the Windows language.
         self.stock_update = self.test_mode == 1 or (now.tm_wday < 5 and 8 <= now.tm_hour < 22)
 
-    def _analyse_items(self, items, data_type):
-        results, failed = [], []
+    def _analyse_items(self, items, data_type, label=''):
+        results, failed, alarm_count, start = [], [], 0, time.time()
         for item in items:
             try:
                 df = item.get_API_data(data_type)
@@ -163,11 +170,17 @@ class CryptoStockManager:
                     raise ValueError('no data received after 5 attempts (source unavailable or too many requests)')
                 df, alarms = item.process_data(df, data_type)  # df is cut to 100 values afterwards
                 item.plot_send(df, data_type, alarms)
+                alarm_count += len(alarms)
                 results.append(item.get_summary(df))
             except Exception as error:
                 # One failed asset must not block the others.
-                func.log_print(f"Analysis for {item.symbol} ({data_type}) failed: {error}")
+                func.log_print(f"Analysis {item.symbol} ({data_type}) failed: {error}", 'ERROR')
                 failed.append(f"{item.search}: {error}")
+        # Status line for monitoring: one per run
+        if items:
+            func.log_print(f"Analysis {label} {data_type} done: {len(results)}/{len(items)} ok, "
+                           f"{alarm_count} alarms, {len(failed)} failed, {time.time() - start:.0f} s",
+                           'WARN' if failed else 'INFO')
         if failed:
             # One message per run instead of one per asset (e.g. when Yahoo blocks requests)
             func.pushover(f"Analysis ({data_type}) failed for {len(failed)} of {len(items)} assets:\n"
@@ -175,20 +188,20 @@ class CryptoStockManager:
         return results
 
     def hundred_day_analysis(self):
-        func.log_print('100-day analysis started')
         self._is_stock_trading_hours()
         cols = list(self.df_crypto_hd.columns)
-        self.df_crypto_hd = pd.DataFrame(self._analyse_items(self.crypto_items_hd, '100d'), columns=cols)
+        self.df_crypto_hd = pd.DataFrame(self._analyse_items(self.crypto_items_hd, '100d', 'crypto'), columns=cols)
         self.df_stock_hd = pd.DataFrame(columns=cols)
         if self.stock_update:
-            self.df_stock_hd = pd.DataFrame(self._analyse_items(self.stock_items_hd, '100d'), columns=cols)
+            self.df_stock_hd = pd.DataFrame(self._analyse_items(self.stock_items_hd, '100d', 'stocks'), columns=cols)
+        else:
+            func.log_print('Analysis stocks 100d skipped: outside trading hours')
         self.last_daily_update = time.strftime('%d/%m/%Y %H:%M:%S')
 
     def hundred_hour_analysis(self):
-        func.log_print('100-hour analysis started')
         # As before: automatic hourly analysis only for cryptocurrencies.
         cols = list(self.df_crypto_hh.columns)
-        self.df_crypto_hh = pd.DataFrame(self._analyse_items(self.crypto_items_hh, '100h'), columns=cols)
+        self.df_crypto_hh = pd.DataFrame(self._analyse_items(self.crypto_items_hh, '100h', 'crypto'), columns=cols)
 
     def _daily_analysis(self, symbol, asset_type):
         """Daily analysis of an asset from assets.ini for /check and /ai (without alarm)."""
@@ -206,7 +219,8 @@ class CryptoStockManager:
         item.state.pattern = func.chart_pattern(full)
         df = func.cut_to_window(full)
         item.state = func.calc_state_fuctions(item.state, df)
-        details = func.analysis_details(df, item.state.pattern)
+        item.state.score_rank = func.score_rank(full)
+        details = func.analysis_details(df, item.state.pattern, item.state.score_rank, 'days', sr_zones)
         return name, symbol, item, df, full, sr_zones, details
 
     def single_daily_analysis(self, symbol, asset_type, ask_ai=False):
@@ -301,19 +315,28 @@ class CryptoStockManager:
 
         def formation_text(signals, names):
             # grouped by result (yes / no / not assessable) instead of one entry per sign: shorter, same content
-            groups = {'yes': [], 'no': [], 'not assessable (no recent extreme)': []}
+            groups = {'yes': [], 'no': [], 'n/a (no recent extreme)': []}
             for key, label in names:
-                result = 'not assessable (no recent extreme)' if signals[key] is None else 'yes' if signals[key] else 'no'
+                result = 'n/a (no recent extreme)' if signals[key] is None else 'yes' if signals[key] else 'no'
                 groups[result].append(label)
             parts = [f"{result}: {', '.join(labels)}" for result, labels in groups.items() if labels]
             return f"{len(groups['yes'])}/{len(names)} – {'; '.join(parts)}"
 
+        # Double bottom/top is not listed here: the chart pattern line (same detection as the Telegram
+        # message) covers it, otherwise the AI would see two different pattern names.
         bottom_text = formation_text(bottom, (('folge', 'higher lows'), ('divergenz', 'bullish RSI divergence'),
-                                              ('doppel', 'double bottom'), ('volumen', 'selling climax at low'),
+                                              ('volumen', 'selling climax at low'),
                                               ('bestaetigung', 'price above EMA12')))
         top_text = formation_text(top, (('folge', 'lower highs'), ('divergenz', 'bearish RSI divergence'),
-                                        ('doppel', 'double top'), ('volumen', 'buying climax at high'),
+                                        ('volumen', 'buying climax at high'),
                                         ('bestaetigung', 'price below EMA12')))
+        rr = func.risk_reward(price, sr_zones)
+        rank = details.get('rank')
+        score_text = (f"{rank}/10 (vs. the last 100 days; not a buy signal alone)"
+                      if rank else f"{details['score']} (-18 to +18, positive = rather buy)")
+        # Short forms for the prompt: it has to fit into one Telegram message (4096 characters)
+        rsi_label = details['texts']['rsi'].split(': ', 1)[-1].rstrip('.')   # "neutral", "overbought – ..."
+        pattern_short = re.sub(r' \([^)]*\)', '', details['texts']['pattern'], count=1)   # without the explanation
 
         # Market phase: the asset itself and its leading market (Bitcoin or stock index)
         phase = func.trend_phase(full['Price'])
@@ -352,8 +375,10 @@ class CryptoStockManager:
             'high': f"{func.format_euro(high)} ({pct((price / high - 1) * 100)})",
             'low': f"{func.format_euro(low)} ({pct((price / low - 1) * 100)})",
             'resistance': zone_text(resistance, 'high'), 'support': zone_text(support, 'low'),
-            'score': str(details['score']),
-            'rsi': f"{df['RSI14'].iloc[-1]:.0f} ({details['texts']['rsi']})",
+            'score': score_text,
+            'pattern': pattern_short,
+            'risk_reward': rr['text'],   # facts only: a "good" ratio did not predict better results
+            'rsi': f"{df['RSI14'].iloc[-1]:.0f} ({rsi_label})",
             'macd': macd, 'bollinger': bollinger,
             'trend': details['texts']['trend'], 'short_term': details['texts']['short'],
             'bottom': bottom_text, 'top': top_text, 'research': research,
@@ -419,6 +444,48 @@ class CryptoStockManager:
                 func.pushover(f"Daily analysis for {event['name']} failed: {error}")
         self.earnings_reminders()
 
+    def value_alert_check(self):
+        """Price alerts from valuealert.ini: message with note and daily analysis when the mark is reached,
+        then the alert is removed. Stocks only Monday to Friday 08:00-22:00 (outside, the price does not move)."""
+        try:
+            alerts = cl.read_value_alerts()
+        except (OSError, ValueError, configparser.Error) as error:
+            func.log_print(f'valuealert.ini could not be read: {error}', 'ERROR')
+            func.pushover(f'valuealert.ini could not be read: {error}')
+            return
+        if not alerts:
+            return
+        self._is_stock_trading_hours()
+        checked = triggered = 0
+        for alert in alerts:
+            if alert['type'] == 'stock' and not self.stock_update:
+                continue
+            try:
+                price = func.current_price(alert['symbol'].upper() if alert['type'] == 'stock' else alert['symbol'],
+                                           alert['type'])
+            except Exception as error:
+                func.log_print(f"Price alert {alert['name']}: price not available ({error})", 'WARN')
+                continue
+            checked += 1
+            below = alert['direction'] == 'below'
+            if (below and price > alert['price']) or (not below and price < alert['price']):
+                continue
+            triggered += 1
+            try:
+                cl.delete_value_alert(alert['key'])
+            except (OSError, ValueError) as error:
+                func.log_print(f"Price alert {alert['key']} could not be removed: {error}", 'WARN')
+            note = f"\nYour note: {html.escape(alert['note'])}" if alert['note'] else ''
+            func.pushover(f"<b>Price alert: {html.escape(alert['name'])}</b>\n"
+                          f"Price {func.format_euro(price)} is {'at or below' if below else 'at or above'} "
+                          f"your mark {func.format_euro(alert['price'])}.{note}\n"
+                          f"The alert is removed. Daily analysis follows.", priority=1, html_format=True)
+            try:
+                self.single_daily_analysis(alert['symbol'], alert['type'])
+            except Exception as error:
+                func.pushover(f"Daily analysis for {alert['name']} failed: {error}")
+        func.log_print(f"Price alerts: {checked} of {len(alerts)} checked, {triggered} triggered")
+
     def earnings_reminders(self):
         """Stocks in the alarm analysis (1 in assets.ini): reminder one day before the quarterly results
         (date from Yahoo), then a daily analysis like /check. On results days prices often jump strongly."""
@@ -449,10 +516,17 @@ class CryptoStockManager:
                 func.pushover(f"Daily analysis for {name} failed: {error}")
 
     def startup_message(self):
-        """Short start message: version, assets in the alarm analysis, next dates."""
+        """Short start message: version, assets in the alarm analysis, next analysis."""
         crypto, stock = len(self.crypto_items_hd), len(self.stock_items_hd)
+        # Recommended maximum for the free APIs: CoinGecko 8 (with own key 12), Yahoo 30
+        max_crypto = MAX_CRYPTO_WITH_KEY if func.coingecko_api_key else MAX_CRYPTO
         lines = [f"<b>CaSa started</b> · version {html.escape(str(self.version))}",
-                 f"{crypto + stock} assets in the alarm analysis ({crypto} crypto, {stock} stocks)"]
+                 f"{crypto + stock} assets in the alarm analysis ({crypto}/{max_crypto} crypto, {stock}/{MAX_STOCKS} stocks)"]
+        if crypto > max_crypto:
+            hint = '' if func.coingecko_api_key else ' (with a free CoinGecko key in config.ini: 12)'
+            lines.append(f"⚠ More cryptos than recommended: max. {max_crypto}{hint}, otherwise analyses may fail")
+        if stock > MAX_STOCKS:
+            lines.append(f"⚠ More stocks than recommended: max. {MAX_STOCKS}")
         if self.test_mode == 1:
             lines.append("Test mode: all analyses run once immediately")
         else:
@@ -465,18 +539,17 @@ class CryptoStockManager:
                 daily = f"now, then tomorrow {MORNING_ANALYSIS}"   # after 12:30 it runs immediately at start
             summary = EVENING_SUMMARY if now < EVENING_SUMMARY else f"tomorrow {EVENING_SUMMARY}"
             lines.append(f"Next daily analysis: {daily} · summary: {summary}")
-        try:
-            upcoming = [event for event in cl.read_events() if event['date'] >= datetime.date.today()]
+        try:   # no "next event" line (list with /event), but a faulty events.ini is reported at the start
+            cl.read_events()
         except (OSError, ValueError, configparser.Error) as error:
             lines.append(f"events.ini faulty: {html.escape(str(error))}")
-        else:
-            if upcoming:
-                event = upcoming[0]
-                text = f" – {event['text']}" if event['text'] else ''
-                lines.append(html.escape(f"Next event: {event['date'].strftime('%d/%m/%Y')} {event['name']}{text}"))
         lines.append("All commands: /help")
         lines.append(f'<a href="{GITHUB_URL}">CaSa on GitHub</a>')
-        func.pushover('\n'.join(lines), html_format=True)
+        # With the logo as image, the text below it; without logo file as plain message as before
+        if os.path.exists(LOGO_FILE):
+            func.pushover_photo(LOGO_FILE, '\n'.join(lines), html_format=True)
+        else:
+            func.pushover('\n'.join(lines), html_format=True)
 
     def handle_command(self, command):
         """True means: the main loop should perform a clean restart."""
@@ -501,8 +574,11 @@ class CryptoStockManager:
         elif action == 'events':
             # after /event with tomorrow's date: reminder and analysis immediately
             self.event_reminders()
+        elif action == 'value_alerts':
+            # after /price_alert: check the new alert right away (mark may already be reached)
+            self.value_alert_check()
         elif action == 'reload_assets':
-            # after /alarm: apply the changed alarm flags from assets.ini
+            # after /smart_alert: apply the changed alarm flags from assets.ini
             self.load_config_items()
             names = [item.search for item in self.crypto_items_hd + self.stock_items_hd]
             func.pushover(f"Alarm analysis reloaded ({len(names)} assets): {', '.join(names)}")
@@ -552,6 +628,9 @@ def run_program():
             schedule.every().day.at(EVENT_REMINDER).do(manager.event_reminders)
             if time.strftime('%H:%M') >= EVENT_REMINDER:
                 manager.event_reminders()   # start after 08:00: catch up on today's reminders
+            # Price alerts from valuealert.ini: checked every hour and once at the start, also in test mode
+            schedule.every().hour.do(manager.value_alert_check)
+            manager.value_alert_check()
             while not restart:
                 if not bot_process.is_alive():
                     raise RuntimeError('Telegram bot has stopped. Please check the log.')
@@ -564,6 +643,7 @@ def run_program():
                     try:
                         restart = manager.handle_command(command)
                     except Exception as error:
+                        func.log_print(f"Command {command.get('cmd')} failed:\n{traceback.format_exc()}", 'ERROR')
                         func.pushover(f'Command failed: {error}')
                     if restart:
                         break
@@ -573,7 +653,7 @@ def run_program():
         except KeyboardInterrupt:
             func.log_print('Program stopped.')
         except Exception as error:
-            func.log_print(f'Program error: {error}')
+            func.log_print(f'Program error: {error}\n{traceback.format_exc()}', 'ERROR')
         finally:
             schedule.clear()
             if bot_process is not None and bot_process.is_alive():

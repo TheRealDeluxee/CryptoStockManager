@@ -3,6 +3,7 @@
 /.vscode
 /config.ini
 /logfile.txt
+/logfile.old.txt
 /plots
 /tests
 /new_function
@@ -16,3 +17,4 @@ Thumbs.db
 /transactions.csv
 /assets.ini
 /events.ini
+/valuealert.ini

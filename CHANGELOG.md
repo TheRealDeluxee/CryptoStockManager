@@ -7,6 +7,27 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [0.1.8] – 2026-11-15
+
+### Added
+- Delete events in Telegram: `/event` lists the upcoming dates with a 🗑 button each; deleting asks for confirmation first
+- Start message with the CaSa logo (text as caption below it); the "next event" line is gone (list with `/event`); assets shown as used/recommended maximum (crypto 8, with CoinGecko key 12; stocks 30) with a warning above it
+- Price alerts (`valuealert.ini`, `/price_alert`): message with your note and the daily analysis when a price reaches your mark; checked every hour, removed after triggering; list with 🗑 buttons to delete
+
+### Changed
+- Confirmation lines as traffic light (🟢 🔴 🟡), one line per block below in the same order: new Long-term-Analysis (price vs. 200-day average) and Risk/Reward-Analysis (R1/S1 with ratio, information only ℹ️ – a "good" ratio did not predict better results in the backtest) with their own figure blocks; RSI line from the real RSI value (30/70), the comparison with the last 100 days only in brackets
+- Figure blocks show the real value first and the position within the last 100 values in brackets, e.g. `ROC5  +6.1 %  (88 %)`
+- `/ai` prompt: same chart pattern as the message (double bottom/top removed from the formation list), risk/reward line, score as 1–10 (no own conversion by the AI); shortened so that it still fits into one Telegram message
+- `/alarm` renamed to `/smart_alert` (clearly different from the new `/price_alert`); `/alarm` still works
+- Alarm headline "Potential buy" / "Potential sell" instead of "Buy" / "Sell": a signal, not a recommendation
+- Score shown as 1–10 (rank vs. the last 100 days of the asset), confirmed by the long-term trend (200-day average), the three assessments (RSI-Analysis, Trend-Analysis, Short-term-Analysis) and the chart pattern (Pattern-Analysis) as short status (full pattern description as its own paragraph below), each line labeled and marked with a traffic light: 🟢 good, 🔴 bad, 🟡 neutral; the figure blocks below without repeating the sentences; also in the daily summary (column SCORE). Internally the score stays at -18 to +18.
+- `logfile.txt` reworked: one line per event with level (ERROR, WARN, INFO), Telegram messages only as one short line instead of the full text, a status line after each analysis (ok, alarms, failed, duration), full details for errors; above 1 MB the log continues in a new file (`logfile.old.txt`)
+
+### Fixed
+- No more pandas 3.1 deprecation notices ("The inplace keyword … is deprecated") in the console: removed from CaSa's own code, hidden for yfinance
+- Failed Telegram commands: the reply names the cause, and the full error is written to `logfile.txt` (before only to the console window, although the message pointed to the log)
+- README: `/restart` reloads files but not the program code; after an update CaSa has to be stopped and started again
+
 ## [0.1.7] – 2026-11-15
 
 ### Added

@@ -21,11 +21,13 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 
 ## Why CaSa?
 
-I've always wanted to invest in stocks and cryptocurrencies, but I was held back by the fear of missing rapid market changes and, especially with crypto, the risk of losing significant money. Constantly monitoring prices felt overwhelming and stressful.
+Casa means “home” in Spanish. I’m saving to buy a place of my own, and I know a lot of people my age and younger who are working toward the same goal. With home prices as high as they are, I started thinking more seriously about how to build my savings over time. That’s what got me interested in investing.
 
-Moreover, I was never fully satisfied with the existing apps and their features for tracking price changes. Most of them offer only basic alert thresholds, while more advanced functionalities often come with a price tag.
+As I looked into stocks and cryptocurrencies, one thing kept putting me off. I worried I’d miss a sudden price move, and the swings in crypto made the risk of losing money feel especially real. I wanted a way to keep up with the markets without feeling like I had to check them all day.
 
-That's why I decided to take matters into my own hands and developed CaSa—a free, open-source program available on GitHub. It is reliable, already includes the essential features and is a good starting point for anyone facing the same challenges. There is still plenty of room for growth (see [Roadmap](#roadmap)) – let's build something great together!
+The apps I tried could tell me when a price crossed a threshold, but I wanted more control over which changes would trigger an alert. In the apps I found, that flexibility usually meant paying for a subscription. So I built the tool I wanted to use and named it CaSa after the goal that got me started.
+
+CaSa is free and open source on GitHub. The core features are already in place, and the [roadmap](#roadmap) outlines what I’d like to build next. If you’ve run into the same frustrations, I’d love to hear what would make CaSa useful to you.
 
 ![CaSa alert in Telegram on iPhone and Apple Watch](docs/telegram_phone_watch.png)
 
@@ -34,7 +36,7 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 **Analysis**
 - Crypto data from CoinGecko, stock data from Yahoo Finance; foreign currencies (USD, GBP, ...) are converted to EUR
 - 250 daily / 450 hourly values are loaded, indicators are calculated on the full history and the last 100 values are evaluated
-- Scoring system (-18 to +18) from RSI14, SMA7/VMA7, ROC5/VROC5 with volume support and fake-out detection
+- Scoring system from RSI14, SMA7/VMA7, ROC5/VROC5 with volume support and fake-out detection, shown as an easy score 1–10 with reasons
 - EMA 12/26 crossovers, Bollinger Bands (20,2), 7-day trend slope
 - Support/resistance zones from pivot points of the full history (stocks: daily high/low, like on TradingView)
 - Chart pattern detection: Double/Triple Top/Bottom and (Inverse) Head and Shoulders with neckline, target and invalidation level
@@ -59,13 +61,23 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 - Holding period: amount held longer than one year (tax-relevant for crypto in Germany)
 
 **Planning and Research**
-- `/ai` creates a detailed prompt for ChatGPT or Claude: technical data, support/resistance, bottom/top formation, market phase of the asset and its leading market, your position and common investment rules – no AI API needed, just copy and paste
+- `/ai` creates a detailed prompt for ChatGPT or Claude: technical data, support/resistance with risk/reward, chart pattern, bottom/top formation, score 1–10, market phase of the asset and its leading market, your position and common investment rules – no AI API needed, just copy and paste
 - Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/event`: reminder one day before, plus daily analysis
+- Price alerts in `valuealert.ini` or via `/price_alert`: message with your note when a price reaches your mark, plus daily analysis
 - Quarterly results: automatic reminder one day before for all stocks in the alarm analysis (date from Yahoo), plus daily analysis
 
 ## What's New
 
-**Version 0.1.7** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.8** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- Easier messages: score 1–10 with traffic-light lines (🟢 🔴 🟡) and one figure block per line – long-term trend, risk/reward, RSI, trend, short-term, chart pattern
+- Price alerts with `/price_alert`: message with your note when a price reaches your mark
+- `/smart_alert` (formerly `/alarm`), delete dates with 🗑 in `/event`
+- Start message with logo and recommended number of assets
+- Clearer `logfile.txt`, errors of Telegram commands shown directly
+- AI prompt with the same chart pattern, risk/reward and score as the message
+
+**Version 0.1.7**
 
 - After `/check` the bot asks whether an AI prompt should be created – one tap instead of a second command
 
@@ -107,7 +119,7 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 4. **Create `config.ini` and `assets.ini`** in the program folder (see [Configuration](#configuration))
 5. **Start CaSa**: `python main.py` (Windows: `.venv\Scripts\python main.py`)
 
-After the start, the bot sends a short message with the version, the number of monitored assets and the next scheduled analysis. Send `/help` for all commands.
+After the start, the bot sends the CaSa logo with a short message: the version, the number of monitored assets and the next scheduled analysis. Send `/help` for all commands.
 
 **Tested on**: RockPi3 with Armbian OS and Windows 11.
 
@@ -120,8 +132,9 @@ After the start, the bot sends a short message with the version, the number of m
 | `/ai` | AI prompt to copy into ChatGPT or Claude (buttons or `/ai <symbol>`) |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | **Alarms and Dates** | |
-| `/alarm` | Switch assets on/off for the alarm analysis (buttons or `/alarm <symbol> <on\|off>`) |
-| `/event` | List upcoming dates, or add one: `/event <symbol> <DD/MM/YYYY> <text>` |
+| `/smart_alert` | Switch assets on/off for the alarm analysis (buttons or `/smart_alert <symbol> <on\|off>`); the old `/alarm` still works |
+| `/event` | List upcoming dates with a 🗑 button to delete each one (with confirmation), or add one: `/event <symbol> <DD/MM/YYYY> <text>` |
+| `/price_alert` | List price alerts with a 🗑 button to delete each one (with confirmation), or add one: `/price_alert <symbol> <price> <note>` (below/above is detected from the current price, or add it: `/price_alert APC.DE below 320.82 ...`) |
 | **Portfolio** | |
 | `/buy <symbol> <crypto\|stock> <amount €> <qty> <DD/MM/YYYY>` | Record a buy |
 | `/sell <symbol> <crypto\|stock> <amount €> <qty>` | Record a sell (today) |
@@ -130,7 +143,7 @@ After the start, the bot sends a short message with the version, the number of m
 | `/transactions` | All transactions |
 | **System** | |
 | `/status` | Bot status and number of transactions |
-| `/restart` | Restart the main program (reloads all files) |
+| `/restart` | Restart the main program (reloads all files; after a program update stop and start CaSa completely) |
 | `/help` | Overview of all commands |
 
 Only messages from the chat id in `config.ini` are accepted.
@@ -141,6 +154,7 @@ Only messages from the chat id in `config.ini` are accepted.
 |---|---|
 | every hour | 100-hour analysis of all crypto assets with `1` |
 | 08:00 | Reminder for tomorrow's dates from `events.ini` and tomorrow's quarterly results (stocks with `1`), each plus daily analysis of the asset |
+| every hour | Price alerts from `valuealert.ini` (stocks Monday to Friday, 08:00–22:00) |
 | 09:30 and 12:30 | 100-day analysis of all assets with `1` (stocks Monday to Friday, 08:00–22:00) |
 | 18:30 | Daily ranking (crypto and stocks) |
 
@@ -153,7 +167,7 @@ If the program is started after 12:30, the daily analysis runs immediately; miss
 | Trigger | Signal | Meaning |
 |---|---|---|
 | Positive-5 | Buy | 5-period rate of change rises above `seven_day_price_change` (first value above it); only above the SMA200 |
-| Score>8 | Buy | Score rises above 8 for the first time (daily only); only above the SMA200 |
+| Score>8 | Buy | Internal score (-18 to +18) rises above 8 for the first time (daily only); only above the SMA200 |
 | Cross-EMA | Sell | Fast EMA (12) crosses the slow EMA (26) downwards (daily only) |
 | Pattern-Breakout | Buy / Sell | Fresh close through the neckline of a chart pattern: Double/Triple Bottom or Inverse Head and Shoulders (buy), Double/Triple Top or Head and Shoulders (sell); never marked as important |
 
@@ -165,9 +179,9 @@ The selection is based on a backtest with 9 assets (Bitcoin, Ethereum, DAX and s
 
 ![Daily analysis message in Telegram with a detected chart pattern](docs/telegram_message.png)
 
-- **Score**: combined rating from -18 to +18 (higher = stronger buy signal)
-- **Pattern**: detected chart pattern in one sentence (forming or breakout, neckline, target, invalidation level); drawn in pink in the chart
-- **RSI14**, **Trend-Analysis (SMA7 & VMA7)**, **Short-term-Analysis (ROC5 & VROC5)**: position of the current value within the last 100 values (quantile) with signal strength and an interpretation
+- **Score 1–10**: today's rating compared with the last 100 days of the same asset (10 = among the strongest 10 %), followed by one traffic-light line per analysis (🟢 good, 🔴 bad, 🟡 neutral or not yet clear) in the same order as the blocks below: **Long-term-Analysis** (price vs. 200-day average), **Risk/Reward-Analysis** (ℹ️ information only: room to resistance R1 and distance to support S1 for stop and target; in the backtest a "good" ratio did not lead to better results), **RSI-Analysis** (real RSI value: below 30 oversold, above 70 overbought), **Trend-Analysis**, **Short-term-Analysis** and **Pattern-Analysis**. Each block below shows the figures behind its line. Internally CaSa still calculates a score from -18 to +18 (used for the Score>8 alarm and the AI prompt).
+- **Pattern-Analysis**: in the confirmation only a short status (buy signal, sell signal, not a signal yet, none detected); below it as its own block the detected chart pattern in one sentence (forming or breakout, price that triggers the signal, target, invalidation level); drawn in pink in the chart
+- **RSI14**, **SMA7**, **VMA7**, **ROC5**, **VROC5** in the blocks: the real value first (RSI, 7-day average in €, average volume, 5-day change in %), in brackets its position within the last 100 values (e.g. 88 % = higher than on 88 % of the days), then the signal strength
 - **Amount >1 year**: holdings older than one year
 
 | Symbol | Signal strength |
@@ -233,12 +247,13 @@ NVD.DE         = Nvidia; stock; 1
 APC.DE         = Apple; stock
 ```
 
-The `1` can also be switched in Telegram with `/alarm`.
+The `1` can also be switched in Telegram with `/smart_alert`.
 
 **How many assets with `1`?** The free APIs limit the requests:
 - **Crypto (CoinGecko): at most about 8, with own key about 12.** Each coin needs about 26 requests a day (hourly analysis); more coins cause "too many requests" errors.
 - **Stocks (Yahoo): 30–40 are fine.** About 3 requests per stock and day – the real limit is the number of alarms.
 - Prefer liquid listings in EUR (e.g. Xetra `.DE`): no exchange rate request, reliable volume.
+- The start message shows how many are in use, e.g. `6/12 crypto, 12/30 stocks`, and warns when there are more than recommended.
 
 ### events.ini (optional)
 
@@ -248,7 +263,19 @@ The `1` can also be switched in Telegram with `/alarm`.
 nvda_20261117  = NVD.DE; 17/11/2026; Q3 earnings after US market close
 ```
 
-Entries can also be added with `/event`. The reminder comes at 08:00 one day before. Past dates are ignored.
+Entries can also be added with `/event` and deleted via the 🗑 buttons in the `/event` list. The reminder comes at 08:00 one day before. Past dates are ignored.
+
+### valuealert.ini (optional)
+
+Price alerts: a message as soon as a price reaches your mark – for example the entry price of an AI analysis ("I'd wait for a pullback toward €320.82").
+
+```ini
+# Format: name = symbol; below|above; price in EUR; note
+[alerts]
+apc_de_below_320_82  = APC.DE; below; 320.82; Wait for pullback, buy small amount
+```
+
+`below` = the price falls to the mark or lower, `above` = it rises to the mark or higher. The file is created automatically with the first `/price_alert`. Alerts are checked every hour (stocks Monday to Friday, 08:00–22:00). When the mark is reached you get your note plus the daily analysis, and the alert is removed.
 
 ### transactions.csv
 
@@ -264,7 +291,19 @@ stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
 
 Template for the `/ai` prompt. It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program.
 
-`config.ini`, `assets.ini`, `events.ini` and `transactions.csv` contain personal data and are excluded from Git via `.gitignore`.
+### logfile.txt
+
+Written by the program for error analysis and monitoring – one line per event:
+
+```text
+2026-11-15 16:39:59  WARN   CoinGecko ripple: too many requests (attempt 1/5), waiting 60 s
+2026-11-15 16:40:12  INFO   Analysis crypto 100d done: 6/6 ok, 1 alarms, 0 failed, 23 s
+2026-11-15 16:41:02  ERROR  Analysis NVD.DE (100d) failed: no data received after 5 attempts
+```
+
+`ERROR` = something failed, `WARN` = problem, the program continues, `INFO` = status (analyses, sent messages as one line). Errors include the full details below the line. Above 1 MB the file is renamed to `logfile.old.txt` and a new log starts.
+
+`config.ini`, `assets.ini`, `events.ini`, `valuealert.ini`, `transactions.csv` and the log files contain personal data and are excluded from Git via `.gitignore`.
 
 ## Project Structure
 
@@ -281,6 +320,7 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 
 - The free CoinGecko API has rate limits and no daily candles (open/high/low); crypto analysis uses closing prices only.
 - The hourly analysis is only scheduled for crypto; stocks are analysed daily.
+- `/restart` reloads the files (config, assets, dates, transactions), but not the program code. After an update (new version), stop CaSa and start it again.
 - The program remembers sent alarms and date reminders only while it is running; after a full restart (not `/restart`), an alarm or reminder of the same day can be sent again.
 - Quarterly results dates come from Yahoo. Right after a report Yahoo often does not know the next date yet; it is picked up automatically as soon as it is announced. Some stocks (e.g. BAE Systems) have no date on Yahoo.
 - While an analysis is running, Telegram commands are processed afterwards.
@@ -289,7 +329,7 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 
 ### Usability
 - [ ] **One-line summary** at the top of every message, e.g. "🟢 Uptrend, strong buying interest – buy signal". The details follow below for anyone who wants them.
-- [ ] **Traffic light instead of score**: The −18…+18 score is hard to read. Red, yellow or green plus one sentence is clear at a glance.
+- [x] **Easier score**: The −18…+18 score was hard to read. Now a score 1–10 with the assessments as traffic-light confirmation (🟢 🔴 🟡).
 - [ ] **Simpler score blocks**: Indicator lines such as RSI14 or SMA7 explained in plain language for non-experts.
 - [ ] **`/explain` command**: Explains terms like RSI, SMA200 or neckline in two sentences.
 
@@ -311,11 +351,11 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 - [ ] **Fair Value Gaps**: Price gaps between candles that the price may return to. Popular but unproven, so they are tested in the backtest before any alarm is added.
 
 ### Alerts & events
-- [ ] **Own price alarms**, e.g. `/alert NVD.DE below 130`. User-defined price levels, independent of the indicators.
+- [x] **Own price alarms**, e.g. `/price_alert NVD.DE below 130`. User-defined price levels, independent of the indicators.
 - [ ] **Options expiry and market holidays**: The major expiry date (third Friday of March, June, September and December) is calculated automatically. Exchange holidays come from a fixed list.
 - [ ] **Crypto events**: Known dates such as Bitcoin halvings in `events.ini`.
 - [ ] **Automatic import of economic dates**: Fed, CPI and ECB dates without manual entry. Needs a calendar source.
-- [ ] **Delete dates directly in Telegram**: Remove entries from `events.ini` via chat.
+- [x] **Delete dates directly in Telegram**: Remove entries from `events.ini` via chat.
 
 ### Data & sentiment
 - [ ] **Fear & Greed index** as a sentiment line in the daily summary. Free for crypto (alternative.me), for stocks only via an unofficial CNN source.
@@ -341,7 +381,7 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 
 ## Versioning
 
-CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.7`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.8`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
