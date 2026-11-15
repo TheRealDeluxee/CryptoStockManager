@@ -202,11 +202,16 @@ bitcoin        = Bitcoin; crypto; 1
 cardano        = Cardano; crypto
 
 [stocks]
-QCOM           = Qualcomm; stock; 1
+NVD.DE         = Nvidia; stock; 1
 APC.DE         = Apple; stock
 ```
 
 The `1` can also be switched in Telegram with `/alarm`.
+
+**How many assets with `1`?** The free APIs limit the requests:
+- **Crypto (CoinGecko): at most about 8.** Each coin needs about 26 requests a day (hourly analysis); more coins cause "too many requests" errors.
+- **Stocks (Yahoo): 30–40 are fine.** About 3 requests per stock and day – the real limit is the number of alarms.
+- Prefer liquid listings in EUR (e.g. Xetra `.DE`): no exchange rate request, reliable volume.
 
 ### events.ini (optional)
 
