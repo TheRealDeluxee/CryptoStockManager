@@ -310,7 +310,9 @@ class CryptoStockManager:
             except Exception as error:   # leading market is extra information: an error must not stop /ai
                 market_name, market = 'overall market', f'not verifiable ({str(error)[:60]})'
 
-        high, low = full['Price'].max(), full['Price'].min()
+        # stocks: intraday high/low (as on TradingView), crypto: closing prices
+        high = full['PriceHigh'].max() if 'PriceHigh' in full else full['Price'].max()
+        low = full['PriceLow'].min() if 'PriceLow' in full else full['Price'].min()
         if asset_type == 'stock':
             research = ("- Earnings/outlook: last revenue, guidance, consensus, next confirmed date (German time); "
                         "separate actuals/guidance/estimates; which outlook statement would change the call.\n"

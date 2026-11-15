@@ -52,7 +52,8 @@ def get_stock(symbol, period):
             
             # Fetch data from Yahoo Finance
             stock = yf.Ticker(symbol)
-            df = stock.history(period=period, interval=interval, timeout=20)
+            # auto_adjust=False: prices only split-adjusted, not dividend-adjusted (same as TradingView/Xetra)
+            df = stock.history(period=period, interval=interval, timeout=20, auto_adjust=False)
             
             if not df.empty:
                 break
@@ -94,11 +95,15 @@ def get_stock(symbol, period):
     
     df = df.copy()  # keep the full history, cut_to_window() cuts it later
     df['Price'] = stock_prices_in_eur(stock, df, period)
-    
+    # Daily high/low in EUR with the same conversion factor (for support/resistance like on TradingView)
+    factor = df['Price'] / df['Close']
+    df['PriceHigh'] = df['High'] * factor
+    df['PriceLow'] = df['Low'] * factor
+
     df_inverted = df.reset_index(drop=True)
     df_inverted.rename(columns={'index': 'Date'}, inplace=True)
     
-    columns_to_drop = ['Close', 'Open', 'High', 'Low', 'Dividends', 'Stock Splits']
+    columns_to_drop = ['Close', 'Adj Close', 'Open', 'High', 'Low', 'Dividends', 'Stock Splits', 'Capital Gains']
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
     
     return df_dropped
@@ -241,18 +246,22 @@ def cut_to_window(df, window=100):
 
 def support_resistance(df, order=5):
     """Nearest resistance above and nearest support below the current price.
-    Closing price + volume only -> same method for crypto/stocks and days/hours.
-    df is the long history (250 days / 450 hours), not the 100-value window."""
+    Stocks: pivots from daily high/low (wicks, as drawn on TradingView); crypto: closing prices
+    (CoinGecko has no high/low). df is the long history (250 days / 450 hours), not the 100-value window."""
     p = df['Price'].to_numpy(float)
     if len(p) < 2 * order + 2:
         return None, None
+    has_wicks = 'PriceHigh' in df and 'PriceLow' in df and df[['PriceHigh', 'PriceLow']].notna().all().all()
+    highs = df['PriceHigh'].to_numpy(float) if has_wicks else p
+    lows = df['PriceLow'].to_numpy(float) if has_wicks else p
 
-    # Pivot points: highest/lowest value within ±order values
+    # Pivot points: highest high / lowest low within ±order values
     pivots = []
     for i in range(order, len(p) - order):
-        window = p[i - order:i + order + 1]
-        if p[i] == window.max() or p[i] == window.min():
-            pivots.append(p[i])
+        if highs[i] == highs[i - order:i + order + 1].max():
+            pivots.append(highs[i])
+        if lows[i] == lows[i - order:i + order + 1].min():
+            pivots.append(lows[i])
 
     # Zone width from the typical move per value (hours narrower than days)
     width = max(2 * float(np.median(np.abs(np.diff(p) / p[:-1]))), 0.004)
@@ -277,10 +286,10 @@ def support_resistance(df, order=5):
     support = max(below, key=lambda zone: zone['high']) if below else None
 
     # Fallback: high/low of the loaded period (touches = 0)
-    if resistance is None and p.max() > price:
-        resistance = {'low': p.max(), 'high': p.max(), 'center': p.max(), 'touches': 0}
-    if support is None and p.min() < price:
-        support = {'low': p.min(), 'high': p.min(), 'center': p.min(), 'touches': 0}
+    if resistance is None and highs.max() > price:
+        resistance = {'low': highs.max(), 'high': highs.max(), 'center': highs.max(), 'touches': 0}
+    if support is None and lows.min() < price:
+        support = {'low': lows.min(), 'high': lows.min(), 'center': lows.min(), 'touches': 0}
 
     return resistance, support
 
