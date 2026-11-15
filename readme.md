@@ -65,7 +65,11 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 
 ## What's New
 
-**Version 0.1.6** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.7** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- After `/check` the bot asks whether an AI prompt should be created – one tap instead of a second command
+
+**Version 0.1.6**
 
 - Buy alarms also for watched assets you do not own yet
 - Reminder one day before every date in `events.ini`
@@ -112,7 +116,7 @@ After the start, the bot sends a short message with the version, the number of m
 | Command | Function |
 |---|---|
 | **Analysis** | |
-| `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol> <crypto\|stock>`) |
+| `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol> <crypto\|stock>`); afterwards a question whether an AI prompt (`/ai`) should be created |
 | `/ai` | AI prompt to copy into ChatGPT or Claude (buttons or `/ai <symbol>`) |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | **Alarms and Dates** | |
@@ -337,7 +341,7 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 
 ## Versioning
 
-CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.6`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.7`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

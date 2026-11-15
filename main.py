@@ -22,7 +22,7 @@ import telegram_bot
 
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
 
 MORNING_ANALYSIS = "09:30"
@@ -209,7 +209,8 @@ class CryptoStockManager:
         details = func.analysis_details(df, item.state.pattern)
         return name, symbol, item, df, full, sr_zones, details
 
-    def single_daily_analysis(self, symbol, asset_type):
+    def single_daily_analysis(self, symbol, asset_type, ask_ai=False):
+        """ask_ai=True (only /check): afterwards ask with buttons whether an AI prompt should be created."""
         name, symbol, item, df, full, sr_zones, details = self._daily_analysis(symbol, asset_type)
         # Telegram HTML as for the alarms (bold/italic/monospace)
         message = (f"<b>{html.escape(name)} ({html.escape(symbol)}) — daily analysis (100d)</b>\n"
@@ -220,6 +221,11 @@ class CryptoStockManager:
         image_name = 'manual_' + uuid.uuid4().hex
         func.plot_and_save(df, image_name, '100d', item.state.zero_line, sr_zones, item.state.pattern)
         func.pushover_image(image_name, message, delete_after_send=True, html_format=True)
+        if ask_ai:
+            # Same queue as the chart: the question arrives right after it. "Yes" works like a /ai button.
+            key = symbol.lower()
+            func.pushover(f"Create an AI prompt for {html.escape(name)} (ChatGPT/Claude)?", html_format=True,
+                          buttons=[[('Yes, create', f'ai|{asset_type}|{key}'), ('No', 'noai')]])
 
     def ai_prompt(self, symbol, asset_type):
         """/ai: fill the prompt for ChatGPT/Claude from ai_prompt.txt and send it as copyable text."""
@@ -486,7 +492,7 @@ class CryptoStockManager:
             else:
                 raise ValueError(f'Unknown analysis: {mode}')
         elif action == 'check':
-            self.single_daily_analysis(command['symbol'], command['type'])
+            self.single_daily_analysis(command['symbol'], command['type'], ask_ai=True)
         elif action == 'ai':
             self.ai_prompt(command['symbol'], command['type'])
         elif action == 'reload_transactions':

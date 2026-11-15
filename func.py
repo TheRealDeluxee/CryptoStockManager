@@ -963,10 +963,12 @@ def set_message_queue(queue: mp.Queue):
     global _message_queue
     _message_queue = queue
 
-def pushover(message: str, priority: int = 0, html_format=False):
+def pushover(message: str, priority: int = 0, html_format=False, buttons=None):
+    # buttons: optional Telegram buttons below the message, as rows of (label, callback_data)
     log_print(message)
     if _message_queue:
-        _message_queue.put({'type': 'text', 'message': message, 'priority': priority, 'html': html_format})
+        _message_queue.put({'type': 'text', 'message': message, 'priority': priority, 'html': html_format,
+                            'buttons': buttons})
     else:
         log_print("No queue – message discarded.")
 

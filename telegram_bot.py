@@ -180,10 +180,17 @@ async def _notify_worker(app: Application) -> None:
             elif item.get('type') == 'text':
                 # HTML that fits as a whole (visible text <= 4096) is never split: a cut <pre> block would be invalid
                 fits = parse_mode == 'HTML' and func.telegram_length(text) <= 4096
-                for part in ([text] if fits else _text_chunks(text)):
+                parts = [text] if fits else _text_chunks(text)
+                # optional buttons (e.g. "AI prompt?" after /check) below the last part
+                markup = None
+                if item.get('buttons'):
+                    markup = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data) for label, data in row]
+                                                   for row in item['buttons']])
+                for number, part in enumerate(parts, 1):
                     # no link preview: keeps e.g. the start message with the GitHub link compact
                     await app.bot.send_message(chat_id=chat_id, text=part, parse_mode=parse_mode,
-                                               link_preview_options=LinkPreviewOptions(is_disabled=True))
+                                               link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                               reply_markup=markup if number == len(parts) else None)
         except Exception:
             logging.exception('Telegram message could not be sent')
         await asyncio.sleep(0)
@@ -312,6 +319,14 @@ async def _cb_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     _cmdq(app).put({'cmd': cmd, 'symbol': symbol, 'type': asset_type})
     # Remove the buttons so that nothing is started twice by accident
     await query.edit_message_text(_BUTTON_REPLIES[cmd].format(name=name))
+
+
+async def _cb_noai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # "No" on the question after /check: only remove the buttons
+    query = update.callback_query
+    await query.answer()
+    if _authorized(update, context.application.bot_data['chat_id']):
+        await query.edit_message_text('No AI prompt.')
 
 
 async def _cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -718,6 +733,7 @@ def run_standalone(notify_q: Queue, command_q: Queue) -> None:
     app.add_handler(CommandHandler(["event", "termin"], _cmd_event))   # /termin still works as before
     app.add_handler(CallbackQueryHandler(_cb_alarm, pattern=r"^alarm\|"))
     app.add_handler(CallbackQueryHandler(_cb_assets, pattern=r"^(check|ai)\|"))
+    app.add_handler(CallbackQueryHandler(_cb_noai, pattern=r"^noai$"))
     app.add_handler(CommandHandler("buy", _cmd_buy))
     app.add_handler(CommandHandler("sell", _cmd_sell))
     app.add_handler(CommandHandler("sellall", _cmd_sellall))
