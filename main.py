@@ -400,6 +400,32 @@ class CryptoStockManager:
                 self.single_daily_analysis(event['symbol'], event['type'])
             except Exception as error:
                 func.pushover(f"Daily analysis for {event['name']} failed: {error}")
+        self.earnings_reminders()
+
+    def earnings_reminders(self):
+        """Stocks in the alarm analysis (1 in assets.ini): reminder one day before the quarterly results
+        (date from Yahoo), then a daily analysis like /check. On results days prices often jump strongly."""
+        try:
+            entries = cl.read_assets(alarm_only=True)
+        except (OSError, ValueError, configparser.Error) as error:
+            func.pushover(f'assets.ini could not be read: {error}')
+            return
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        for (asset_type, symbol), name in entries.items():
+            if asset_type != 'stock':
+                continue
+            date = func.next_earnings_date(symbol.upper())
+            key = f'earnings_{symbol}_{date}'
+            if date != tomorrow or key in self.events_done:
+                continue
+            self.events_done.add(key)
+            func.pushover(f"<b>Quarterly results tomorrow: {html.escape(name)}</b>\n"
+                          f"{date.strftime('%A, %d/%m/%Y')} – prices often move strongly on results days.\n"
+                          f"Daily analysis follows.", priority=1, html_format=True)
+            try:
+                self.single_daily_analysis(symbol, asset_type)
+            except Exception as error:
+                func.pushover(f"Daily analysis for {name} failed: {error}")
 
     def startup_message(self):
         """Short start message: version, assets in the alarm analysis, next dates."""
@@ -482,6 +508,7 @@ def run_program():
             if old_manager is not None:
                 manager.crypto_items_hh, manager.crypto_items_hd = old_manager.crypto_items_hh, old_manager.crypto_items_hd
                 manager.stock_items_hh, manager.stock_items_hd = old_manager.stock_items_hh, old_manager.stock_items_hd
+                manager.events_done = old_manager.events_done   # no second reminder for the same day
             manager.load_config_items()
             telegram_bot._load_config()  # detect a missing bot configuration before the start
             bot_process = mp.Process(target=telegram_bot.run_standalone,

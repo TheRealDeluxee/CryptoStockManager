@@ -60,6 +60,7 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 **Planning and Research**
 - `/ai` creates a detailed prompt for ChatGPT or Claude: technical data, support/resistance, bottom/top formation, market phase of the asset and its leading market, your position and common investment rules – no AI API needed, just copy and paste
 - Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/event`: reminder plus daily analysis on the day
+- Quarterly results: automatic reminder one day before for all stocks in the alarm analysis (date from Yahoo), plus daily analysis
 
 ## What's New
 
@@ -118,7 +119,7 @@ Only messages from the chat id in `config.ini` are accepted.
 | Time | What happens |
 |---|---|
 | every hour | 100-hour analysis of all crypto assets with `1` |
-| 08:00 | Reminder for today's dates from `events.ini` plus daily analysis of the asset |
+| 08:00 | Reminder for today's dates from `events.ini` and for tomorrow's quarterly results (stocks with `1`), each plus daily analysis of the asset |
 | 09:30 and 12:30 | 100-day analysis of all assets with `1` (stocks Monday to Friday, 08:00–22:00) |
 | 18:30 | Daily ranking (crypto and stocks) |
 
@@ -140,6 +141,9 @@ Alarms are only sent for assets you own. Messages with a score above +5 (buy) or
 The selection is based on a backtest with 9 assets (Bitcoin, Ethereum, DAX and six stocks, 7–14 years of daily data): Cross-EMA Buy, Negative-5 and 100-Minimum/-Maximum showed no advantage over an average day and were removed. Positive-5 only works with a high threshold (about 10 %); the score was the strongest signal. Both buy alarms only worked in an uptrend (price above the 200-day average), so they are filtered by it. SMA200 breakout and golden cross were also tested as separate alarms, but added little beyond the existing ones.
 
 **Message content**
+
+![Daily analysis message in Telegram with a detected chart pattern](docs/telegram_message.png)
+
 - **Score**: combined rating from -18 to +18 (higher = stronger buy signal)
 - **Pattern**: detected chart pattern in one sentence (forming or breakout, neckline, target, invalidation level); drawn in pink in the chart
 - **RSI14**, **Trend-Analysis (SMA7 & VMA7)**, **Short-term-Analysis (ROC5 & VROC5)**: position of the current value within the last 100 values (quantile) with signal strength and an interpretation
@@ -156,8 +160,10 @@ The selection is based on a backtest with 9 assets (Bitcoin, Ethereum, DAX and s
 
 **Chart**
 - Black line: price; dotted lines: fast/slow EMA; grey band: Bollinger Bands
-- Triangles: EMA crossovers; dots: 100-day high/low of the fast EMA
-- **R1 / S1**: nearest resistance above and support below the price (stronger colour = at least 2 touches); details in the legend at the top right
+- Triangles: EMA crossovers; dots: 100-day high/low of the fast EMA (hidden when a chart pattern is drawn)
+- **R1 / S1**: nearest resistance above and support below the price, as a short band at the left edge with a tag outside the chart (stronger colour = at least 2 touches; ▲/▼ = zone outside the visible range); details in the legend at the top right
+- **Chart pattern** (pink): pattern line with labels, neckline, star at the breakout and target
+- Black tag on the left: current price and its deviation in %
 - Grey bars on the right: volume profile of the visible range (darker bar = price level with most volume)
 - Left axis: deviation in % from your average buy price (or from the average price if you don't own the asset)
 - Background green/red: price above/below your average buy price
@@ -243,7 +249,8 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 
 - The free CoinGecko API has rate limits and no daily candles (open/high/low); crypto analysis uses closing prices only.
 - The hourly analysis is only scheduled for crypto. Hourly data for stocks in foreign currencies currently fails during EUR conversion.
-- The program remembers sent alarms and date reminders only while it is running; after a full restart, an alarm or reminder of the same day can be sent again.
+- The program remembers sent alarms and date reminders only while it is running; after a full restart (not `/restart`), an alarm or reminder of the same day can be sent again.
+- Quarterly results dates come from Yahoo. Right after a report Yahoo often does not know the next date yet; it is picked up automatically as soon as it is announced. Some stocks (e.g. BAE Systems) have no date on Yahoo.
 - While an analysis is running, Telegram commands are processed afterwards.
 
 ## Ideas for the Future

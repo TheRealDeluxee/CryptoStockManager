@@ -14,6 +14,7 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - "Pattern:" sentence in alarms and `/check` messages
 - Pattern-Breakout alarm (Buy 131 / Sell 231) on a fresh close through the neckline, never high priority
 - Score>8 alarm (Buy 141): score rises above 8 for the first time
+- Reminder one day before quarterly results for stocks in the alarm analysis (date from Yahoo), with daily analysis
 
 ### Changed
 - R1/S1 as tags outside the chart on the left; zones only as a short band at the left edge

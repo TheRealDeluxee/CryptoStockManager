@@ -429,14 +429,24 @@ def chart_pattern(df, recent=60):
     neck_now = neck_at(f['neck'], n - 1)
     target = neck_now - f['height'] if f['top'] else neck_now + f['height']
     dates = pd.to_datetime(df['Date'])
-    signal = 'sell' if f['top'] else 'buy'
-    side = 'below' if f['top'] else 'above'
+    # Plain language for users without trading experience: what the pattern means and what to watch
+    meaning = {
+        'Double Top': 'the price failed twice at the same high',
+        'Triple Top': 'the price failed three times at the same high',
+        'Head and Shoulders': 'the last rise was weaker than the one before',
+        'Double Bottom': 'the price held twice at the same low',
+        'Triple Bottom': 'the price held three times at the same low',
+        'Inverse Head and Shoulders': 'the last drop was weaker than the one before',
+    }[f['name']]
+    direction = 'fall' if f['top'] else 'rise'
     if f['status'] == 'breakout':
-        sentence = (f"{f['name']} with breakout {side} the neckline on {dates.iloc[f['at']]:%d/%m} → {signal} signal, "
-                    f"target {format_euro(target)}, invalid {'above' if f['top'] else 'below'} {format_euro(f['stop'])}.")
+        sentence = (f"{f['name']} ({meaning}). On {dates.iloc[f['at']]:%d/%m} the price broke "
+                    f"{'down' if f['top'] else 'up'} → {'sell' if f['top'] else 'buy'} signal. "
+                    f"It may {direction} to about {format_euro(target)}. "
+                    f"The signal is wrong if the price goes {'above' if f['top'] else 'below'} {format_euro(f['stop'])}.")
     else:
-        sentence = (f"{f['name']} forming, {signal} signal on a close {side} the neckline {format_euro(neck_now)}, "
-                    f"target {format_euro(target)}.")
+        sentence = (f"{f['name']} forming ({meaning}). Not a signal yet: only if the price closes "
+                    f"{'below' if f['top'] else 'above'} {format_euro(neck_now)}, it may {direction} to about {format_euro(target)}.")
 
     ago = lambda i: n - 1 - i
     return {'name': f['name'], 'top': f['top'], 'status': f['status'], 'sentence': sentence,
@@ -445,6 +455,18 @@ def chart_pattern(df, recent=60):
             'labels': f['labels'],
             'neck': [(ago(i), v) for i, v in f['neck']],
             'at': None if f['at'] is None else (ago(f['at']), float(p[f['at']]))}
+
+def next_earnings_date(symbol):
+    """Next quarterly results date of a stock from Yahoo, or None if unknown.
+    Yahoo sometimes still returns the last date before the next one is announced: past dates are ignored."""
+    try:
+        calendar = yf.Ticker(symbol).calendar
+    except Exception as error:
+        log_print(f"Earnings date for {symbol} not available: {error}")
+        return None
+    dates = calendar.get('Earnings Date', []) if isinstance(calendar, dict) else []
+    upcoming = [day for day in dates if day >= datetime.now().date()]
+    return min(upcoming) if upcoming else None
 
 def trend_phase(prices):
     """Market phase from daily prices using the classic trend rule:
