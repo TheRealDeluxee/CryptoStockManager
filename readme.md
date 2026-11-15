@@ -4,8 +4,6 @@
 
 CaSa watches your cryptocurrencies and stocks, analyses them with technical indicators and sends alerts, charts and daily summaries to **Telegram**. The same Telegram chat is used to control the program: run analyses on demand, record buys and sells, switch alarms on and off, plan important dates and create prompts for ChatGPT or Claude.
 
-![Example chart](docs/example_chart.png)
-
 ## Contents
 
 - [Why CaSa?](#why-casa)
