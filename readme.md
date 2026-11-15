@@ -68,7 +68,14 @@ CaSa is free and open source on GitHub. The core features are already in place, 
 
 ## What's New
 
-**Version 0.1.8** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.9** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- Fix: plain-text Telegram messages (e.g. after `/smart_alert`) are sent again
+- Fix: logo in the start message also on Linux/Raspberry Pi
+- Fix: long names no longer overlap the price in the daily summary
+- Shorter Risk/Reward line at the top of the message
+
+**Version 0.1.8**
 
 - Easier messages: score 1–10 with traffic-light lines (🟢 🔴 🟡) and one figure block per line – long-term trend, risk/reward, RSI, trend, short-term, chart pattern
 - Price alerts with `/price_alert`: message with your note when a price reaches your mark
@@ -381,7 +388,7 @@ Written by the program for error analysis and monitoring – one line per event:
 
 ## Versioning
 
-CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.8`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.9`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

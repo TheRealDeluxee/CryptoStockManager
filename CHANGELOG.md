@@ -7,7 +7,7 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
-## [Unreleased]
+## [0.1.9] – 2026-11-15
 
 ### Changed
 - Risk/Reward line at the top only as a very short sentence (e.g. "Less room up than down."); prices and distances stay in the block below
