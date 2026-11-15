@@ -64,7 +64,7 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 
 ## What's New
 
-**Since 0.1.0** (not yet released) – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.5** – all changes in [CHANGELOG.md](CHANGELOG.md)
 
 - Chart pattern detection (Double/Triple Top/Bottom, Head and Shoulders): drawn in pink, explained in plain language in every message, own breakout alarm
 - Alarms reworked after a backtest with 9 assets over 7–14 years: new Score>8 alarm, SMA200 trend filter, weak alarms removed – far fewer but better alarms
@@ -278,7 +278,7 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 
 ## Versioning
 
-CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.0`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.5`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

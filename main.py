@@ -22,7 +22,7 @@ import telegram_bot
 
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
-VERSION = "0.1.0"
+VERSION = "0.1.5"
 GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
 
 MORNING_ANALYSIS = "09:30"
