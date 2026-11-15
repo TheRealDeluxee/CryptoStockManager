@@ -68,7 +68,13 @@ CaSa is free and open source on GitHub. The core features are already in place, 
 
 ## What's New
 
-**Version 0.1.9** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.10** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- Clearer figure blocks: real value first, then `(>73% of days)` instead of signal marks
+- RSI comparison now in the same direction as all other lines
+- Distance to the 200-day average shown at the price
+
+**Version 0.1.9**
 
 - Fix: plain-text Telegram messages (e.g. after `/smart_alert`) are sent again
 - Fix: logo in the start message also on Linux/Raspberry Pi
@@ -184,19 +190,12 @@ The selection is based on a backtest with 9 assets (Bitcoin, Ethereum, DAX and s
 
 **Message content**
 
-![Daily analysis message in Telegram with a detected chart pattern](docs/telegram_message.png)
+![Alarm message in Telegram: score 1–10 with traffic-light lines and figure blocks](docs/telegram_message.png)
 
 - **Score 1–10**: today's rating compared with the last 100 days of the same asset (10 = among the strongest 10 %), followed by one traffic-light line per analysis (🟢 good, 🔴 bad, 🟡 neutral or not yet clear) in the same order as the blocks below: **Long-term-Analysis** (price vs. 200-day average), **Risk/Reward-Analysis** (ℹ️ information only: room to resistance R1 and distance to support S1 for stop and target; in the backtest a "good" ratio did not lead to better results), **RSI-Analysis** (real RSI value: below 30 oversold, above 70 overbought), **Trend-Analysis**, **Short-term-Analysis** and **Pattern-Analysis**. Each block below shows the figures behind its line. Internally CaSa still calculates a score from -18 to +18 (used for the Score>8 alarm and the AI prompt).
 - **Pattern-Analysis**: in the confirmation only a short status (buy signal, sell signal, not a signal yet, none detected); below it as its own block the detected chart pattern in one sentence (forming or breakout, price that triggers the signal, target, invalidation level); drawn in pink in the chart
-- **RSI14**, **SMA7**, **VMA7**, **ROC5**, **VROC5** in the blocks: the real value first (RSI, 7-day average in €, average volume, 5-day change in %), in brackets its position within the last 100 values (e.g. 88 % = higher than on 88 % of the days), then the signal strength
+- **RSI14**, **SMA7**, **VMA7**, **ROC5**, **VROC5** in the blocks: the real value first (RSI, 7-day average in €, average volume, 5-day change in %), in brackets how it compares with the last 100 values (e.g. `(>88% of days)` = higher than on 88 % of the last 100 days). Values in the top or bottom 30 % raise or lower the score; the traffic light at the top shows the result.
 - **Amount >1 year**: holdings older than one year
-
-| Symbol | Signal strength |
-|---|---|
-| `+++` / `---` | very strong (top/bottom 10 %) |
-| `++` / `--` | strong (10–20 %) |
-| `+` / `-` | moderate (20–30 %) |
-| `●` | neutral (30–70 %) |
 
 *Fake-out*: the price moves, but volume does not support the move.
 
@@ -388,7 +387,7 @@ Written by the program for error analysis and monitoring – one line per event:
 
 ## Versioning
 
-CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.9`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The version is set in `main.py` (`VERSION`) and shown in the start message; each release is tagged in Git (e.g. `v0.1.10`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

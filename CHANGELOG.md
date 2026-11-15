@@ -7,6 +7,16 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [0.1.10] – 2026-11-15
+
+### Changed
+- Figure blocks: comparison with the last 100 values as `(>73% of days)` = higher than on 73 % of the days
+- Figure blocks without the +/- signal marks (the traffic light at the top shows the effect on the score)
+- Long-term-Analysis: the distance to the 200-day average is shown at the price (`+4.4 % vs SMA200`), not at the average
+
+### Fixed
+- RSI14 line showed the inverted rank (27 % instead of 73 %); now the same direction as all other lines
+
 ## [0.1.9] – 2026-11-15
 
 ### Changed

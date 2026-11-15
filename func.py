@@ -1201,8 +1201,11 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
             return f"{column:<6}{'no data':>13}  (rated neutral)"
         shown = (f"{current:.1f}" if column == 'RSI14' else format_euro(current) if column == 'SMA7' else
                  human_format(current, None) if column == 'VMA7' else f"{current:+.1f} %")
-        marks = '+' * count if count > 0 else '-' * abs(count) if count < 0 else '●'
-        return f"{column:<6}{shown:>13}  ({quantile:.0f} %)  {marks}"   # fixed width: values are aligned
+        # "(>73% of days)" = higher than on 73 % of the last 100 values. For the score the RSI rank is
+        # inverted (high RSI = overbought); here the real position is shown, as for all other lines.
+        # No +/- signal marks: the traffic light at the top already shows the effect on the score.
+        higher = 100 - quantile if column == 'RSI14' else quantile
+        return f"{column:<6}{shown:>13}  (>{higher:.0f}% of {unit})"   # fixed width: values are aligned
 
     def block(lines, label):
         # Telegram HTML: header bold, values in monospace (the assessment sentence is in the summary above)
@@ -1221,8 +1224,9 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     else:
         long_mark, long_text = (('🟢', f"Above the {period} average: uptrend.") if price > sma200 else
                                 ('🔴', f"Below the {period} average: downtrend."))
-        long_lines = [f"{'Price':<6}{format_euro(price):>13}",
-                      f"{'SMA200':<6}{format_euro(float(sma200)):>13}  ({(price / sma200 - 1) * 100:+.1f} %)"]
+        # the percentage describes the price (how far above/below the average it is), so it stands there
+        long_lines = [f"{'Price':<6}{format_euro(price):>13}  ({(price / sma200 - 1) * 100:+.1f} % vs SMA200)",
+                      f"{'SMA200':<6}{format_euro(float(sma200)):>13}"]
     # Room to resistance vs. distance to support: is an entry still worth it?
     rr = risk_reward(price, sr_zones) if sr_zones is not None else None
 
