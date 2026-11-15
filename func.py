@@ -1142,7 +1142,16 @@ def risk_reward(price, sr_zones):
     else:
         text = (f"{up:+.1f} % to resistance ({format_euro(resistance['center'])}), "
                 f"{-down:+.1f} % to support ({format_euro(support['center'])}), ratio {up / down:.1f} : 1")
-    short = text[0].upper() + text[1:] + '.'
+    # Short line for the top of the message: the figures are in the block below
+    if resistance is None and support is None:
+        short = 'No zones found.'
+    elif resistance is None:
+        short = 'No resistance above.'
+    elif support is None:
+        short = 'No support below.'
+    else:
+        short = ('Less room up than down.' if up < down else
+                 'Twice as much room up as down.' if up >= 2 * down else 'More room up than down.')
     return {'mark': 'ℹ️', 'short': short, 'text': text, 'lines': lines}
 
 
@@ -1513,8 +1522,15 @@ def create_table_image(df, output_path, title='', subtitle='', dpi=200):
                                              facecolor=background, edgecolor='none', zorder=0))
 
         ax.text(col['rank'][0], y, str(i + 1), fontsize=8, color=GREY, ha='center', va='center')
-        ax.text(col['name'][0], y, row['Name'], fontsize=9, color=DARK, fontweight='bold', ha='left', va='center')
-        ax.text(col['price'][0], y, format_euro(row['Piece [€]']), fontsize=8.5, color=DARK, ha='right', va='center')
+        name_text = ax.text(col['name'][0], y, row['Name'], fontsize=9, color=DARK, fontweight='bold', ha='left', va='center')
+        price_text = ax.text(col['price'][0], y, format_euro(row['Piece [€]']), fontsize=8.5, color=DARK, ha='right', va='center')
+        # Long names (e.g. "Trane Technologies") must not run into the price: shorten with "…" until they fit
+        renderer = fig.canvas.get_renderer()
+        gap = price_text.get_window_extent(renderer).x0 - 6
+        name = str(row['Name'])
+        while len(name) > 4 and name_text.get_window_extent(renderer).x1 > gap:
+            name = name[:-1]
+            name_text.set_text(name.rstrip() + '…')
 
         # 1d P&L as a bar from the middle
         length = d1 / max_abs * (bar_right - bar_left) / 2

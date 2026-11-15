@@ -7,6 +7,17 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [Unreleased]
+
+### Changed
+- Risk/Reward line at the top only as a very short sentence (e.g. "Less room up than down."); prices and distances stay in the block below
+- README: names in `assets.ini` should have at most about 15 characters
+
+### Fixed
+- Daily summary: long names (e.g. "Trane Technologies") no longer run into the price; they are shortened with "…" only as far as needed
+- Start message without logo on Linux/Raspberry Pi when the file was copied from Windows as `logo.PNG`: the logo is now found regardless of upper/lower case
+- Plain-text Telegram messages were not sent since 0.1.7 ("object of type 'generator' has no len()"), e.g. the confirmation after `/smart_alert`, "Transactions were reloaded" and the error summary of an analysis
+
 ## [0.1.8] – 2026-11-15
 
 ### Added

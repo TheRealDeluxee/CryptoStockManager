@@ -545,9 +545,11 @@ class CryptoStockManager:
             lines.append(f"events.ini faulty: {html.escape(str(error))}")
         lines.append("All commands: /help")
         lines.append(f'<a href="{GITHUB_URL}">CaSa on GitHub</a>')
-        # With the logo as image, the text below it; without logo file as plain message as before
-        if os.path.exists(LOGO_FILE):
-            func.pushover_photo(LOGO_FILE, '\n'.join(lines), html_format=True)
+        # With the logo as image, the text below it; without logo file as plain message as before.
+        # Name compared without case: Linux (Raspberry Pi) distinguishes logo.png and logo.PNG, Windows does not.
+        logo = next((name for name in os.listdir('.') if name.lower() == LOGO_FILE.lower()), None)
+        if logo:
+            func.pushover_photo(logo, '\n'.join(lines), html_format=True)
         else:
             func.pushover('\n'.join(lines), html_format=True)
 

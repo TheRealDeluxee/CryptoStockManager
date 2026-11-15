@@ -230,7 +230,7 @@ api_key =
 
 ### assets.ini
 
-All assets known to the program. Crypto symbols are CoinGecko IDs, stock symbols are Yahoo Finance symbols.
+All assets known to the program. Crypto symbols are CoinGecko IDs, stock symbols are Yahoo Finance symbols. Names should have at most about 15 characters; longer names are shortened with "…" in the daily summary.
 
 ```ini
 # Format: symbol = Name; crypto|stock; 1

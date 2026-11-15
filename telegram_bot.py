@@ -182,7 +182,7 @@ async def _notify_worker(app: Application) -> None:
             elif item.get('type') == 'text':
                 # HTML that fits as a whole (visible text <= 4096) is never split: a cut <pre> block would be invalid
                 fits = parse_mode == 'HTML' and func.telegram_length(text) <= 4096
-                parts = [text] if fits else _text_chunks(text)
+                parts = [text] if fits else list(_text_chunks(text))   # list: number of parts is needed below
                 # optional buttons (e.g. "AI prompt?" after /check) below the last part
                 markup = None
                 if item.get('buttons'):
