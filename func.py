@@ -717,6 +717,20 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
 
         ax2.plot(x, df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
 
+        # Current price as a tag on the percentage axis (like TradingView): "765.50 € (-26.0 %)"
+        current_pct = df['Percentage Deviation'].iloc[-1]
+        ax2.axhline(current_pct, color='black', linewidth=0.7, linestyle=(0, (2, 2)), alpha=0.6, zorder=1)
+        ax2.text(-0.01, current_pct, f"{format_euro(df['Price'].iloc[-1])} ({current_pct:+.1f} %)",
+                 transform=mtransforms.blended_transform_factory(ax2.transAxes, ax2.transData),
+                 ha='right', va='center', fontsize=7.5, color='white', fontweight='bold', zorder=10, clip_on=False,
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor='black', edgecolor='none'))
+        # hide axis labels right next to the tag so that they do not overlap
+        percent = mticker.PercentFormatter()
+        percent.set_axis(ax2.yaxis)
+        span = max_remap - min_remap
+        ax2.yaxis.set_major_formatter(mticker.FuncFormatter(
+            lambda value, pos: '' if abs(value - current_pct) < 0.06 * span else percent(value, pos)))
+
         if 'Volume' in df.columns:
             colors = ['green' if close > open_val else 'red'
                     for open_val, close in zip(df['Price'].shift(1), df['Price'])]
