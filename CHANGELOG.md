@@ -15,13 +15,21 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - Pattern-Breakout alarm (Buy 131 / Sell 231) on a fresh close through the neckline, never high priority
 - Score>8 alarm (Buy 141): score rises above 8 for the first time
 - Reminder one day before quarterly results for stocks in the alarm analysis (date from Yahoo), with daily analysis
+- Chart: current price as a black tag on the percentage axis, like TradingView
+- Start message with a link to the GitHub repository
+- README: recommended number of assets for the free API limits
 
 ### Changed
-- R1/S1 as tags outside the chart on the left; zones only as a short band at the left edge
-- Turning points and max/min are hidden when a pattern is drawn
-
+- Alarms reworked after a backtest (9 assets, 7–14 years of daily data)
 - Positive-5 only on the first value above the threshold; recommended threshold `seven_day_price_change = 10`
 - Trend filter: Positive-5 and Score>8 only when the price is above the SMA200
+- Pattern sentence in plain language for users without trading experience
+- R1/S1 as tags outside the chart on the left; zones only as a short band at the left edge
+- Turning points and max/min are hidden when a pattern is drawn
+- Stock prices without dividend adjustment (as on TradingView/Xetra); support/resistance for stocks from daily high/low
+- AI prompt shorter so that it fits into one Telegram message; the length check counts the visible text
+- Text messages without link preview
+- Reminders are not sent again after `/restart`
 
 ### Removed
 - 100-Minimum / 100-Maximum, Cross-EMA Buy and Negative-5 alarms (no advantage in the backtest)

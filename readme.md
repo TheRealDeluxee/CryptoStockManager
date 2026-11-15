@@ -36,15 +36,17 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 - 250 daily / 450 hourly values are loaded, indicators are calculated on the full history and the last 100 values are evaluated
 - Scoring system (-18 to +18) from RSI14, SMA7/VMA7, ROC5/VROC5 with volume support and fake-out detection
 - EMA 12/26 crossovers, Bollinger Bands (20,2), 7-day trend slope
-- Support/resistance zones from pivot points of the full history
+- Support/resistance zones from pivot points of the full history (stocks: daily high/low, like on TradingView)
+- Chart pattern detection: Double/Triple Top/Bottom and (Inverse) Head and Shoulders with neckline, target and invalidation level
 
 **Alarms**
 - Automatic hourly and daily analysis of all assets marked with `1` in `assets.ini`
-- Triggers: EMA crossover, strong 5-day move, 100-day minimum/maximum
+- Triggers chosen by a backtest: strong 5-day rise, score above 8, EMA crossover downwards, chart pattern breakout
+- Trend filter: buy alarms only above the 200-day average
 - Duplicate filter: the same alarm is not sent twice in a row
 
 **Charts and Messages**
-- Chart without weekend gaps: price, EMAs, Bollinger Bands, signals, support/resistance (R1/S1), volume bars and volume profile
+- Chart without weekend gaps: price with price tag, EMAs, Bollinger Bands, signals, support/resistance (R1/S1), chart pattern, volume bars and volume profile
 - Clean Telegram messages (bold headers, aligned values)
 - Daily ranking of all assets by 1-day P&L
 
@@ -62,7 +64,15 @@ That's why I decided to take matters into my own hands and developed CaSa—a fr
 
 ## What's New
 
-**Version 0.1.0** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Since 0.1.0** (not yet released) – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- Chart pattern detection (Double/Triple Top/Bottom, Head and Shoulders): drawn in pink, explained in plain language in every message, own breakout alarm
+- Alarms reworked after a backtest with 9 assets over 7–14 years: new Score>8 alarm, SMA200 trend filter, weak alarms removed – far fewer but better alarms
+- Reminder one day before quarterly results, with daily analysis
+- Charts: current price tag, R1/S1 as tags on the left; stock prices and zones like on TradingView
+- Shorter AI prompt that fits into one Telegram message
+
+**Version 0.1.0**
 
 - Telegram bot instead of Pushover: notifications, charts and commands in one chat
 - Redesigned charts (trading-day axis, 200 dpi, volume profile, support/resistance) and daily ranking image
@@ -259,9 +269,11 @@ Template for the `/ai` prompt. It is created automatically on first use and can 
 ## Ideas for the Future
 
 - Second resistance/support zone (R2/S2) and alarms when a zone is broken
-- Bottom/top formation also in the alarm messages
+- More chart patterns (triangles, wedges, flags)
+- Buy alarms also for watched assets that you do not own yet
+- Support for a free CoinGecko demo key (more cryptos possible)
 - Delete dates directly in Telegram
-- Reminder one day before an event
+- Reminder one day before an event from `events.ini` (quarterly results already have it)
 - Fix the EUR conversion for hourly stock data
 
 ## Versioning
