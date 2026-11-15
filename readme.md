@@ -21,13 +21,11 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 
 ## Why CaSa?
 
-Casa means “home” in Spanish. I’m saving to buy a place of my own, and I know a lot of people my age and younger who are working toward the same goal. With home prices as high as they are, I started thinking more seriously about how to build my savings over time. That’s what got me interested in investing.
+Casa means “house” or “home” in Spanish. I’m saving to buy a place of my own, and I know many people my age and younger who are trying to do the same. With home prices so high, I started asking myself what I could do today to get a little closer to that goal. That question led me to investing.
 
-As I looked into stocks and cryptocurrencies, one thing kept putting me off. I worried I’d miss a sudden price move, and the swings in crypto made the risk of losing money feel especially real. I wanted a way to keep up with the markets without feeling like I had to check them all day.
+As I started learning about stocks and cryptocurrencies, I kept wondering what might happen while I was away from the screen. Crypto prices could change quickly, and I worried about how much I could lose. I wanted a way to follow the markets without checking prices all day. The apps I tried could tell me when a price reached a certain level, but I wanted more control over when I got an alert. That usually meant paying for a subscription. So I built the tool I wanted to use and called it CaSa, after the goal that got me started.
 
-The apps I tried could tell me when a price crossed a threshold, but I wanted more control over which changes would trigger an alert. In the apps I found, that flexibility usually meant paying for a subscription. So I built the tool I wanted to use and named it CaSa after the goal that got me started.
-
-CaSa is free and open source on GitHub. The core features are already in place, and the [roadmap](#roadmap) outlines what I’d like to build next. If you’ve run into the same frustrations, I’d love to hear what would make CaSa useful to you.
+CaSa is free and open source on GitHub. It uses very little computing power, so it can run on a low-cost computer without a cloud server or paid API subscriptions. It explains what you’re seeing in simple words, even if you’re new to investing. I started CaSa with a home of my own in mind. But now I hope it helps others take their first steps in investing, whatever they’re saving for. If you try it, I’d love to hear what would make it more useful to you. You can see what I’m planning next in the [roadmap](https://github.com/TheRealDeluxee/CryptoStockManager#roadmap).
 
 ![CaSa alert in Telegram on iPhone and Apple Watch](docs/telegram_phone_watch.png)
 
