@@ -229,6 +229,9 @@ def calc_indicator_fuctions(df):
     # Calculate bollinger bands
     df['BB_Mid'], df['BB_Upper'], df['BB_Lower'] = bollinger_bands(df, 'Price', window=20)
 
+    # SMA200 as trend filter for the buy alarms (needs the long history, empty with less than 200 values)
+    df['SMA200'] = df['Price'].rolling(200).mean()
+
     return df
 
 def cut_to_window(df, window=100):
@@ -1105,8 +1108,9 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
     yesterday_EMA_diff_pct = (df['Fast EMA'].iloc[-2] - df['Slow EMA'].iloc[-2]) / df['Slow EMA'].iloc[-2] * 100
 
-    def create_alarm(code, buy_sell, indicator, value):
-        priority = 1 if (score > 5 and buy_sell == "Buy") or (score < -5 and buy_sell == "Sell") else 0
+    def create_alarm(code, buy_sell, indicator, value, important=True):
+        # important=False: never high priority (signal without proven advantage in the backtest)
+        priority = 1 if important and ((score > 5 and buy_sell == "Buy") or (score < -5 and buy_sell == "Sell")) else 0
         # Telegram HTML (bold/italic/monospace), therefore escape texts with html.escape
         message = (
             f"<b>{html.escape(symbol)} — {buy_sell}</b>\n"
@@ -1120,32 +1124,37 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
     # Date only: CoinGecko returns the current time as the last value.
     value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).normalize().timestamp())
 
-    # Portfolio alarms (not for watched assets)
+    # Portfolio alarms (not for watched assets).
+    # Selection based on a backtest (9 assets, 7-14 years of daily data): Cross-EMA Buy and Negative-5
+    # showed no advantage and were removed; Positive-5 only works with a high threshold (about 10 %).
     if not watch_list:
         # BUY Signals
-        if yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0 and data_type == "100d":
-            create_alarm("101", "Buy", "Cross-EMA", value_ts)
-        
-        if df['ROC5'].iloc[-1] > seven_day_price_change:
-            create_alarm("121", "Buy", "Positive-5", df['ROC5'].iloc[-1])
+        # Trend filter: Positive-5 and Score>8 only above the SMA200 (uptrend). In the backtest both
+        # had no advantage below it. Without 200 values (SMA200 empty) the filter does not block.
+        sma200 = df['SMA200'].iloc[-1] if 'SMA200' in df else np.nan
+        uptrend = not df['Price'].iloc[-1] <= sma200
 
+        # Positive-5: only on the first value above the threshold, not on every following value
+        if uptrend and df['ROC5'].iloc[-1] > seven_day_price_change and not df['ROC5'].iloc[-2] > seven_day_price_change:
+            create_alarm("121", "Buy", "Positive-5", value_ts)
+
+        # Score: first daily value above 8 (strongest signal in the backtest)
+        if uptrend and data_type == "100d" and score > 8 and analysis_details(df.iloc[:-1])['score'] <= 8:
+            create_alarm("141", "Buy", "Score>8", value_ts)
 
         # SELL Signals
         if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
             create_alarm("201", "Sell", "Cross-EMA", value_ts)
-        
-        if df['ROC5'].iloc[-1] < (seven_day_price_change * -1):
-            create_alarm("221", "Sell", "Negative-5", df['ROC5'].iloc[-1])
-
 
         # Chart pattern: fresh breakout through the neckline (today or the value before).
         # Value = date of the breakout, so the same breakout is reported only once.
+        # Never high priority: no reliable advantage in the backtest.
         if pattern is not None and pattern['status'] == 'breakout' and pattern['at'][0] <= 1:
             breakout_ts = int(pd.Timestamp(df['Date'].iloc[-1 - pattern['at'][0]]).normalize().timestamp())
             if pattern['top']:
-                create_alarm("231", "Sell", f"Pattern-Breakout {pattern['name']}", breakout_ts)
+                create_alarm("231", "Sell", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
             else:
-                create_alarm("131", "Buy", f"Pattern-Breakout {pattern['name']}", breakout_ts)
+                create_alarm("131", "Buy", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
 
     return alarms, tech_indicators, score
 

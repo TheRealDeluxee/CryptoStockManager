@@ -12,14 +12,18 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 ### Added
 - Chart pattern detection: Double/Triple Top/Bottom and (Inverse) Head and Shoulders, drawn in pink with neckline and target
 - "Pattern:" sentence in alarms and `/check` messages
-- Pattern-Breakout alarm (Buy 131 / Sell 231) on a fresh close through the neckline
+- Pattern-Breakout alarm (Buy 131 / Sell 231) on a fresh close through the neckline, never high priority
+- Score>8 alarm (Buy 141): score rises above 8 for the first time
 
 ### Changed
 - R1/S1 as tags outside the chart on the left; zones only as a short band at the left edge
 - Turning points and max/min are hidden when a pattern is drawn
 
+- Positive-5 only on the first value above the threshold; recommended threshold `seven_day_price_change = 10`
+- Trend filter: Positive-5 and Score>8 only when the price is above the SMA200
+
 ### Removed
-- 100-Minimum / 100-Maximum alarms
+- 100-Minimum / 100-Maximum, Cross-EMA Buy and Negative-5 alarms (no advantage in the backtest)
 
 ## [0.1.0] – 2026-11-14
 

@@ -130,11 +130,14 @@ If the program is started after 12:30, the daily analysis runs immediately; miss
 
 | Trigger | Signal | Meaning |
 |---|---|---|
-| Cross-EMA | Buy / Sell | Fast EMA (12) crosses the slow EMA (26) upwards / downwards (daily only) |
-| Positive-5 / Negative-5 | Buy / Sell | 5-period rate of change above / below `seven_day_price_change` |
-| Pattern-Breakout | Buy / Sell | Fresh close through the neckline of a chart pattern: Double/Triple Bottom or Inverse Head and Shoulders (buy), Double/Triple Top or Head and Shoulders (sell) |
+| Positive-5 | Buy | 5-period rate of change rises above `seven_day_price_change` (first value above it); only above the SMA200 |
+| Score>8 | Buy | Score rises above 8 for the first time (daily only); only above the SMA200 |
+| Cross-EMA | Sell | Fast EMA (12) crosses the slow EMA (26) downwards (daily only) |
+| Pattern-Breakout | Buy / Sell | Fresh close through the neckline of a chart pattern: Double/Triple Bottom or Inverse Head and Shoulders (buy), Double/Triple Top or Head and Shoulders (sell); never marked as important |
 
 Alarms are only sent for assets you own. Messages with a score above +5 (buy) or below -5 (sell) are marked as important.
+
+The selection is based on a backtest with 9 assets (Bitcoin, Ethereum, DAX and six stocks, 7–14 years of daily data): Cross-EMA Buy, Negative-5 and 100-Minimum/-Maximum showed no advantage over an average day and were removed. Positive-5 only works with a high threshold (about 10 %); the score was the strongest signal. Both buy alarms only worked in an uptrend (price above the 200-day average), so they are filtered by it. SMA200 breakout and golden cross were also tested as separate alarms, but added little beyond the existing ones.
 
 **Message content**
 - **Score**: combined rating from -18 to +18 (higher = stronger buy signal)
@@ -171,7 +174,7 @@ token = YOUR_TELEGRAM_BOT_TOKEN
 chat_id = YOUR_CHAT_ID
 
 [alarm]
-seven_day_price_change = 7      # threshold for Positive-5 / Negative-5 alarms (%)
+seven_day_price_change = 10     # threshold for the Positive-5 alarm (%), 10 recommended by the backtest
 previous_alarm_change = 3       # minimum change before the same alarm is sent again
 one_day_price_change = 10       # currently not used
 one_day_profit_limit = -2       # currently not used
