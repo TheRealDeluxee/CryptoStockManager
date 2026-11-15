@@ -7,6 +7,20 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [Unreleased]
+
+### Added
+- Chart pattern detection: Double/Triple Top/Bottom and (Inverse) Head and Shoulders, drawn in pink with neckline and target
+- "Pattern:" sentence in alarms and `/check` messages
+- Pattern-Breakout alarm (Buy 131 / Sell 231) on a fresh close through the neckline
+
+### Changed
+- R1/S1 as tags outside the chart on the left; zones only as a short band at the left edge
+- Turning points and max/min are hidden when a pattern is drawn
+
+### Removed
+- 100-Minimum / 100-Maximum alarms
+
 ## [0.1.0] – 2026-11-14
 
 ### Added

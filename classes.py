@@ -52,6 +52,7 @@ class GroupedState:
     # derived values used in plotting
     zero_line: Optional[float] = None
     sr_zones: Any = None  # (resistance, support) from the long history
+    pattern: Any = None   # chart pattern (func.chart_pattern) or None
 
 
 class CryptoStock:
@@ -193,9 +194,10 @@ class CryptoStock:
 
         df = func.calc_indicator_fuctions(df)
         self.state.sr_zones = func.support_resistance(df)  # before cutting: needs the long history
+        self.state.pattern = func.chart_pattern(df)
         df = func.cut_to_window(df)
         self.state = func.calc_state_fuctions(self.state, df)
-        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type)
+        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type, self.state.pattern)
         alarms_filter = func.filter(alarms, self.state)
 
         # Return the cut data so that chart and summary use the same 100 values.
@@ -207,7 +209,7 @@ class CryptoStock:
         # A separate image per message prevents it from being overwritten later.
         for info in alarms_filter.values():
             image_name = "alarm_" + uuid.uuid4().hex
-            func.plot_and_save(df, image_name, data_type, self.state.zero_line, self.state.sr_zones)
+            func.plot_and_save(df, image_name, data_type, self.state.zero_line, self.state.sr_zones, self.state.pattern)
             func.pushover_image(image_name, info['msg'], info['priority'], delete_after_send=True, html_format=True)
 
     def get_summary(self, df):

@@ -331,6 +331,118 @@ def formation_signals(df, order=5, recent=30):
 
     return check(lows, True), check(highs, False)
 
+def zigzag(df, order=5):
+    """Alternating highs (H) and lows (L) as [index, 'H'/'L', price].
+    Stocks: from wicks (high/low), crypto: from closing prices."""
+    p = df['Price'].to_numpy(float)
+    has_wicks = 'PriceHigh' in df and 'PriceLow' in df and df[['PriceHigh', 'PriceLow']].notna().all().all()
+    hi = df['PriceHigh'].to_numpy(float) if has_wicks else p
+    lo = df['PriceLow'].to_numpy(float) if has_wicks else p
+    raw = []
+    for i in range(order, len(p) - 2):   # the latest points need only 2 values after them
+        if hi[i] == hi[i - order:i + order + 1].max():
+            raw.append([i, 'H', hi[i]])
+        if lo[i] == lo[i - order:i + order + 1].min():
+            raw.append([i, 'L', lo[i]])
+    points = []
+    for point in sorted(raw):
+        if points and points[-1][1] == point[1]:   # two of the same kind in a row: keep the more extreme one
+            if (point[1] == 'H' and point[2] > points[-1][2]) or (point[1] == 'L' and point[2] < points[-1][2]):
+                points[-1] = point
+        else:
+            points.append(point)
+    return points
+
+def chart_pattern(df, recent=60):
+    """Classic chart patterns like TradingView "Auto Chart Patterns" (stage 1):
+    Double/Triple Top/Bottom and (Inverse) Head and Shoulders.
+    df is the long history. Returns the youngest valid pattern (forming or fresh breakout) or None.
+    Positions are stored as "values ago" so that the chart can use the 100-value window."""
+    p = df['Price'].to_numpy(float)
+    n = len(p)
+    if n < 30:
+        return None
+    tol = max(2 * float(np.median(np.abs(np.diff(p) / p[:-1]))), 0.015)   # "same level"
+    pts = zigzag(df)
+    same = lambda a, b: abs(b / a - 1) <= tol
+    found = []
+
+    def neck_at(neck, i):   # neckline through two points, value at index i
+        (ia, va), (ib, vb) = neck
+        return va + (vb - va) * (i - ia) / (ib - ia) if ib != ia else va
+
+    def status(top, neck, extreme, last_point):
+        """Breakout = first close beyond the neckline after the last pattern point.
+        Invalid if the price runs above the high (top) / below the low (bottom) of the pattern.
+        Old if the breakout is more than 10 values ago (no fresh signal any more)."""
+        breakout = None
+        for i in range(last_point + 1, n):
+            if (top and p[i] > extreme * (1 + tol)) or (not top and p[i] < extreme * (1 - tol)):
+                return 'invalid', None
+            if breakout is None and ((top and p[i] < neck_at(neck, i)) or (not top and p[i] > neck_at(neck, i))):
+                breakout = i
+        if breakout is None:
+            return 'forming', None
+        return ('breakout', breakout) if breakout >= n - 10 else ('old', breakout)
+
+    def add(name, top, points, labels, neck, extreme, rank):
+        st, at = status(top, neck, extreme, points[-1][0])
+        height = abs(extreme - neck_at(neck, points[len(points) // 2][0]))
+        found.append({'name': name, 'top': top, 'points': points, 'labels': labels, 'neck': neck,
+                      'height': height, 'stop': extreme, 'status': st, 'at': at, 'rank': rank})
+
+    for k in range(len(pts)):
+        seq = pts[k:]
+        top = seq[0][1] == 'H'
+        if len(seq) >= 5 and seq[4][0] >= n - recent:
+            # Head and Shoulders: shoulder, x, head, x, shoulder
+            s1, t1, head, t2, s2 = seq[:5]
+            higher = head[2] > max(s1[2], s2[2]) * (1 + tol) if top else head[2] < min(s1[2], s2[2]) * (1 - tol)
+            if higher and abs(s2[2] / s1[2] - 1) <= 1.5 * tol:
+                add('Head and Shoulders' if top else 'Inverse Head and Shoulders', top, [s1, t1, head, t2, s2],
+                    ['LS', '', 'H', '', 'RS'], ((t1[0], t1[2]), (t2[0], t2[2])), head[2], 3)
+            # Triple: three equal peaks AND two similar troughs between them (otherwise it is a double top)
+            a, t1, b, t2, c = seq[:5]
+            if same(a[2], b[2]) and same(a[2], c[2]) and same(b[2], c[2]) and abs(t2[2] / t1[2] - 1) <= 2 * tol:
+                level = min(t1[2], t2[2]) if top else max(t1[2], t2[2])
+                extreme = max(a[2], b[2], c[2]) if top else min(a[2], b[2], c[2])
+                if abs(extreme / level - 1) > 2 * tol:
+                    add('Triple Top' if top else 'Triple Bottom', top, [a, t1, b, t2, c], ['1', '', '2', '', '3'],
+                        ((t1[0], level), (c[0], level)), extreme, 2)
+        if len(seq) >= 3 and seq[2][0] >= n - recent:
+            # Double: peak, x, peak with at least 10 values between the peaks
+            a, t, b = seq[:3]
+            if same(a[2], b[2]) and abs(t[2] / max(a[2], b[2]) - 1) > 2 * tol and b[0] - a[0] >= 10:
+                extreme = max(a[2], b[2]) if top else min(a[2], b[2])
+                add('Double Top' if top else 'Double Bottom', top, [a, t, b], ['1', '', '2'],
+                    ((t[0], t[2]), (b[0], t[2])), extreme, 1)
+
+    found = [f for f in found if f['status'] in ('forming', 'breakout')]
+    if not found:
+        return None
+    f = max(found, key=lambda f: (f['points'][-1][0], f['rank']))   # youngest, then most important
+
+    # Neckline today, target = neckline ± pattern height (classic measuring rule)
+    neck_now = neck_at(f['neck'], n - 1)
+    target = neck_now - f['height'] if f['top'] else neck_now + f['height']
+    dates = pd.to_datetime(df['Date'])
+    signal = 'sell' if f['top'] else 'buy'
+    side = 'below' if f['top'] else 'above'
+    if f['status'] == 'breakout':
+        sentence = (f"{f['name']} with breakout {side} the neckline on {dates.iloc[f['at']]:%d/%m} → {signal} signal, "
+                    f"target {format_euro(target)}, invalid {'above' if f['top'] else 'below'} {format_euro(f['stop'])}.")
+    else:
+        sentence = (f"{f['name']} forming, {signal} signal on a close {side} the neckline {format_euro(neck_now)}, "
+                    f"target {format_euro(target)}.")
+
+    ago = lambda i: n - 1 - i
+    return {'name': f['name'], 'top': f['top'], 'status': f['status'], 'sentence': sentence,
+            'target': target, 'neck_now': neck_now,
+            'points': [(ago(i), float(p[i])) for i, _, _ in f['points']],   # drawn on the closing price line
+            'labels': f['labels'],
+            'neck': [(ago(i), v) for i, v in f['neck']],
+            'at': None if f['at'] is None else (ago(f['at']), float(p[f['at']]))}
+
 def trend_phase(prices):
     """Market phase from daily prices using the classic trend rule:
     price and SMA50 above SMA200 = bullish, both below = bearish, otherwise transition."""
@@ -569,7 +681,7 @@ def human_format(num, pos):
 def human_format_euro(num, pos):
     return human_format(num, pos) + '€'
 
-def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
+def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None, pattern=None):
     if df is None or df.empty:
         raise ValueError("No chart possible without price data.")
     if df is not None and not df.empty:
@@ -658,9 +770,14 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
                 ax1.vlines((1 - widths)[filled], edges[:-1][filled], (edges[:-1] + np.diff(edges) * 0.9)[filled],
                            colors='black', linewidth=0.8, transform=trans, zorder=6)
 
-        # Support/resistance: band with number (R1/S1), details in the legend at the top right.
+        # Support/resistance: short band (about 1 cm) at the left edge, number (R1/S1) as a tag
+        # outside the chart next to the percentage axis, details in the legend at the top right.
+        handles = []
+        tag_prices = []   # prices of the R1/S1 tags: axis labels next to them are hidden
+        ax_width_cm = ax1.get_position().width * fig.get_figwidth() * 2.54
+        stub = min(1.0 / ax_width_cm, 0.2)   # 1 cm as share of the chart width
+        outside = mtransforms.blended_transform_factory(ax1.transAxes, ax1.transData)
         if sr_zones is not None:
-            handles = []
             for zone, name in zip(sr_zones, ('R1', 'S1')):
                 if zone is None:
                     continue
@@ -672,20 +789,68 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
                     text += f" · {zone['touches']}×"
                 else:
                     text += " · period high" if name == 'R1' else " · period low"
+                tag = dict(boxstyle='round,pad=0.25', facecolor=color, edgecolor='none')
                 if zone['high'] >= lower and zone['low'] <= upper:
-                    ax1.axhspan(zone['low'], zone['high'], xmax=1 - vp_share - 0.02, color=color, alpha=alpha, linewidth=0, zorder=0.5)
-                    ax1.text(1 - vp_share - 0.015, zone['center'], name, transform=ax1.get_yaxis_transform(), fontsize=7,
-                             color=color, fontweight='bold', va='center', ha='left', zorder=5)
+                    ax1.axhspan(zone['low'], zone['high'], xmax=stub, color=color, alpha=alpha + 0.15, linewidth=0, zorder=0.5)
+                    y = min(max(zone['center'], lower), upper)
+                    ax1.text(-0.01, y, name, transform=outside, fontsize=7, color='white', fontweight='bold',
+                             va='center', ha='right', zorder=10, clip_on=False, bbox=tag)
                 else:
-                    # Zone outside the chart: number with arrow at the top/bottom edge
-                    y, arrow = (0.97, '▲') if zone['center'] > upper else (0.03, '▼')
-                    ax1.text(1 - vp_share - 0.015, y, f"{arrow} {name}", transform=ax1.transAxes, fontsize=7,
-                             color=color, fontweight='bold', va='center', ha='left', zorder=5)
+                    # Zone outside the chart: tag with arrow at the top/bottom edge
+                    y, arrow = (upper, '▲') if zone['center'] > upper else (lower, '▼')
+                    ax1.text(-0.01, y, f"{arrow} {name}", transform=outside, fontsize=7, color='white', fontweight='bold',
+                             va='center', ha='right', zorder=10, clip_on=False, bbox=tag)
+                # Too close to the price tag: move the tag up (R1) or down (S1) so that both stay readable
+                gap = 0.06 * (upper - lower)
+                price_now = df['Price'].iloc[-1]
+                if abs(y - price_now) < gap:
+                    y = price_now + gap if name == 'R1' else price_now - gap
+                    ax1.texts[-1].set_y(y)
+                tag_prices.append(y)
                 handles.append(mpatches.Patch(color=color, alpha=alpha + 0.1, label=text))
-            if handles:
-                # Legend above the chart: covers neither price nor volume profile.
-                ax1.legend(handles=handles, loc='lower right', bbox_to_anchor=(1, 1), ncol=len(handles),
-                           fontsize=7, frameon=False, handlelength=1, borderaxespad=0.2)
+
+        # Chart pattern (chart_pattern): pink, solid and thick so that it stands out from the dotted EMAs
+        if pattern is not None:
+            pink = '#e91e8c'
+            last = len(df) - 1
+            xs = [last - ago for ago, _ in pattern['points']]
+            ys = [price for _, price in pattern['points']]
+            ax1.plot(xs, ys, color=pink, linewidth=3, alpha=0.9, solid_joinstyle='round', zorder=4)
+            for px, py, label in zip(xs, ys, pattern['labels']):
+                if label:
+                    ax1.annotate(label, (px, py), xytext=(0, 7 if pattern['top'] else -12), textcoords='offset points',
+                                 ha='center', fontsize=7, fontweight='bold', color=pink, zorder=5)
+            # Neckline from the first neck point to today
+            (ago_a, va), (ago_b, vb) = pattern['neck']
+            neck_at = lambda px: va + (vb - va) * (px - (last - ago_a)) / max(1, ago_a - ago_b)
+            ax1.plot([last - ago_a, last], [va, neck_at(last)], color=pink, linewidth=3, alpha=0.9, solid_capstyle='round', zorder=4)
+            # Name tag above (top) or below (bottom) the pattern, like on TradingView
+            ax1.annotate(pattern['name'], (xs[len(xs) // 2], max(ys) if pattern['top'] else min(ys)),
+                         xytext=(0, 18 if pattern['top'] else -22), textcoords='offset points',
+                         ha='center', va='center', fontsize=7, color='white', fontweight='bold', zorder=6,
+                         bbox=dict(boxstyle='round,pad=0.3', facecolor=pink, edgecolor='none', alpha=0.9))
+            target = pattern['target']
+            if lower <= target <= upper:
+                ax1.axhline(target, xmax=1 - vp_share - 0.02, color=pink, linewidth=1.2, alpha=0.7, zorder=4)
+                ax1.text(1 - vp_share - 0.015, target, 'target', transform=ax1.get_yaxis_transform(), fontsize=7,
+                         color=pink, va='center', ha='left', fontweight='bold')
+            else:   # target outside the chart: hint at the edge like R1/S1
+                y, arrow = (0.90, '▲') if target > upper else (0.10, '▼')
+                ax1.text(1 - vp_share - 0.015, y, f'{arrow} target', transform=ax1.transAxes, fontsize=7,
+                         color=pink, va='center', ha='left', fontweight='bold')
+            if pattern['at'] is not None:   # star at the breakout
+                ago, price = pattern['at']
+                ax1.plot(last - ago, price, marker='*', markersize=12, color=pink, zorder=6)
+            state = 'breakout' if pattern['status'] == 'breakout' else 'forming'
+            handles.append(plt.Line2D([], [], color=pink, linewidth=1.2,
+                                      label=f"{pattern['name']} ({state}) · target {format_euro(target)}"))
+
+        if handles:
+            # Legend above the chart: covers neither price nor volume profile.
+            # One column when the pattern is added, otherwise R1/S1 next to each other.
+            ax1.legend(handles=handles, loc='lower right', bbox_to_anchor=(1, 1),
+                       ncol=1 if pattern is not None else len(handles),
+                       fontsize=7, frameon=False, handlelength=1, borderaxespad=0.2)
 
         min_remap = linear_remap(
             lower,
@@ -710,10 +875,11 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
         ax1.plot(x, df['Price'], label='Price', color='k', linewidth=1.5)
         ax1.plot(x, df['Fast EMA'], label='Fast EMA', linestyle=':', color='green')
         ax1.plot(x, df['Slow EMA'], label='Slow EMA', linestyle=':', color='red')
-        ax1.plot(x[df['Position']== 1.0], df.loc[df['Position']== 1.0, 'Fast EMA'], '^',  markersize=10, color='green', label='Buy')
-        ax1.plot(x[df['Position']==-1.0], df.loc[df['Position']==-1.0, 'Fast EMA'], 'v',  markersize=10, color='red', label='Sell')
-        ax1.plot(x[df['HighP']==1],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
-        ax1.plot(x[df['LowP']==1],       df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
+        if pattern is None:   # with a chart pattern: no turning points and max/min, the pattern is easier to see
+            ax1.plot(x[df['Position']== 1.0], df.loc[df['Position']== 1.0, 'Fast EMA'], '^',  markersize=10, color='green', label='Buy')
+            ax1.plot(x[df['Position']==-1.0], df.loc[df['Position']==-1.0, 'Fast EMA'], 'v',  markersize=10, color='red', label='Sell')
+            ax1.plot(x[df['HighP']==1],      df.loc[df['HighP']==1, 'Fast EMA'], 'o', markersize=7, label='Max')
+            ax1.plot(x[df['LowP']==1],       df.loc[df['LowP']==1,  'Fast EMA'], 'o', markersize=7, label='Min')
 
         ax2.plot(x, df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
 
@@ -724,12 +890,14 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None):
                  transform=mtransforms.blended_transform_factory(ax2.transAxes, ax2.transData),
                  ha='right', va='center', fontsize=7.5, color='white', fontweight='bold', zorder=10, clip_on=False,
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='black', edgecolor='none'))
-        # hide axis labels right next to the tag so that they do not overlap
+        # hide axis labels right next to the tags (price, R1, S1) so that they do not overlap
         percent = mticker.PercentFormatter()
         percent.set_axis(ax2.yaxis)
         span = max_remap - min_remap
+        to_pct = lambda price: linear_remap(price, lower, upper, min_remap, max_remap)
+        tag_pcts = [current_pct] + [to_pct(price) for price in tag_prices]
         ax2.yaxis.set_major_formatter(mticker.FuncFormatter(
-            lambda value, pos: '' if abs(value - current_pct) < 0.06 * span else percent(value, pos)))
+            lambda value, pos: '' if any(abs(value - t) < 0.06 * span for t in tag_pcts) else percent(value, pos)))
 
         if 'Volume' in df.columns:
             colors = ['green' if close > open_val else 'red'
@@ -881,7 +1049,7 @@ def calc_stat_limits(df, column, window=100, invert=False):
     return sig_count, quantile_pct
 
 
-def analysis_details(df):
+def analysis_details(df, pattern=None):
     """Shared figures for alarms and /check; this function sends nothing."""
     signals, quantiles = {}, {}
     for column in ('RSI14', 'SMA7', 'VMA7', 'ROC5', 'VROC5'):
@@ -913,22 +1081,25 @@ def analysis_details(df):
         head = f"<b>{html.escape(label)}</b>\n" if label else ''
         return f"{head}<pre>{html.escape(chr(10).join(lines))}</pre>\n<i>{html.escape(sentence)}</i>"
 
+    pattern_text = pattern['sentence'] if pattern else 'No chart pattern detected.'
     message = (f"<b>Score: {score}</b>\n\n"
+               f"<b>Pattern:</b> {html.escape(pattern_text)}\n\n"
                f"{block([line('RSI14')], text1)}\n\n"
                f"{block([line('SMA7'), line('VMA7')], text3)}\n\n"
                f"{block([line('ROC5'), line('VROC5')], text2)}")
     # assessments without header (e.g. for the /ai prompt)
-    texts = {'rsi': text1, 'trend': text3.split(': ', 1)[-1], 'short': text2.split(': ', 1)[-1]}
+    texts = {'rsi': text1, 'trend': text3.split(': ', 1)[-1], 'short': text2.split(': ', 1)[-1],
+             'pattern': pattern_text}
     return {'score': score, 'quantiles': quantiles, 'message': message, 'texts': texts}
 
 
-def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type):
+def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type, pattern=None):
 
     alarms = {}
     tech_indicators = None  
     score = 0
 
-    details = analysis_details(df)
+    details = analysis_details(df, pattern)
     score = details['score']
     tech_indicators = details['quantiles']
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
@@ -957,9 +1128,7 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
         
         if df['ROC5'].iloc[-1] > seven_day_price_change:
             create_alarm("121", "Buy", "Positive-5", df['ROC5'].iloc[-1])
-        
-        if df['LowP'].iloc[-1] < df['LowP'].iloc[-2] and df['LowP'].iloc[-2] > df['LowP'].iloc[-3] and data_type == "100d":
-            create_alarm("122", "Buy", "100-Minimum", value_ts)
+
 
         # SELL Signals
         if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
@@ -967,9 +1136,16 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
         
         if df['ROC5'].iloc[-1] < (seven_day_price_change * -1):
             create_alarm("221", "Sell", "Negative-5", df['ROC5'].iloc[-1])
-        
-        if df['HighP'].iloc[-1] < df['HighP'].iloc[-2] and df['HighP'].iloc[-2] > df['HighP'].iloc[-3] and data_type == "100d":
-            create_alarm("222", "Sell", "100-Maximum", value_ts)
+
+
+        # Chart pattern: fresh breakout through the neckline (today or the value before).
+        # Value = date of the breakout, so the same breakout is reported only once.
+        if pattern is not None and pattern['status'] == 'breakout' and pattern['at'][0] <= 1:
+            breakout_ts = int(pd.Timestamp(df['Date'].iloc[-1 - pattern['at'][0]]).normalize().timestamp())
+            if pattern['top']:
+                create_alarm("231", "Sell", f"Pattern-Breakout {pattern['name']}", breakout_ts)
+            else:
+                create_alarm("131", "Buy", f"Pattern-Breakout {pattern['name']}", breakout_ts)
 
     return alarms, tech_indicators, score
 

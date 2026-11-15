@@ -132,12 +132,13 @@ If the program is started after 12:30, the daily analysis runs immediately; miss
 |---|---|---|
 | Cross-EMA | Buy / Sell | Fast EMA (12) crosses the slow EMA (26) upwards / downwards (daily only) |
 | Positive-5 / Negative-5 | Buy / Sell | 5-period rate of change above / below `seven_day_price_change` |
-| 100-Minimum / 100-Maximum | Buy / Sell | Fast EMA has formed a new 100-day low / high (daily only) |
+| Pattern-Breakout | Buy / Sell | Fresh close through the neckline of a chart pattern: Double/Triple Bottom or Inverse Head and Shoulders (buy), Double/Triple Top or Head and Shoulders (sell) |
 
 Alarms are only sent for assets you own. Messages with a score above +5 (buy) or below -5 (sell) are marked as important.
 
 **Message content**
 - **Score**: combined rating from -18 to +18 (higher = stronger buy signal)
+- **Pattern**: detected chart pattern in one sentence (forming or breakout, neckline, target, invalidation level); drawn in pink in the chart
 - **RSI14**, **Trend-Analysis (SMA7 & VMA7)**, **Short-term-Analysis (ROC5 & VROC5)**: position of the current value within the last 100 values (quantile) with signal strength and an interpretation
 - **Amount >1 year**: holdings older than one year
 

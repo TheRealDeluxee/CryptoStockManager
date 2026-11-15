@@ -194,9 +194,10 @@ class CryptoStockManager:
         full = item.get_API_data('100d')
         full = func.calc_indicator_fuctions(full)
         sr_zones = func.support_resistance(full)  # before cutting: needs the long history
+        item.state.pattern = func.chart_pattern(full)
         df = func.cut_to_window(full)
         item.state = func.calc_state_fuctions(item.state, df)
-        details = func.analysis_details(df)
+        details = func.analysis_details(df, item.state.pattern)
         return name, symbol, item, df, full, sr_zones, details
 
     def single_daily_analysis(self, symbol, asset_type):
@@ -208,7 +209,7 @@ class CryptoStockManager:
             message += "\n\n" + html.escape(f"Amount >1 year: {item.state.amount_older_than_one_year:.2f} "
                                            f"({item.state.amount_older_than_one_year_pct:.2f} %)")
         image_name = 'manual_' + uuid.uuid4().hex
-        func.plot_and_save(df, image_name, '100d', item.state.zero_line, sr_zones)
+        func.plot_and_save(df, image_name, '100d', item.state.zero_line, sr_zones, item.state.pattern)
         func.pushover_image(image_name, message, delete_after_send=True, html_format=True)
 
     def ai_prompt(self, symbol, asset_type):
