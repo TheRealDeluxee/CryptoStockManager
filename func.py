@@ -33,6 +33,7 @@ seven_day_price_change = 0.0
 one_day_profit_limit = 0.0
 output_dir = 'plots'
 previous_alarm_change = 0.0
+coingecko_api_key = ''   # optional, from config.ini [coingecko] api_key
 
 def get_stock(symbol, period):
     df = pd.DataFrame()
@@ -59,8 +60,8 @@ def get_stock(symbol, period):
                 break
             else:
                 wait_time = wait_times[i] if i < len(wait_times) else 900
-                msg = f"Empty response for {symbol}, waiting {wait_time}s before retry {i+1}"
-                pushover(msg)
+                # only in the log: a failed analysis is reported once at the end (_analyse_items)
+                log_print(f"Empty response for {symbol}, waiting {wait_time}s before retry {i+1}")
                 if i < 4:
                     time.sleep(wait_time)
                 
@@ -81,7 +82,7 @@ def get_stock(symbol, period):
                 'wait_time': wait_time
             }
             msg = "Script try number %(tries)s to %(function)s of symbol %(sym)s\nWaiting %(wait_time)ss\n\n%(exception)s" % infos
-            pushover(msg)
+            log_print(msg)   # only in the log, see above
             
             if i < 4:  # Do not wait after the last attempt
                 time.sleep(wait_time)
@@ -140,14 +141,20 @@ def stock_prices_in_eur(stock, df, period):
 
 def get_crypto(symbol, params_historical):
     url_historical = f'https://api.coingecko.com/api/v3/coins/{symbol}/market_chart'
+    # Optional free CoinGecko demo key (config.ini [coingecko] api_key): the limit then applies per key
+    # (30 requests/minute) instead of per internet connection. Without a key: free public access.
+    headers = {'x-cg-demo-api-key': coingecko_api_key} if coingecko_api_key else {}
     wait_times = [30, 60, 120, 300, 600]
     data = None
-    
+
     for i in range(5):
         try:
             time.sleep(random.uniform(0.5, 2))
-            response = requests.get(url_historical, params=params_historical, timeout=30)
-            
+            response = requests.get(url_historical, params=params_historical, headers=headers, timeout=30)
+
+            # Invalid key: retrying does not help
+            if response.status_code in (401, 403) and coingecko_api_key:
+                raise PermissionError("CoinGecko rejected the API key in config.ini ([coingecko] api_key).")
             # Determine wait time based on status or error type
             if response.status_code == 429:
                 wait_time = int(response.headers.get('Retry-After', wait_times[i]))
@@ -163,6 +170,8 @@ def get_crypto(symbol, params_historical):
             if i < 4:
                 time.sleep(wait_time)
                 
+        except PermissionError:
+            raise   # wrong key: report immediately instead of waiting through all retries
         except Exception as e:
             wait_time = wait_times[min(i, len(wait_times)-1)]
             log_print(f"Error for {symbol} (try {i+1}): {e}. Waiting {wait_time}s")
@@ -1139,44 +1148,48 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
             f"Trigger: {html.escape(indicator)} ({data_type})\n\n"
             + details['message']
         )
-        if not watch_list:
+        if watch_list:
+            message += "\n\n<i>Watched asset – not in your portfolio.</i>"
+        else:
             message += "\n\n" + html.escape(f"Amount >1 year: {amount_older_than_one_year:.2f} ({amount_older_than_one_year_pct:.2f} %)")
         alarms[code] = {"value": value, "priority": priority, "msg": message}
 
     # Date only: CoinGecko returns the current time as the last value.
     value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).normalize().timestamp())
 
-    # Portfolio alarms (not for watched assets).
     # Selection based on a backtest (9 assets, 7-14 years of daily data): Cross-EMA Buy and Negative-5
     # showed no advantage and were removed; Positive-5 only works with a high threshold (about 10 %).
+    # Chart pattern: fresh breakout through the neckline (today or the value before).
+    # Value = date of the breakout, so the same breakout is reported only once.
+    # Never high priority: no reliable advantage in the backtest.
+    breakout = pattern is not None and pattern['status'] == 'breakout' and pattern['at'][0] <= 1
+    if breakout:
+        breakout_ts = int(pd.Timestamp(df['Date'].iloc[-1 - pattern['at'][0]]).normalize().timestamp())
+
+    # BUY Signals: for all assets with 1 in assets.ini, also watched ones you do not own yet
+    # Trend filter: Positive-5 and Score>8 only above the SMA200 (uptrend). In the backtest both
+    # had no advantage below it. Without 200 values (SMA200 empty) the filter does not block.
+    sma200 = df['SMA200'].iloc[-1] if 'SMA200' in df else np.nan
+    uptrend = not df['Price'].iloc[-1] <= sma200
+
+    # Positive-5: only on the first value above the threshold, not on every following value
+    if uptrend and df['ROC5'].iloc[-1] > seven_day_price_change and not df['ROC5'].iloc[-2] > seven_day_price_change:
+        create_alarm("121", "Buy", "Positive-5", value_ts)
+
+    # Score: first daily value above 8 (strongest signal in the backtest)
+    if uptrend and data_type == "100d" and score > 8 and analysis_details(df.iloc[:-1])['score'] <= 8:
+        create_alarm("141", "Buy", "Score>8", value_ts)
+
+    if breakout and not pattern['top']:
+        create_alarm("131", "Buy", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
+
+    # SELL Signals: only for assets in your portfolio
     if not watch_list:
-        # BUY Signals
-        # Trend filter: Positive-5 and Score>8 only above the SMA200 (uptrend). In the backtest both
-        # had no advantage below it. Without 200 values (SMA200 empty) the filter does not block.
-        sma200 = df['SMA200'].iloc[-1] if 'SMA200' in df else np.nan
-        uptrend = not df['Price'].iloc[-1] <= sma200
-
-        # Positive-5: only on the first value above the threshold, not on every following value
-        if uptrend and df['ROC5'].iloc[-1] > seven_day_price_change and not df['ROC5'].iloc[-2] > seven_day_price_change:
-            create_alarm("121", "Buy", "Positive-5", value_ts)
-
-        # Score: first daily value above 8 (strongest signal in the backtest)
-        if uptrend and data_type == "100d" and score > 8 and analysis_details(df.iloc[:-1])['score'] <= 8:
-            create_alarm("141", "Buy", "Score>8", value_ts)
-
-        # SELL Signals
         if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
             create_alarm("201", "Sell", "Cross-EMA", value_ts)
 
-        # Chart pattern: fresh breakout through the neckline (today or the value before).
-        # Value = date of the breakout, so the same breakout is reported only once.
-        # Never high priority: no reliable advantage in the backtest.
-        if pattern is not None and pattern['status'] == 'breakout' and pattern['at'][0] <= 1:
-            breakout_ts = int(pd.Timestamp(df['Date'].iloc[-1 - pattern['at'][0]]).normalize().timestamp())
-            if pattern['top']:
-                create_alarm("231", "Sell", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
-            else:
-                create_alarm("131", "Buy", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
+        if breakout and pattern['top']:
+            create_alarm("231", "Sell", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
 
     return alarms, tech_indicators, score
 

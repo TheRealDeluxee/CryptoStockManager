@@ -7,6 +7,21 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [0.1.6] – 2026-11-15
+
+### Added
+- Optional free CoinGecko demo key (`config.ini` `[coingecko] api_key`): used if set, otherwise the free public access; an invalid key is reported immediately
+- README: roadmap with planned features
+
+### Changed
+- Buy alarms (Positive-5, Score>8, pattern breakout up) also for watched assets with `1` that you do not own yet; the message marks them as watched. Sell alarms stay limited to your portfolio.
+- Event reminders from `events.ini` now come one day before instead of on the day, with daily analysis; `/event` replies accordingly
+- One error message per analysis run instead of one per retry and asset (e.g. when Yahoo blocks requests); retries are only logged
+- Quarterly results already in `events.ini` are not reminded twice
+
+### Fixed
+- README: hourly stock data in foreign currencies is converted to EUR correctly (outdated limitation removed)
+
 ## [0.1.5] – 2026-11-15
 
 ### Added

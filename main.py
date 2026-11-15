@@ -22,7 +22,7 @@ import telegram_bot
 
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
 
 MORNING_ANALYSIS = "09:30"
@@ -97,6 +97,8 @@ class CryptoStockManager:
             raise ValueError('test_mode must be 0 or 1.')
         if func.seven_day_price_change < 0 or func.previous_alarm_change < 0:
             raise ValueError('Alarm thresholds must not be negative.')
+        # Optional CoinGecko demo key: used if set, otherwise the free public access
+        func.coingecko_api_key = config.get('coingecko', 'api_key', fallback='').strip()
         self.stock_update = False
         self.crypto_items_hh = []
         self.crypto_items_hd = []
@@ -153,16 +155,23 @@ class CryptoStockManager:
         self.stock_update = self.test_mode == 1 or (now.tm_wday < 5 and 8 <= now.tm_hour < 22)
 
     def _analyse_items(self, items, data_type):
-        results = []
+        results, failed = [], []
         for item in items:
             try:
                 df = item.get_API_data(data_type)
+                if df is None:
+                    raise ValueError('no data received after 5 attempts (source unavailable or too many requests)')
                 df, alarms = item.process_data(df, data_type)  # df is cut to 100 values afterwards
                 item.plot_send(df, data_type, alarms)
                 results.append(item.get_summary(df))
             except Exception as error:
                 # One failed asset must not block the others.
-                func.pushover(f"Analysis for {item.symbol} ({data_type}) failed: {error}")
+                func.log_print(f"Analysis for {item.symbol} ({data_type}) failed: {error}")
+                failed.append(f"{item.search}: {error}")
+        if failed:
+            # One message per run instead of one per asset (e.g. when Yahoo blocks requests)
+            func.pushover(f"Analysis ({data_type}) failed for {len(failed)} of {len(items)} assets:\n"
+                          + "\n".join(failed))
         return results
 
     def hundred_day_analysis(self):
@@ -382,19 +391,21 @@ class CryptoStockManager:
             func.pushover_image(image_name, message, delete_after_send=True)
 
     def event_reminders(self):
-        """Today's events from events.ini: send a reminder, then a daily analysis like /check."""
+        """Events from events.ini: one reminder the day before, followed by a daily analysis like /check."""
         try:
             events = cl.read_events()
         except (OSError, ValueError, configparser.Error) as error:
             func.pushover(f'events.ini could not be read: {error}')
             return
-        today = datetime.date.today()
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
         for event in events:
-            if event['date'] != today or event['key'] in self.events_done:
+            key = f"{event['key']}_before"
+            if event['date'] != tomorrow or key in self.events_done:
                 continue
-            self.events_done.add(event['key'])
+            self.events_done.add(key)
             text = f"\n{html.escape(event['text'])}" if event['text'] else ''
-            func.pushover(f"<b>Event today: {html.escape(event['name'])}</b>{text}\nDaily analysis follows.",
+            func.pushover(f"<b>Event tomorrow: {html.escape(event['name'])}</b>"
+                          f" ({event['date'].strftime('%A, %d/%m/%Y')}){text}\nDaily analysis follows.",
                           priority=1, html_format=True)
             try:
                 self.single_daily_analysis(event['symbol'], event['type'])
@@ -411,12 +422,16 @@ class CryptoStockManager:
             func.pushover(f'assets.ini could not be read: {error}')
             return
         tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        try:   # dates already in events.ini have their own reminder: no second message
+            planned = {(event['symbol'], event['date']) for event in cl.read_events()}
+        except (OSError, ValueError, configparser.Error):
+            planned = set()
         for (asset_type, symbol), name in entries.items():
             if asset_type != 'stock':
                 continue
             date = func.next_earnings_date(symbol.upper())
             key = f'earnings_{symbol}_{date}'
-            if date != tomorrow or key in self.events_done:
+            if date != tomorrow or key in self.events_done or (symbol.lower(), date) in planned:
                 continue
             self.events_done.add(key)
             func.pushover(f"<b>Quarterly results tomorrow: {html.escape(name)}</b>\n"
@@ -478,7 +493,7 @@ class CryptoStockManager:
             self.load_config_items()
             func.pushover('Transactions were reloaded in the main program.')
         elif action == 'events':
-            # after /event with today's date: reminder and analysis immediately
+            # after /event with tomorrow's date: reminder and analysis immediately
             self.event_reminders()
         elif action == 'reload_assets':
             # after /alarm: apply the changed alarm flags from assets.ini
@@ -530,7 +545,7 @@ def run_program():
             # Events from events.ini: checked daily, also in test mode
             schedule.every().day.at(EVENT_REMINDER).do(manager.event_reminders)
             if time.strftime('%H:%M') >= EVENT_REMINDER:
-                manager.event_reminders()   # start after 08:00: catch up on today's events
+                manager.event_reminders()   # start after 08:00: catch up on today's reminders
             while not restart:
                 if not bot_process.is_alive():
                     raise RuntimeError('Telegram bot has stopped. Please check the log.')

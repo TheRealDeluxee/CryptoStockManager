@@ -422,17 +422,20 @@ async def _cmd_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         if len(context.args) < 2:
             await update.message.reply_text('Format: /event <symbol> <DD/MM/YYYY> <description>\n'
-                                            'Example: /event NVDA 17/11/2026 Q3 earnings after market close')
+                                            'Example: /event NVD.DE 17/11/2026 Q3 earnings after market close')
             return
         key, name, date = cl.add_event(context.args[0], context.args[1], ' '.join(context.args[2:]))
     except (OSError, ValueError, configparser.Error) as error:
         await _reply_long(update, f'Error: {error}\nNot saved.')
         return
-    if date == datetime.now().date():
-        _cmdq(app).put({'cmd': 'events'})   # event today: reminder and analysis immediately
-        when = 'The event is today: reminder and daily analysis follow shortly.'
+    days_left = (date - datetime.now().date()).days
+    if days_left == 1:
+        _cmdq(app).put({'cmd': 'events'})   # event tomorrow: reminder and analysis immediately
+        when = 'The event is tomorrow: reminder and daily analysis follow shortly.'
+    elif days_left == 0:
+        when = 'The event is today: no reminder (reminders come one day before).'
     else:
-        when = 'Reminder with daily analysis on the day of the event at 08:00.'
+        when = 'Reminder with daily analysis one day before the event at 08:00.'
     await update.message.reply_text(f"Event saved: {date:%d/%m/%Y} {name}\n{when}")
 
 
