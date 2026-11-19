@@ -7,6 +7,11 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [Unreleased]
+
+### Fixed
+- When the Telegram bot stops with an error, the reason is now written to logfile.txt (before only in the console); the main program names the exit code
+
 ## [0.1.12] – 2026-11-19
 
 ### Added

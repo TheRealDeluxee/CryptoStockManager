@@ -1075,7 +1075,8 @@ def run_program():
             schedule.every(6).hours.do(manager.health_check)
             while not restart:
                 if not bot_process.is_alive():
-                    raise RuntimeError('Telegram bot has stopped. Please check the log.')
+                    raise RuntimeError(f'Telegram bot has stopped (exit code {bot_process.exitcode}). '
+                                       'The reason is in the log lines before.')
                 # Queue.empty() is not reliable with several processes.
                 for _ in range(20):
                     try:

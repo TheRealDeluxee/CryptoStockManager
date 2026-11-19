@@ -1321,6 +1321,15 @@ async def _on_error(update, context):
 
 
 def run_standalone(notify_q: Queue, command_q: Queue) -> None:
+    """Bot process. An error that stops the bot is written to logfile.txt (otherwise it is only in the console)."""
+    try:
+        _run_bot(notify_q, command_q)
+    except BaseException:
+        func.log_print(f"Telegram bot stopped with an error:\n{traceback.format_exc()}", 'ERROR')
+        raise
+
+
+def _run_bot(notify_q: Queue, command_q: Queue) -> None:
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     cfg = _load_config()
     token = cfg["token"]
