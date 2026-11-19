@@ -31,6 +31,8 @@ output_dir = 'plots'
 previous_alarm_change = 0.0
 total_loss_limit = -5.0   # loss limit alarm: total P&L of a position in % (config.ini [alertsconfig])
 coingecko_api_key = ''   # optional, from config.ini [coingecko] api_key
+anthropic_api_key = ''   # optional, from config.ini [anthropic] api_key (empty = Claude API not used)
+anthropic_model = 'claude-opus-5-5'   # from config.ini [anthropic] model
 
 def get_stock(symbol, period):
     df = pd.DataFrame()
@@ -1393,7 +1395,7 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
     value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).normalize().timestamp())
 
     def create_info(code, title, value, note):
-        # Info: a notable event (no buy/sell wording, never important, not counted in /journal)
+        # Info: a notable event (no buy/sell wording, never important, not counted in the alarm journal)
         message = (f"<b>{html.escape(symbol)} — ℹ️ Info: {html.escape(title)}</b>\n"
                    f"Trigger: {html.escape(title)} ({data_type})\n\n" + details['message']
                    + f"\n\n<i>{html.escape(note)}</i>")
@@ -1917,6 +1919,140 @@ def log_message(kind, message):
     """Telegram message as a short status line (first visible line only, not the whole text)."""
     first = _strip_telegram_html(message).split('\n', 1)[0]
     log_print(f"Telegram {kind}: {first[:100]}")
+
+
+CLAUDE_NO_KEY = ('No Claude API key: /ai_api_decision3s and /ai_api_plan need an api_key in config.ini '
+                 '[anthropic] (console.anthropic.com, costs money per request). /ai_prompt works without a key.')
+
+
+# Anthropic list prices in USD per million tokens (input, output) and per web search; billed in USD.
+# Models not listed here: tokens are shown, the cost as "not known".
+CLAUDE_PRICES = {'claude-opus-5-5': (4.0, 20.0), 'claude-sonnet-5-5': (2.0, 10.0),
+                 'claude-haiku-5-5': (0.10, 0.50), 'claude-fable-5-2': (8.0, 40.0)}
+CLAUDE_HAIKU_LONG = (0.50, 2.50)   # Haiku 5.5 with more than 100,000 input tokens in one request
+CLAUDE_WEB_SEARCH_PRICE = 0.01    # USD per search ($10 per 1,000)
+
+
+def claude_cost(model, tokens_in, tokens_out):
+    """List price of one request in USD, None for an unknown model."""
+    prices = CLAUDE_PRICES.get(model)
+    if prices is None:
+        return None
+    if model == 'claude-haiku-5-5' and tokens_in > 100_000:
+        prices = CLAUDE_HAIKU_LONG
+    return (tokens_in * prices[0] + tokens_out * prices[1]) / 1_000_000
+
+
+def claude_usage_text(usage):
+    """One line for Telegram, e.g. '12,345 tokens in · 678 out · 3 web searches · $0.06 (≈ 0.05 €) · 41 s · claude-sonnet-5-5'."""
+    parts = [f"{usage['tokens_in']:,} tokens in", f"{usage['tokens_out']:,} out"]
+    if usage['searches']:
+        parts.append(f"{usage['searches']} web search{'es' if usage['searches'] != 1 else ''}")
+    if usage['cost'] is None:
+        parts.append('cost not known for this model')
+    else:
+        cost = f"${usage['cost']:.3f}"
+        try:   # rough EUR value with the exchange rate CaSa uses for the US stocks
+            cost += f" (≈ {usage['cost'] * float(_fx_rates('USD', '5d')['Rate'].iloc[-1]):.3f} €)"
+        except Exception:
+            pass
+        parts.append(cost)
+    parts += [f"{usage['seconds']:.0f} s", ', '.join(usage['models'])]
+    return ' · '.join(parts)
+
+
+def ai_buttons(asset_type, symbol):
+    """Buttons below alarms, infos and /check: 🤖 AI prompt (as /ai_prompt); with a Claude API key also
+    🤖 AI decision (API) and 🤖 AI plan (API) (as /ai_api_decision3s and /ai_api_plan)."""
+    asset = f"{asset_type}|{symbol.lower()}"
+    row = [('🤖 AI prompt', f"aibtn|{asset}")]
+    if claude_available():
+        row += [('🤖 AI decision (API)', f"aidbtn|{asset}"), ('🤖 AI plan (API)', f"aipbtn|{asset}")]
+    return [row]
+
+
+def claude_available():
+    """True when a Claude API key is set in config.ini [anthropic] api_key."""
+    return bool(anthropic_api_key)
+
+
+def claude(prompt, system=None, max_tokens=16000, effort='medium', web_search=False, with_usage=False):
+    """Sends a prompt to the Claude API and returns the answer as text.
+    Only works with a key in config.ini [anthropic] api_key, otherwise RuntimeError.
+    effort: low, medium, high (more effort = better answer, but slower and more expensive).
+    web_search=True: Claude may search the web (at most 5 searches, each search costs extra).
+    with_usage=True: returns (text, usage) with tokens, web searches, list price in USD, seconds and model(s).
+    Refusal fallbacks are on (not for Haiku): if the model refuses, the API retries once with a fallback model.
+    Errors: PermissionError (key wrong or not allowed), RuntimeError (everything else)."""
+    if not anthropic_api_key:
+        raise RuntimeError("Claude API not configured: no api_key in config.ini [anthropic]")
+    try:
+        import anthropic   # only needed when the API is used
+    except ImportError:
+        raise RuntimeError("Python package 'anthropic' missing: python -m pip install anthropic")
+
+    messages = [{"role": "user", "content": prompt}]
+    request = dict(model=anthropic_model, max_tokens=max_tokens, messages=messages,
+                   output_config={"effort": effort})
+    if 'haiku' not in anthropic_model:   # Haiku has no server-side fallback (400)
+        request.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+    if web_search:   # Haiku: older search tool without dynamic filtering
+        version = 'web_search_20250305' if 'haiku' in anthropic_model else 'web_search_20260209'
+        request['tools'] = [{"type": version, "name": "web_search", "max_uses": 5}]
+    if system:
+        request['system'] = system
+    start = time.time()
+    texts, tokens_in, tokens_out, searches, cost, models = [], 0, 0, 0, 0.0, []
+    try:
+        client = anthropic.Anthropic(api_key=anthropic_api_key)   # retries 429/5xx itself
+        for _ in range(4):   # a long web search can pause the answer: send it back so that Claude continues
+            # streaming: no timeout on long answers; only the finished message is used
+            with client.beta.messages.stream(**request) as stream:
+                response = stream.get_final_message()
+            texts += [block.text for block in response.content if block.type == 'text']
+            usage = response.usage
+            tokens_in, tokens_out = tokens_in + usage.input_tokens, tokens_out + usage.output_tokens
+            found = getattr(getattr(usage, 'server_tool_use', None), 'web_search_requests', 0) or 0
+            searches += found
+            # the model that answered (with a refusal fallback it can differ from config.ini)
+            model = getattr(response, 'model', None) or anthropic_model
+            models += [model] if model not in models else []
+            part = claude_cost(model, usage.input_tokens, usage.output_tokens)
+            cost = None if cost is None or part is None else cost + part + found * CLAUDE_WEB_SEARCH_PRICE
+            if response.stop_reason != 'pause_turn':
+                break
+            messages.append({"role": "assistant", "content": response.content})
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
+        log_print(f"Claude API: key rejected (HTTP {e.status_code})", 'ERROR')
+        raise PermissionError("Claude API key rejected, check config.ini [anthropic] api_key") from None
+    except anthropic.NotFoundError:
+        log_print(f"Claude API: model {anthropic_model} not found", 'ERROR')
+        raise RuntimeError(f"Claude model '{anthropic_model}' not found, check config.ini [anthropic] model") from None
+    except anthropic.RateLimitError:
+        log_print("Claude API: too many requests", 'WARN')
+        raise RuntimeError("Claude API: too many requests, try again later") from None
+    except anthropic.APIStatusError as e:
+        log_print(f"Claude API: error HTTP {e.status_code}", 'ERROR')
+        raise RuntimeError(f"Claude API error HTTP {e.status_code}") from None
+    except anthropic.APIConnectionError:
+        log_print("Claude API: no connection", 'WARN')
+        raise RuntimeError("Claude API: no connection") from None
+
+    if response.stop_reason == 'refusal':
+        details = getattr(response, 'stop_details', None)
+        category = getattr(details, 'category', None) or 'unknown'
+        log_print(f"Claude API: request refused ({category})", 'WARN')
+        raise RuntimeError(f"Claude refused the request ({category})")
+    log_print(f"Claude API: answer in {time.time() - start:.1f} s, {tokens_in} tokens in, {tokens_out} tokens out"
+              + (f", {searches} web searches" if searches else '')
+              + (f", about ${cost:.3f}" if cost is not None else '')
+              + (" (cut off at max_tokens)" if response.stop_reason == 'max_tokens' else '')
+              + (" (still paused after 4 parts)" if response.stop_reason == 'pause_turn' else ''))
+    text = ''.join(texts).strip()
+    if with_usage:
+        return text, {'tokens_in': tokens_in, 'tokens_out': tokens_out, 'searches': searches, 'cost': cost,
+                      'seconds': time.time() - start, 'models': models}
+    return text
 
 
 def filter(alarm_neu, state):

@@ -1,7 +1,7 @@
 """Shared test setup for CaSa.
 
 Every test runs in its own empty temporary folder with sample files: your real assets.ini,
-transactions.csv, events.ini, valuealert.ini and logfile.txt are never read or changed.
+transactions.csv, events.ini, planalert.ini and logfile.txt are never read or changed.
 No internet access is needed (no prices are downloaded).
 
 Run all tests (in the CaSa folder):  python -m pytest

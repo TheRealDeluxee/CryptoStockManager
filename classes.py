@@ -213,8 +213,8 @@ class CryptoStock:
         for info in alarms_filter.values():
             image_name = "alarm_" + uuid.uuid4().hex
             func.plot_and_save(df, image_name, data_type, self.state.zero_line, self.state.sr_zones, self.state.pattern)
-            # one tap below the alarm/info: AI prompt for this asset (as /ai)
-            button = [[('🤖 AI prompt', f"aibtn|{self.type}|{self.symbol.lower()}")]]
+            # one tap below the alarm/info: AI prompt, with a Claude API key also AI decision (API) and AI plan (API)
+            button = func.ai_buttons(self.type, self.symbol)
             func.pushover_image(image_name, info['msg'], info['priority'], delete_after_send=True, html_format=True,
                                 buttons=button)
 
@@ -414,20 +414,29 @@ def delete_event(key, path="events.ini"):
     return _delete_ini_entry(path, 'events', key, 'Event')
 
 
-# ── Price alerts (valuealert.ini) ──────────────────────────────────────────
-VALUE_ALERT_HEADER = """# CaSa price alerts: message when a price reaches your mark
+# ── Plan alerts (planalert.ini, before 0.1.12 valuealert.ini) ──────────────
+PLAN_FILE = 'planalert.ini'
+PLAN_HEADER = """# CaSa plan alerts: simple trading plans with messages, one plan per asset
 #
-# Format: name = symbol; below|above; price in EUR; note
-# name   = free choice, must be unique in the file
-# symbol = as in assets.ini (e.g. APC.DE or bitcoin)
-# below  = alert when the price falls to the mark or lower, above = rises to the mark or higher
-# note   = any text, e.g. your plan for this price
+# [SYMBOL]            symbol as in assets.ini (e.g. TSFA.F or bitcoin)
+# support   = 312.15  buy zone: the price falls to the support or up to max_entry % above it
+# max_entry = 2       buy only up to 2 % above the support (0 = only at or below the support)
+# target    = 358.93  take partial profits at or above this price
+# stop      = 312.15  the plan fails at a daily close below this price
+# note      = ...     your plan in words (tranche size, conditions, news); shown in every message
+# start     = DD/MM/YYYY  set by CaSa: daily closes from this day on count for the stop
+# status    = ...     set by CaSa: waiting, buy_zone, target or ended (with date and reason)
+# Optional: support or target (at least one of them), stop. Prices in EUR, from the same source as the analysis.
 #
-# Checked every hour (stocks Monday to Friday 08:00-22:00). When the mark is reached you get a message
-# with your note and the daily analysis; the alert is then removed.
-# Alerts can also be added and deleted in Telegram with /price_alert.
-
-[alerts]"""
+# Whether you hold the asset (transactions.csv) decides the message:
+#   buy zone: not held = "Buy zone: check the conditions in your note", held = "Add-on zone (retest)"
+#   target:   held = "Take partial profits" (not held: no message)
+#   stop:     not held = "Setup cancelled", held = "Exit: sell, do not average down"; the plan ends
+# Buy zone and target are checked every hour (stocks Monday to Friday 08:00-22:00), each message once until
+# the price leaves the zone again, at most once per day and plan. The stop is checked with the daily closing prices.
+# Plans can also be shown, added and deleted in Telegram with /plan_alert."""
+PLAN_KEYS = ('support', 'max_entry', 'target', 'stop', 'note', 'start', 'status')
+PLAN_STATUS = ('waiting', 'buy_zone', 'target', 'ended')
 
 
 def parse_price(text):
@@ -446,59 +455,222 @@ def parse_price(text):
     return price
 
 
-def read_value_alerts(path="valuealert.ini", assets_path="assets.ini"):
-    """Price alerts from valuealert.ini. Type (crypto/stock) and name come from assets.ini. Missing file = no alerts."""
-    config = configparser.ConfigParser(interpolation=None)
-    if not config.read(path, encoding="utf-8-sig") or not config.has_section('alerts'):
-        return []
-    assets = read_assets(assets_path)
-    alerts = []
-    for key, value in config.items('alerts'):
-        parts = [part.strip() for part in value.split(';', 3)]
-        if len(parts) < 3 or parts[1].lower() not in ('below', 'above'):
-            raise ValueError(f"{path}, alert '{key}': format is symbol; below|above; price; note")
-        symbol = parts[0].lower()
-        matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
-        if len(matches) != 1:
-            problem = 'not in assets.ini' if not matches else 'listed as crypto and stock in assets.ini'
-            raise ValueError(f"{path}, alert '{key}': {parts[0]} is {problem}.")
-        alerts.append({'key': key, 'symbol': symbol, 'type': matches[0], 'name': assets[(matches[0], symbol)],
-                       'direction': parts[1].lower(), 'price': parse_price(parts[2]),
-                       'note': parts[3] if len(parts) > 3 else ''})
-    return sorted(alerts, key=lambda alert: (alert['name'], alert['price']))
+def parse_percent(text):
+    """'2', '2 %', '2,5%' -> float between 0 and 50."""
+    cleaned = str(text).strip().replace('%', '').replace(',', '.').strip()
+    try:
+        value = float(cleaned)
+    except ValueError:
+        raise ValueError(f"Invalid percentage '{text}' (e.g. 2).") from None
+    if not math.isfinite(value) or not 0 <= value <= 50:
+        raise ValueError('max_entry must be between 0 and 50 (%).')
+    return value
 
 
-def add_value_alert(symbol, direction, price, note, path="valuealert.ini", assets_path="assets.ini"):
-    """Append a price alert (for /price_alert); the file is created with explanations if missing.
-    Returns (key, asset name, asset type)."""
-    symbol = symbol.strip().lower()
-    assets = read_assets(assets_path)
+def _asset_type(symbol, assets, path):
     matches = [asset_type for asset_type in ('crypto', 'stock') if (asset_type, symbol) in assets]
     if len(matches) != 1:
-        raise ValueError(f"{symbol} is {'not in assets.ini' if not matches else 'listed as crypto and stock in assets.ini'}.")
-    if direction not in ('below', 'above'):
-        raise ValueError("Direction must be 'below' or 'above'.")
-    note = ' '.join(note.split())   # no line breaks in the ini
+        problem = 'not in assets.ini' if not matches else 'listed as crypto and stock in assets.ini'
+        raise ValueError(f"{path}: {symbol} is {problem}.")
+    return matches[0]
+
+
+def check_plan(support, max_entry, target, stop):
+    """Plausibility of the four plan numbers (None = not used). ValueError with the reason."""
+    if support is None and target is None:
+        raise ValueError('A plan needs a support or a target.')
+    if support is not None and target is not None and target <= support * (1 + max_entry / 100):
+        raise ValueError('The target must be above the buy zone (support + max_entry %).')
+    if stop is not None and target is not None and stop >= target:
+        raise ValueError('The stop must be below the target.')
+    if stop is not None and support is not None and stop > support * (1 + max_entry / 100):
+        raise ValueError('The stop must not be above the buy zone.')
+
+
+def read_plans(path=PLAN_FILE, assets_path="assets.ini"):
+    """Plans from planalert.ini, one per asset. Type (crypto/stock) and name come from assets.ini.
+    Missing file = no plans."""
+    config = configparser.ConfigParser(interpolation=None)
+    if not config.read(path, encoding="utf-8-sig"):
+        return []
+    assets = read_assets(assets_path)
+    plans = []
+    for section in config.sections():
+        symbol = section.strip().lower()
+        values = config[section]
+        try:
+            asset_type = _asset_type(symbol, assets, path)
+            unknown = [key for key in values if key not in PLAN_KEYS]
+            if unknown:
+                raise ValueError(f"unknown setting {', '.join(unknown)}")
+            number = lambda key: parse_price(values[key]) if values.get(key, '').strip() else None
+            support, target, stop = number('support'), number('target'), number('stop')
+            max_entry = parse_percent(values.get('max_entry', '').strip() or '0')
+            check_plan(support, max_entry, target, stop)
+            start = values.get('start', '').strip()
+            start = datetime.strptime(start, '%d/%m/%Y').date() if start else None
+            status_text = ' '.join(values.get('status', '').split()) or 'waiting'
+            status = status_text.split()[0].rstrip(':').lower()
+            if status not in PLAN_STATUS:
+                raise ValueError(f"unknown status '{status}'")
+        except ValueError as error:
+            raise ValueError(f"{path}, plan [{section}]: {error}") from None
+        plans.append({'key': section, 'symbol': symbol, 'type': asset_type, 'name': assets[(asset_type, symbol)],
+                      'support': support, 'max_entry': max_entry, 'target': target, 'stop': stop,
+                      'note': ' '.join(values.get('note', '').split()), 'start': start,
+                      'status': status, 'status_text': status_text})
+    return sorted(plans, key=lambda plan: plan['name'].lower())
+
+
+def plan_zone_top(plan):
+    """Upper end of the buy zone (support + max_entry %), None without support."""
+    return None if plan['support'] is None else plan['support'] * (1 + plan['max_entry'] / 100)
+
+
+def plan_text(plan):
+    """One line with the plan numbers, e.g. 'Buy zone 312.15–318.39 € · target 358.93 € · stop 312.15 €'."""
+    parts = []
+    if plan['support'] is not None:
+        top = plan_zone_top(plan)
+        parts.append(f"buy zone {func.format_euro(plan['support'])}"
+                     + (f"–{func.format_euro(top)}" if top > plan['support'] else ''))
+    if plan['target'] is not None:
+        parts.append(f"target {func.format_euro(plan['target'])}")
+    if plan['stop'] is not None:
+        parts.append(f"stop {func.format_euro(plan['stop'])} (daily close)")
+    text = ' · '.join(parts)
+    return text[:1].upper() + text[1:]
+
+
+def _plan_sections(lines):
+    """{symbol lower: (line of [SYMBOL], line after the section)} for every section in the file lines."""
+    starts = [(index, line.strip()[1:-1].strip().lower()) for index, line in enumerate(lines)
+              if line.strip().startswith('[') and line.strip().endswith(']')]
+    ends = [index for index, _ in starts[1:]] + [len(lines)]
+    return {symbol: (start, end) for (start, symbol), end in zip(starts, ends)}
+
+
+def _plan_number(number):
+    return '' if number is None else f"{number:.2f}" if number >= 1 else f"{number:.6g}"
+
+
+def plan_lines(shown_symbol, support, max_entry, target, stop, note, start, status='waiting'):
+    return [f"[{shown_symbol}]",
+            f"support   = {_plan_number(support)}",
+            f"max_entry = {max_entry:g}",
+            f"target    = {_plan_number(target)}",
+            f"stop      = {_plan_number(stop)}",
+            f"note      = {' '.join(note.split())}",
+            f"start     = {start:%d/%m/%Y}",
+            f"status    = {status}"]
+
+
+def add_plan(symbol, support, max_entry, target, stop, note, path=PLAN_FILE, assets_path="assets.ini", today=None):
+    """Save a plan (for /plan_alert); an existing plan of the same asset is replaced.
+    The file is created with explanations if missing. Returns (asset name, asset type, replaced)."""
+    symbol = symbol.strip().lower()
+    assets = read_assets(assets_path)
+    asset_type = _asset_type(symbol, assets, path)
+    check_plan(support, max_entry, target, stop)
     lines = []
     if os.path.exists(path):
         with open(path, encoding='utf-8-sig') as file:
             lines = file.read().splitlines()
-    if not any(line.strip().lower() == '[alerts]' for line in lines):
-        lines += VALUE_ALERT_HEADER.splitlines() if not lines else ['', '[alerts]']
-    existing = {line.split('=', 1)[0].strip().lower() for line in lines if '=' in line and not line.lstrip().startswith('#')}
-    base = f"{symbol.replace('.', '_').replace('-', '_')}_{direction}_{price:.2f}".replace('.', '_')
-    key, number = base, 2
-    while key in existing:   # name must be unique
-        key, number = f"{base}_{number}", number + 1
-    shown_symbol = symbol.upper() if matches[0] == 'stock' else symbol
-    lines.append(f"{key:<28} = {shown_symbol}; {direction}; {price:.2f}; {note}".rstrip('; '))
+    if not lines:
+        lines = PLAN_HEADER.splitlines()
+    shown_symbol = symbol.upper() if asset_type == 'stock' else symbol
+    new = plan_lines(shown_symbol, support, max_entry, target, stop, note, today or datetime.now().date())
+    sections = _plan_sections(lines)
+    replaced = symbol in sections
+    if replaced:
+        start, end = sections[symbol]
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+        lines[start:end] = new
+    else:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += [''] + new
     _write_lines(path, lines)
-    return key, assets[(matches[0], symbol)], matches[0]
+    return assets[(asset_type, symbol)], asset_type, replaced
 
 
-def delete_value_alert(key, path="valuealert.ini"):
-    """Remove one price alert (for /price_alert and after it was triggered). Returns the removed line."""
-    return _delete_ini_entry(path, 'alerts', key, 'Alert')
+def delete_plan(symbol, path=PLAN_FILE):
+    """Remove the plan of one asset (whole section). Returns the removed lines."""
+    if not os.path.exists(path):
+        raise ValueError(f"{path} not found.")
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    sections = _plan_sections(lines)
+    if symbol.lower() not in sections:
+        raise ValueError(f"Plan '{symbol}' is not in {path} (already deleted?).")
+    start, end = sections[symbol.lower()]
+    while start > 0 and not lines[start - 1].strip():   # also the empty line before it
+        start -= 1
+    removed = lines[start:end]
+    del lines[start:end]
+    _write_lines(path, lines)
+    return removed
+
+
+def set_plan_value(symbol, key, value, path=PLAN_FILE):
+    """Write one line of a plan (e.g. status = buy_zone, status = 'ended DD/MM/YYYY: reason', start = ...)."""
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    sections = _plan_sections(lines)
+    if symbol.lower() not in sections:
+        raise ValueError(f"Plan '{symbol}' is not in {path} (deleted?).")
+    start, end = sections[symbol.lower()]
+    line = f"{key:<9} = {' '.join(str(value).split())}"
+    for index in range(start + 1, end):
+        if '=' in lines[index] and lines[index].split('=', 1)[0].strip().lower() == key:
+            lines[index] = line
+            break
+    else:
+        insert = end
+        while insert > start + 1 and not lines[insert - 1].strip():
+            insert -= 1
+        lines.insert(insert, line)
+    _write_lines(path, lines)
+
+
+def convert_value_alerts(old_path='valuealert.ini', path=PLAN_FILE, today=None):
+    """Up to 0.1.11 the price alerts were in valuealert.ini. At the start they become plans in planalert.ini:
+    'below' = support (buy zone only at or below it, max_entry 0), 'above' = target; notes are kept.
+    valuealert.ini is renamed to valuealert.old.ini. Returns a list of what was done."""
+    if not os.path.exists(old_path) or os.path.exists(path):
+        return []
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(old_path, encoding='utf-8-sig')
+    plans = {}   # symbol as written -> values
+    if config.has_section('alerts'):
+        for key, value in config.items('alerts'):
+            parts = [part.strip() for part in value.split(';', 3)]
+            if len(parts) < 3 or parts[1].lower() not in ('below', 'above') or not parts[0]:
+                continue
+            try:
+                price = parse_price(parts[2])
+            except ValueError:
+                continue
+            plan = plans.setdefault(parts[0], {'support': None, 'target': None, 'notes': []})
+            field_name = 'support' if parts[1].lower() == 'below' else 'target'
+            if plan[field_name] is None:
+                plan[field_name] = price
+            else:   # second alert of the same kind: keep it as text
+                plan['notes'].append(f"also {parts[1].lower()} {price:.2f}")
+            if len(parts) > 3 and parts[3]:
+                plan['notes'].append(parts[3])
+    lines = PLAN_HEADER.splitlines()
+    for symbol, plan in plans.items():
+        support, target = plan['support'], plan['target']
+        if support is not None and target is not None and target <= support:
+            plan['notes'].insert(0, f"(old alert above {target:.2f})")
+            target = None
+        lines += [''] + plan_lines(symbol, support, 0, target, None, ' | '.join(plan['notes']),
+                                    today or datetime.now().date())
+    _write_lines(path, lines)
+    os.replace(old_path, os.path.join(os.path.dirname(old_path), 'valuealert.old.ini'))
+    return [f"valuealert.ini converted to planalert.ini ({len(plans)} plans), old file kept as valuealert.old.ini"]
 
 
 def set_alarm(symbol, asset_type, active, path="assets.ini"):
@@ -572,6 +744,19 @@ def read_transactions(path="transactions.csv"):
     return rows
 
 
+def held_assets(rows):
+    """Assets you currently hold according to transactions.csv (bought minus sold quantity above zero),
+    as a set of (type, symbol lower)."""
+    quantity = {}
+    for row in rows:
+        if row['action'] not in ('buy', 'sell'):
+            continue
+        key = (row['type'], row['symbol'].lower())
+        qty = valid_numbers(row['amount'], row['qty'])[1]
+        quantity[key] = quantity.get(key, 0.0) + (qty if row['action'] == 'buy' else -qty)
+    return {key for key, qty in quantity.items() if qty > 1e-9}
+
+
 def daily_prices(df):
     """Closing price per calendar day from an analysis DataFrame (Date, Price); time zone and time of day removed."""
     dates = pd.to_datetime(df['Date'])
@@ -623,8 +808,8 @@ ALERTS_SECTION_HEADER = [
     '[alerts]',
     '# Which signals CaSa sends, separately for stocks and crypto:',
     '#   name = <stocks>; <crypto>      each one of: alarm, info, off',
-    '#   alarm = message "Potential buy/sell", can be marked important, counted in /journal',
-    '#   info  = message "Info: ...", never important, not counted in /journal',
+    '#   alarm = message "Potential buy/sell", can be marked important, counted in the alarm journal',
+    '#   info  = message "Info: ...", never important, not counted in the alarm journal',
     '#   off   = no message',
     '# The comment behind each line: what the signal means and how often the price moved in the expected',
     '# direction within 20 days in the backtest (54 assets, up to 14 years); "normal" = the same on an',
@@ -716,10 +901,17 @@ LOSS_LIMIT_LINE = ('total_loss_limit = -5           # loss limit alarm: total P&
                    '(e.g. -5 = alarm when it falls below -5 %)')
 
 
+ANTHROPIC_SECTION = ['[anthropic]',
+                     '# optional: key for the Claude API (https://console.anthropic.com), empty = Claude API not used',
+                     '# the API costs money per request (billed by Anthropic per token)',
+                     'api_key =',
+                     'model = claude-opus-5-5']
+
+
 def update_config(path='config.ini'):
     """Bring an older config.ini up to date (at the start of CaSa), line by line so that the token, the key
     and all comments stay: [alarm] is renamed to [alertsconfig], total_loss_limit is added, [alerts] is
-    created or completed. Returns a list of what was changed."""
+    created or completed, an empty [anthropic] section is added. Returns a list of what was changed."""
     with open(path, encoding='utf-8-sig') as file:
         lines = file.read().splitlines()
     changes = []
@@ -744,6 +936,11 @@ def update_config(path='config.ini'):
             insert -= 1
         lines.insert(insert, LOSS_LIMIT_LINE)
         changes.append('total_loss_limit = -5 added to [alertsconfig]')
+    if 'anthropic' not in headers:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += [''] + ANTHROPIC_SECTION
+        changes.append('empty section [anthropic] added (optional Claude API key)')
     if changes:
         _write_lines(path, lines)
     changes += ensure_alert_section(path)

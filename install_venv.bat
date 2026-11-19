@@ -55,6 +55,7 @@ python -m pip install --upgrade ^
     yfinance ^
     schedule ^
     psutil ^
+    anthropic ^
     python-telegram-bot
 if %errorlevel% neq 0 (
     echo Package installation failed.

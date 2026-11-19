@@ -7,6 +7,27 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [0.1.12] – 2026-11-19
+
+### Added
+- Optional Claude API: `func.claude(prompt, system, max_tokens, effort)` returns Claude's answer as text, only with a key in the new `config.ini` section `[anthropic]` (`api_key`, `model`, default `claude-opus-5-5`); without a key the API is not used. CaSa adds the empty section at the start. Needs the package `anthropic`; the start log line shows "Claude API yes/no", the key is never logged
+- Plan alerts replace the price alerts: `planalert.ini` holds one simple trading plan per asset (support with `max_entry` %, target, stop, note). Hourly: buy zone and target; with the daily closes: stop. The message depends on whether you hold the asset (buy zone or add-on zone, take partial profits, setup cancelled or exit; buy zone and target at most once per day and plan); at the stop the plan ends. `/plan_alert` shows plans with status, saves one (`/plan_alert <asset> <support> <max_entry %> <target> <stop> <note>`) or deletes it with 🗑; `/price_alert` still works. `valuealert.ini` is converted at the first start (old file kept as `valuealert.old.ini`)
+- `/ai_api_decision3s` and `/ai_api_plan` (Claude API key needed, otherwise a message that no key is set): the same data as the AI prompt, answered by Claude with web search. Decision: only the decision in three sentences. Plan: a short trading plan plus the values for `planalert.ini`; ✅ Save as plan saves it as plan alert, Discard drops it. With a key, buttons for both are below every alarm, info and `/check` (🤖 AI decision (API), 🤖 AI plan (API)); without a key they are not shown
+- Claude answers end with tokens in/out, web searches and the cost (list price in USD, roughly in EUR), duration and model; `func.claude(..., with_usage=True)` returns these values
+- `func.claude(..., web_search=True)`: Claude may search the web (at most 5 searches); answers are streamed and a paused long search is continued
+
+### Changed
+- `/ai` is now `/ai_prompt` (the old name still works)
+- `/check`: the AI buttons are directly below the chart, the same as below alarms (no separate question any more)
+- `/ai_prompt`, `/ai_api_decision3s` and `/ai_api_plan` are no longer in the Telegram command list (they are buttons); typing them still works
+- `/record` replaces `/buy`, `/sell` and `/sellall` in the command list: buttons Buy, Sell and Sell all, or in one line `/record buy|sell|sellall ...`; the old commands still work
+
+### Removed
+- `/menu`, `/start` and `/journal`; the alarm journal report still comes on the 1st of each month with the evening summary
+
+### Fixed
+- Daily P&L, loss limit alarm and Cross-EMA Sell missed positions you hold when the asset had no `1` in `assets.ini`: assets you hold according to `transactions.csv` are now always analysed. Held assets missing in `assets.ini` (e.g. a different listing symbol) are reported once in Telegram ("Positions without prices") instead of only in the log; the log names inactive transactions once per symbol instead of once per line
+
 ## [0.1.11] – 2026-11-19
 
 ### Added

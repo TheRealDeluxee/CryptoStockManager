@@ -71,10 +71,13 @@ def test_update_config_renames_section_and_adds_settings(sandbox):
     assert '# my own comment' in text and 'token = SECRET-TEST-TOKEN' in text and 'api_key = SECRET-KEY' in text
     assert text.index('total_loss_limit') < text.index('[coingecko]')     # inside [alertsconfig]
     assert '[alerts]' in text and 'loss_limit     = alarm; alarm' in text
+    assert 'empty section [anthropic] added (optional Claude API key)' in changes
+    assert chr(10).join(cl.ANTHROPIC_SECTION) in text
     config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
     config.read(path, encoding='utf-8')
     assert config.getfloat('alertsconfig', 'total_loss_limit') == -5
     assert config.getint('alertsconfig', 'test_mode') == 0
+    assert config.get('anthropic', 'api_key') == ''                        # empty = Claude API not used
     assert cl.update_config(str(path)) == []                               # second start: nothing to do
     assert path.read_text(encoding='utf-8') == text
 

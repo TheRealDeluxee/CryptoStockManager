@@ -2,7 +2,7 @@
 telegram_bot.py
 - Always-on Telegram bot
 - Sends notifications from notify_queue (text/image) to Telegram
-- Accepts commands (/help /status /analyse /check /ai /smart_alert /event /price_alert /buy /sell /sellall /history /restart)
+- Accepts commands (/help /status /analyse /check /ai_prompt /ai_api_decision3s /ai_api_plan /smart_alert /event /plan_alert /record /history /restart)
   and sends them as dict via command_queue to main
 
 Important:
@@ -279,50 +279,43 @@ def _cmdq(app: Application) -> Queue:
 
 # Telegram HTML: commands as plain text are tappable, examples in monospace.
 HELP_TEXT = (
-        "<b>Easiest: /menu</b> – all functions as buttons\n"
-        "\n"
         "<b>Analysis</b>\n"
         "/check – daily analysis of one asset (choose via buttons)\n"
-        "/ai – AI prompt to copy into ChatGPT or Claude (also 🤖 button below alarms)\n"
+        "🤖 AI prompt, AI decision (API), AI plan (API) – buttons below every alarm, info and /check "
+        "(AI decision and AI plan with a Claude API key)\n"
         "/analyse – start daily, hourly or summary now\n"
         "\n"
         "<b>Alarms and dates</b>\n"
         "/smart_alert – switch assets on/off for the alarm analysis\n"
         "/smart_alert_config – alarm, info or off per signal (stocks, crypto)\n"
         "/event – show upcoming dates (with 🗑 to delete) or add a new one\n"
-        "/price_alert – price alerts: show (with 🗑 to delete) or add one\n"
+        "/plan_alert – trading plans (buy zone, target, stop): show (with 🗑 to delete) or add one\n"
         "\n"
         "<b>Portfolio</b>\n"
         "/portfolio – daily P&amp;L table and 13-week chart now\n"
-        "/buy – record a buy (step by step, or in one line)\n"
-        "/sell – record a sell (step by step, or in one line)\n"
-        "/sellall – record the sale of the full position\n"
+        "/record – record a buy, sell or sale of the full position (buttons, or in one line)\n"
         "/history – transactions of one asset\n"
         "/transactions – all transactions\n"
-        "/journal – how the alarms did on new data (after 20 days)\n"
         "\n"
         "<b>System</b>\n"
         "/status – analyses, next runs, problems\n"
         "/restart – restart the program\n"
         "\n"
         "<b>Examples</b> (symbol or name from assets.ini)\n"
-        "<code>/buy Qualcomm 300 2 14/11/2026</code>\n"
-        "<code>/sell bitcoin 650 0.01</code>\n"
-        "<code>/sellall Qualcomm 312</code>\n"
+        "<code>/record buy Qualcomm 300 2 14/11/2026</code>\n"
+        "<code>/record sell bitcoin 650 0.01</code>\n"
+        "<code>/record sellall Qualcomm 312</code>\n"
         "<code>/check Rheinmetall</code>\n"
-        "<code>/ai bitcoin</code>\n"
+
         "<code>/smart_alert goog on</code>\n"
         "<code>/event Nvidia 17/11/2026 Q3 earnings</code>\n"
-        "<code>/price_alert APC.DE 320.82 wait for pullback</code>\n"
+        "<code>/plan_alert TSMC 312.15 2 358.93 312.15 1/4 after a rebound</code>\n"
         "<code>/analyse daily</code>"
 )
 
 
 async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
-
-async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _cmd_help(update, context)
 
 
 async def _cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -379,7 +372,18 @@ async def _reply_asset_buttons(update, cmd, question):
 
 
 _BUTTON_REPLIES = {'check': 'Daily analysis for {name} queued (without alarm).',
-                   'ai': 'Creating AI prompt for {name} …'}
+                   'ai': 'Creating AI prompt for {name} …',
+                   'ai_decision': 'Asking Claude for a decision on {name} … (about 1 minute)',
+                   'ai_plan': 'Asking Claude for a trading plan for {name} … (about 1 minute)'}
+_AI_QUESTIONS = {'ai': 'AI prompt for which asset?', 'ai_decision': 'Claude decision for which asset?',
+                 'ai_plan': 'Claude trading plan for which asset?'}
+
+
+def _claude_key_set():
+    # The Claude API runs in the main program; the bot only checks that a key is there
+    cfg = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
+    cfg.read('config.ini', encoding='utf-8-sig')
+    return bool(cfg.get('anthropic', 'api_key', fallback='').strip())
 
 
 async def _cb_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -391,6 +395,9 @@ async def _cb_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     await query.answer()
     cmd, asset_type, symbol = query.data.split('|', 2)
+    if cmd in ('ai_decision', 'ai_plan') and not _claude_key_set():
+        await query.edit_message_text(func.CLAUDE_NO_KEY)
+        return
     try:
         name = _asset_name(symbol, asset_type)  # assets.ini may have changed in the meantime
     except (OSError, ValueError, configparser.Error) as error:
@@ -401,48 +408,82 @@ async def _cb_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await query.edit_message_text(_BUTTON_REPLIES[cmd].format(name=name))
 
 
+_AI_BUTTONS = {'aibtn': 'ai', 'aidbtn': 'ai_decision', 'aipbtn': 'ai_plan'}
+
+
 async def _cb_ai_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # "🤖 AI prompt" below an alarm or info: the alarm message itself stays unchanged
+    # "🤖 AI prompt", "🤖 AI decision (API)", "🤖 AI plan (API)" below an alarm or info: the alarm message itself stays unchanged
     query = update.callback_query
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         await query.answer()
         return
-    _, asset_type, symbol = query.data.split('|', 2)
+    button, asset_type, symbol = query.data.split('|', 2)
+    cmd = _AI_BUTTONS[button]
+    if cmd != 'ai' and not _claude_key_set():   # key removed since the alarm was sent
+        await query.answer(func.CLAUDE_NO_KEY[:200], show_alert=True)
+        return
     try:
         name = _asset_name(symbol, asset_type)
     except (OSError, ValueError, configparser.Error) as error:
         await query.answer(f'Error: {error}'[:200], show_alert=True)
         return
-    await query.answer('Creating AI prompt …')
-    _cmdq(app).put({'cmd': 'ai', 'symbol': symbol, 'type': asset_type})
-    await query.message.reply_text(_BUTTON_REPLIES['ai'].format(name=name))
+    await query.answer('Creating AI prompt …' if cmd == 'ai' else 'Asking Claude …')
+    _cmdq(app).put({'cmd': cmd, 'symbol': symbol, 'type': asset_type})
+    await query.message.reply_text(_BUTTON_REPLIES[cmd].format(name=name))
 
 
 async def _cb_noai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # "No" on the question after /check: only remove the buttons
+    # "No" on the AI question after /check in messages from before 0.1.12: only remove the buttons
     query = update.callback_query
     await query.answer()
     if _authorized(update, context.application.bot_data['chat_id']):
         await query.edit_message_text('No AI prompt.')
 
 
-async def _cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /ai: create a prompt for ChatGPT/Claude (text to copy, no API)
+async def _run_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, cmd) -> None:
+    # /ai_prompt (cmd 'ai'): prompt to copy, no API; /ai_api_decision3s and /ai_api_plan: answer from the Claude API
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
+    if cmd != 'ai' and not _claude_key_set():
+        await update.message.reply_text(func.CLAUDE_NO_KEY)
+        return
     if not context.args:
-        await _reply_asset_buttons(update, 'ai', 'AI prompt for which asset?')
+        await _reply_asset_buttons(update, cmd, _AI_QUESTIONS[cmd])
         return
     try:
         # The type may be omitted: it is looked up in assets.ini
         asset_type, symbol, name, _ = _find_asset(*_split_type(list(context.args)))
     except (OSError, ValueError, configparser.Error) as error:
-        await _reply_asset_buttons(update, 'ai', f'{error}\nAI prompt for which asset?')
+        await _reply_asset_buttons(update, cmd, f'{error}\n{_AI_QUESTIONS[cmd]}')
         return
-    _cmdq(app).put({'cmd': 'ai', 'symbol': symbol, 'type': asset_type})
-    await update.message.reply_text(_BUTTON_REPLIES['ai'].format(name=name))
+    _cmdq(app).put({'cmd': cmd, 'symbol': symbol, 'type': asset_type})
+    await update.message.reply_text(_BUTTON_REPLIES[cmd].format(name=name))
+
+
+async def _cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_ai(update, context, 'ai')
+
+
+async def _cmd_ai_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_ai(update, context, 'ai_decision')
+
+
+async def _cmd_ai_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_ai(update, context, 'ai_plan')
+
+
+async def _cb_ai_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # "✅ Save as plan" / "Discard" below an /ai_api_plan answer: the main program keeps the proposal
+    query = update.callback_query
+    app = context.application
+    await query.answer()
+    if not _authorized(update, app.bot_data['chat_id']):
+        return
+    action, _, key = query.data.partition('|')
+    _cmdq(app).put({'cmd': 'ai_plan_save', 'key': key, 'save': action == 'aiplanok'})
+    await query.edit_message_reply_markup(reply_markup=None)   # no second tap
 
 
 def _alarm_keyboard():
@@ -511,8 +552,8 @@ async def _cb_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 _KIND_ICON = {'alarm': '🔔', 'info': 'ℹ️', 'off': '–'}
 _ALERT_CONFIG_TEXT = (
     "<b>Alarm and info settings</b> (📈 stocks, 🪙 crypto)\n"
-    "🔔 <b>alarm</b>: \"Potential buy/sell\", can be important, counted in /journal\n"
-    "ℹ️ <b>info</b>: \"Info: …\", never important, not in /journal\n"
+    "🔔 <b>alarm</b>: \"Potential buy/sell\", can be important, counted in the alarm journal\n"
+    "ℹ️ <b>info</b>: \"Info: …\", never important, not in the alarm journal\n"
     "– <b>off</b>: no message\n\n"
     "Tap a button to switch: alarm → info → off. Saved in config.ini [alerts], "
     "used from the next analysis on.")
@@ -652,89 +693,88 @@ async def _cb_event_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(f'Event deleted: {name}')
 
 
-async def _cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /price_alert: show price alerts (with 🗑 to delete); /price_alert <symbol> [below|above] <price> [note]: add one
+PLAN_FORMAT = ('Format: /plan_alert <symbol or name> <support> <max_entry %> <target> <stop> <note>\n'
+               '- for a value you do not use, e.g. no stop: ... 312.15 2 358.93 - note\n'
+               'Example: /plan_alert TSMC 312.15 2 358.93 312.15 1/4 of the position after a rebound')
+_PLAN_STATUS_TEXT = {'waiting': '⏳ waiting', 'buy_zone': '🟢 in the buy zone', 'target': '💰 at the target',
+                     'ended': '⛔ ended'}
+
+
+def _plan_line(plan):
+    status = _PLAN_STATUS_TEXT[plan['status']]
+    if plan['status'] == 'ended':
+        status += plan['status_text'][len('ended'):]
+    note = f"\n   {plan['note']}" if plan['note'] else ''
+    return f"• {plan['name']} – {status}\n   {cl.plan_text(plan)}{note}"
+
+
+async def _cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # /plan_alert: show plans (with 🗑 to delete); /plan_alert <asset> <support> <max %> <target> <stop> <note>: save one
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
     args = context.args or []
     try:
         if not args:
-            alerts = cl.read_value_alerts()
-            lines = ['Price alerts:'] if alerts else ['No price alerts.']
-            lines += [f"{alert['name']} {alert['direction']} {func.format_euro(alert['price'])}"
-                      + (f" – {alert['note']}" if alert['note'] else '') for alert in alerts]
-            lines.append('\nAdd: /price_alert <symbol> <price> <note>')
-            if alerts:
+            plans = cl.read_plans()
+            lines = ['<b>Plan alerts</b>'] if plans else ['No plan alerts.']
+            lines += [html.escape(_plan_line(plan)) for plan in plans]
+            lines.append('\n' + html.escape(PLAN_FORMAT))
+            if plans:
                 lines.append('Delete: tap 🗑 below')
-            buttons = [[InlineKeyboardButton(f"🗑 {alert['name']} {alert['direction']} {alert['price']:.2f} €",
-                                             callback_data=f"vadel|{alert['key']}")]
-                       for alert in alerts if len(f"vadelok|{alert['key']}".encode()) <= 64]
-            await update.message.reply_text('\n'.join(lines)[:4000],
+            buttons = [[InlineKeyboardButton(f"🗑 {plan['name']}", callback_data=f"pldel|{plan['key']}")]
+                       for plan in plans if len(f"pldelok|{plan['key']}".encode()) <= 64]
+            await update.message.reply_text('\n'.join(lines)[:4000], parse_mode='HTML',
                                             reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
             return
         asset_type, symbol, _, rest = _find_asset(list(args), allow_rest=True)
-        direction = rest[0].lower() if rest and rest[0].lower() in ('below', 'above') else None
-        rest = rest[1:] if direction else rest
-        if not rest:
-            await update.message.reply_text('Format: /price_alert <symbol or name> [below|above] <price> <note>\n'
-                                            'Example: /price_alert Apple 320.82 Wait for pullback, buy small amount')
+        if len(rest) < 4:
+            await update.message.reply_text(PLAN_FORMAT)
             return
-        price = cl.parse_price(rest[0])
-        # Current price: decides "below"/"above" if not given and shows the distance to the mark
-        try:
-            now = await asyncio.to_thread(func.current_price, symbol.upper() if asset_type == 'stock' else symbol,
-                                          asset_type)
-        except Exception:
-            now = None
-        if direction is None:
-            if now is None:
-                await update.message.reply_text('The current price is not available right now. '
-                                                'Please add below or above, e.g. /price_alert APC.DE below 320.82')
-                return
-            direction = 'below' if price <= now else 'above'
-        key, name, _ = cl.add_value_alert(symbol, direction, price, ' '.join(rest[1:]))
+        value = lambda text: None if text.strip() in ('-', '') else cl.parse_price(text)
+        support, max_entry, target, stop = value(rest[0]), cl.parse_percent(rest[1]), value(rest[2]), value(rest[3])
+        name, _, replaced = cl.add_plan(symbol, support, max_entry, target, stop, ' '.join(rest[4:]))
     except (OSError, ValueError, configparser.Error) as error:
-        await _reply_long(update, f'Error: {error}\nNot saved.')
+        await _reply_long(update, f'Error: {error}\nNot saved.\n\n{PLAN_FORMAT}')
         return
-    text = f"Price alert saved: {name} {direction} {func.format_euro(price)}"
-    if now is not None:
-        text += f"\nCurrent price {func.format_euro(now)} ({(price / now - 1) * 100:+.1f} % to the mark)."
-        if (direction == 'below' and now <= price) or (direction == 'above' and now >= price):
-            _cmdq(app).put({'cmd': 'value_alerts'})   # mark already reached: report right away
-            text += '\nThe mark is already reached: the alert follows shortly.'
-    text += '\nChecked every hour (stocks Mon–Fri 08:00–22:00).'
+    plan = next(p for p in cl.read_plans() if p['symbol'] == symbol.lower())
+    text = f"Plan {'replaced' if replaced else 'saved'}: {name}\n{cl.plan_text(plan)}"
+    try:
+        now = await asyncio.to_thread(func.current_price, symbol.upper() if asset_type == 'stock' else symbol,
+                                      asset_type)
+        text += f"\nCurrent price {func.format_euro(now)}."
+    except Exception:
+        pass
+    text += '\nBuy zone and target are checked every hour (stocks Mon–Fri 08:00–22:00), the stop with the daily close.'
+    _cmdq(app).put({'cmd': 'plan_alerts'})   # zone or target may already be reached: check right away
     await update.message.reply_text(text)
 
 
-async def _cb_value_alert_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # 🗑 in the /price_alert list: first ask, then delete
+async def _cb_plan_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # 🗑 in the /plan_alert list: first ask, then delete
     query = update.callback_query
     await query.answer()
     if not _authorized(update, context.application.bot_data['chat_id']):
         return
     action, _, key = query.data.partition('|')
-    if action == 'vadelno':
+    if action == 'pldelno':
         await query.edit_message_text('Not deleted.')
         return
     try:
-        alert = next((a for a in cl.read_value_alerts() if a['key'] == key), None)
-        if action == 'vadel':
-            if alert is None:
-                await query.edit_message_text('This price alert no longer exists (already triggered or deleted).')
+        plan = next((p for p in cl.read_plans() if p['key'].lower() == key.lower()), None)
+        if action == 'pldel':
+            if plan is None:
+                await query.edit_message_text('This plan no longer exists (already deleted).')
                 return
-            note = f" – {alert['note']}" if alert['note'] else ''
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Yes, delete', callback_data=f'vadelok|{key}'),
-                                              InlineKeyboardButton('Cancel', callback_data='vadelno|')]])
-            await query.edit_message_text(f"Delete this price alert?\n{alert['name']} {alert['direction']} "
-                                          f"{func.format_euro(alert['price'])}{note}", reply_markup=keyboard)
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Yes, delete', callback_data=f'pldelok|{key}'),
+                                              InlineKeyboardButton('Cancel', callback_data='pldelno|')]])
+            await query.edit_message_text(f"Delete this plan?\n{_plan_line(plan)}", reply_markup=keyboard)
             return
-        cl.delete_value_alert(key)   # action == 'vadelok'
+        cl.delete_plan(key)   # action == 'pldelok'
     except (OSError, ValueError, configparser.Error) as error:
         await query.edit_message_text(f'Error: {error}\nNot deleted.')
         return
-    label = f"{alert['name']} {alert['direction']} {func.format_euro(alert['price'])}" if alert else key
-    await query.edit_message_text(f'Price alert deleted: {label}')
+    await query.edit_message_text(f"Plan deleted: {plan['name'] if plan else key}")
 
 
 async def _cmd_analyse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -798,6 +838,45 @@ async def _cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _cmd_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _save_trade(update, context, 'sell')
+
+
+_RECORD = {'buy': _cmd_buy, 'sell': _cmd_sell}   # sellall is added below its function
+
+
+async def _cmd_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # /record: buttons Buy / Sell / Sell all; /record buy|sell|sellall <...>: directly as before /buy, /sell, /sellall
+    if not _authorized(update, context.application.bot_data['chat_id']):
+        return
+    args = list(context.args or [])
+    action = args[0].lower() if args else ''
+    if action in _RECORD:
+        inner = types.SimpleNamespace(args=args[1:], application=context.application,
+                                      user_data=context.user_data, bot_data=context.bot_data)
+        await _RECORD[action](update, inner)
+        return
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('🟢 Buy', callback_data='rec|buy'),
+                                      InlineKeyboardButton('🔴 Sell', callback_data='rec|sell'),
+                                      InlineKeyboardButton('Sell all', callback_data='rec|sellall')],
+                                     [InlineKeyboardButton('✖ Cancel', callback_data='rec|cancel')]])
+    text = 'What do you want to record?'
+    if action:
+        text = f"Unknown: {args[0]}. Use buy, sell or sellall, e.g. /record buy Qualcomm 300 2\n{text}"
+    await update.message.reply_text(text, reply_markup=keyboard)
+
+
+async def _cb_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Button from /record: start the chosen input like /record buy, /record sell or /record sellall
+    query = update.callback_query
+    await query.answer()
+    if not _authorized(update, context.application.bot_data['chat_id']):
+        return
+    action = query.data.split('|', 1)[1]
+    if action not in _RECORD:
+        await query.edit_message_text('Nothing recorded.')
+        return
+    await query.edit_message_text({'buy': 'Record a buy', 'sell': 'Record a sell',
+                                   'sellall': 'Sell the full position'}[action])
+    await _run_command(_RECORD[action], update, context)
 
 
 # ── Guided /buy and /sell: asset -> amount -> quantity -> date -> confirm (state in context.user_data) ──
@@ -882,7 +961,7 @@ async def _cb_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text(f'{query.message.text}\n\n↩ Undone: the transaction was removed again.')
         return
     if not trade:
-        await query.edit_message_text('This input is no longer active. Start again with /buy or /sell.')
+        await query.edit_message_text('This input is no longer active. Start again with /record.')
         return
     if parts[1] == 'asset':
         asset_type, symbol = parts[2], parts[3]
@@ -969,7 +1048,7 @@ def _current_price(symbol, asset_type, name):
     # Latest price in EUR; blocks during API retries -> only call via asyncio.to_thread
     df = cl.CryptoStock(symbol, name, asset_type).get_API_data('100d')
     if df is None or df.empty:
-        raise ValueError('No current price available. Please add the amount: /sellall <symbol> <amount>')
+        raise ValueError('No current price available. Please add the amount: /record sellall <symbol> <amount>')
     return float(df['Price'].iloc[-1])
 
 
@@ -980,7 +1059,7 @@ async def _cmd_sellall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if not context.args:
         await _reply_held_buttons(update.message, 'sapick', 'Sell the full position of which asset? '
-                                  '(the current price is used; with your own amount: /sellall <name> <amount>)')
+                                  '(the current price is used; with your own amount: /record sellall <name> <amount>)')
         return
     try:
         asset_type, symbol, name, rest = _find_asset(list(context.args), allow_rest=True)
@@ -1017,8 +1096,11 @@ async def _cmd_sellall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Record the full position of {name} as a sale?\n"
         f"Quantity: {qty:.8g} {unit}\nAmount: {amount:.2f} € ({source})\n"
         f"Date: {datetime.now().strftime('%d/%m/%Y')}\n"
-        f"If your proceeds were different: /sellall {symbol} <amount>",
+        f"If your proceeds were different: /record sellall {symbol} <amount>",
         reply_markup=keyboard)
+
+
+_RECORD['sellall'] = _cmd_sellall
 
 
 async def _cb_sellall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1093,18 +1175,6 @@ async def _reply_transactions_table(update, rows, title):
                 os.remove(path)
 
 
-async def _cmd_journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /journal: every sent alarm with its result 20 trading days later (alarm_journal.csv)
-    if not _authorized(update, context.application.bot_data["chat_id"]):
-        return
-    try:
-        text = cl.journal_report()
-    except (OSError, UnicodeError, csv.Error, ValueError) as error:
-        await _reply_long(update, f'The alarm journal could not be read: {error}')
-        return
-    await update.message.reply_text(text, parse_mode="HTML")
-
-
 async def _cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     app = context.application
     if not _authorized(update, app.bot_data["chat_id"]):  # type: ignore[index]
@@ -1172,74 +1242,11 @@ async def _cb_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _run_command(command, update, context, args=()):
-    """Run a command handler from a button (menu, asset choice): replies go to the chat of the button."""
+    """Run a command handler from a button (asset choice, /record): replies go to the chat of the button."""
     fake_update = types.SimpleNamespace(message=update.callback_query.message, effective_chat=update.effective_chat)
     fake_context = types.SimpleNamespace(args=list(args), application=context.application,
                                          user_data=context.user_data, bot_data=context.bot_data)
     await command(fake_update, fake_context)
-
-
-# ────────────────────────────────────────────────
-# /menu: all functions as buttons (each button runs the same command as typing it)
-# ────────────────────────────────────────────────
-_MENU_PAGES = {
-    'main': ('<b>CaSa menu</b> – what do you want to do?',
-             [[('📊 Analysis', 'menu|analysis'), ('💼 Portfolio', 'menu|portfolio')],
-              [('🔔 Alarms & dates', 'menu|alarms'), ('⚙ System', 'menu|system')]]),
-    'analysis': ('<b>📊 Analysis</b>',
-                 [[('Daily analysis of an asset', 'menu|do|check'), ('🤖 AI prompt', 'menu|do|ai')],
-                  [('Run daily analysis now', 'menu|do|daily'), ('Summary now', 'menu|do|summary')]]),
-    'portfolio': ('<b>💼 Portfolio</b>',
-                  [[('P&L now', 'menu|do|portfolio'), ('Alarm journal', 'menu|do|journal')],
-                   [('Record buy', 'menu|do|buy'), ('Record sell', 'menu|do|sell')],
-                   [('Sell full position', 'menu|do|sellall'), ('History', 'menu|do|history')],
-                   [('All transactions', 'menu|do|transactions')]]),
-    'alarms': ('<b>🔔 Alarms & dates</b>',
-               [[('Assets in the alarm analysis', 'menu|do|smart_alert')],
-                [('Alarm/info settings', 'menu|do|alert_config')],
-                [('Events', 'menu|do|event'), ('Price alerts', 'menu|do|price_alert')]]),
-    'system': ('<b>⚙ System</b>',
-               [[('Status', 'menu|do|status'), ('Help', 'menu|do|help')],
-                [('Restart', 'menu|do|restart')]]),
-}
-_MENU_ACTIONS = {
-    'check': (_cmd_check, []), 'ai': (_cmd_ai, []), 'daily': (_cmd_analyse, ['daily']),
-    'summary': (_cmd_analyse, ['summary']), 'portfolio': (_cmd_portfolio, []), 'journal': (_cmd_journal, []),
-    'buy': (_cmd_buy, []), 'sell': (_cmd_sell, []), 'sellall': (_cmd_sellall, []), 'history': (_cmd_history, []),
-    'transactions': (_cmd_transactions, []), 'smart_alert': (_cmd_alarm, []), 'alert_config': (_cmd_alert_config, []),
-    'event': (_cmd_event, []), 'price_alert': (_cmd_price, []), 'status': (_cmd_status, []), 'help': (_cmd_help, []),
-    'restart': (_cmd_restart, []),
-}
-
-
-def _menu_page(page):
-    text, rows = _MENU_PAGES[page]
-    keyboard = [[InlineKeyboardButton(label, callback_data=data) for label, data in row] for row in rows]
-    if page != 'main':
-        keyboard.append([InlineKeyboardButton('« Back', callback_data='menu|main')])
-    return text, InlineKeyboardMarkup(keyboard)
-
-
-async def _cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _authorized(update, context.application.bot_data['chat_id']):
-        return
-    text, keyboard = _menu_page('main')
-    await update.message.reply_text(text, parse_mode='HTML', reply_markup=keyboard)
-
-
-async def _cb_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # menu|<page> switches the page in the same message, menu|do|<action> runs the command
-    query = update.callback_query
-    await query.answer()
-    if not _authorized(update, context.application.bot_data['chat_id']):
-        return
-    parts = query.data.split('|')
-    if parts[1] == 'do' and parts[2] in _MENU_ACTIONS:
-        command, args = _MENU_ACTIONS[parts[2]]
-        await _run_command(command, update, context, args)
-    elif parts[1] in _MENU_PAGES:
-        text, keyboard = _menu_page(parts[1])
-        await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
 
 
 # ────────────────────────────────────────────────
@@ -1253,24 +1260,18 @@ async def _post_init(app: Application) -> None:
 
     # Register the menu only for the configured chat.
     commands = [
-        BotCommand("menu", "All functions as buttons"),
-        BotCommand("start", "Show help"),
         BotCommand("help", "Show all commands and their parameters"),
         BotCommand("status", "Analyses, next runs, problems"),
         BotCommand("check", "Daily analysis without alarm: choose asset via buttons"),
-        BotCommand("ai", "AI prompt to copy into ChatGPT or Claude"),
         BotCommand("smart_alert", "Add assets to or remove them from the alarm analysis"),
         BotCommand("smart_alert_config", "Alarm, info or off per signal (stocks, crypto)"),
         BotCommand("event", "Show or add dates: symbol date text"),
-        BotCommand("price_alert", "Price alerts: show, or add: symbol price note"),
+        BotCommand("plan_alert", "Trading plans: show, or add: asset support max% target stop note"),
         BotCommand("analyse", "Start analysis: hourly, daily or summary"),
         BotCommand("portfolio", "Daily P&L table and chart now"),
-        BotCommand("buy", "Record a buy (step by step)"),
-        BotCommand("sell", "Record a sell (step by step)"),
-        BotCommand("sellall", "Sell the full position (choose via buttons)"),
+        BotCommand("record", "Record a buy, sell or sale of the full position"),
         BotCommand("history", "Transactions of one asset (choose via buttons)"),
         BotCommand("transactions", "Show all saved transactions"),
-        BotCommand("journal", "Alarm journal: hit rate of the alarms after 20 days"),
         BotCommand("restart", "Restart the program"),
     ]
     try:
@@ -1334,27 +1335,29 @@ def run_standalone(notify_q: Queue, command_q: Queue) -> None:
     app.bot_data["command_q"] = command_q
     app.bot_data["chat_id"] = chat_id
 
-    app.add_handler(CommandHandler("start", _cmd_start))
     app.add_handler(CommandHandler("help", _cmd_help))
-    app.add_handler(CommandHandler("menu", _cmd_menu))
-    app.add_handler(CallbackQueryHandler(_cb_menu, pattern=r"^menu\|"))
     app.add_handler(CommandHandler("portfolio", _cmd_portfolio))
     app.add_handler(CommandHandler("status", _cmd_status))
     app.add_handler(CommandHandler("analyse", _cmd_analyse))
     app.add_handler(CommandHandler("check", _cmd_check))
-    app.add_handler(CommandHandler("ai", _cmd_ai))
+    app.add_handler(CommandHandler(["ai_prompt", "ai"], _cmd_ai))   # /ai: old name
+    app.add_handler(CommandHandler("ai_api_decision3s", _cmd_ai_decision))
+    app.add_handler(CommandHandler("ai_api_plan", _cmd_ai_plan))
     app.add_handler(CommandHandler(["smart_alert", "alarm"], _cmd_alarm))   # /alarm still works as before
     app.add_handler(CommandHandler(["event", "termin"], _cmd_event))   # /termin still works as before
-    app.add_handler(CommandHandler("price_alert", _cmd_price))
+    app.add_handler(CommandHandler(["plan_alert", "price_alert"], _cmd_plan))   # /price_alert: old name
     app.add_handler(CallbackQueryHandler(_cb_alarm, pattern=r"^alarm\|"))
     app.add_handler(CommandHandler("smart_alert_config", _cmd_alert_config))
     app.add_handler(CallbackQueryHandler(_cb_alert_config, pattern=r"^acfg\|"))
-    app.add_handler(CallbackQueryHandler(_cb_assets, pattern=r"^(check|ai)\|"))
+    app.add_handler(CallbackQueryHandler(_cb_assets, pattern=r"^(check|ai|ai_decision|ai_plan)\|"))
+    app.add_handler(CallbackQueryHandler(_cb_ai_plan, pattern=r"^aiplan(ok|no)\|"))
     app.add_handler(CallbackQueryHandler(_cb_noai, pattern=r"^noai$"))
-    app.add_handler(CallbackQueryHandler(_cb_ai_button, pattern=r"^aibtn\|"))
+    app.add_handler(CallbackQueryHandler(_cb_ai_button, pattern=r"^ai[dp]?btn\|"))
     app.add_handler(CallbackQueryHandler(_cb_event_delete, pattern=r"^evdel(ok|no)?\|"))
-    app.add_handler(CallbackQueryHandler(_cb_value_alert_delete, pattern=r"^vadel(ok|no)?\|"))
-    app.add_handler(CommandHandler("buy", _cmd_buy))
+    app.add_handler(CallbackQueryHandler(_cb_plan_delete, pattern=r"^pldel(ok|no)?\|"))
+    app.add_handler(CommandHandler("record", _cmd_record))
+    app.add_handler(CallbackQueryHandler(_cb_record, pattern=r"^rec\|"))
+    app.add_handler(CommandHandler("buy", _cmd_buy))     # old names, not in the command list any more
     app.add_handler(CommandHandler("sell", _cmd_sell))
     app.add_handler(CallbackQueryHandler(_cb_trade, pattern=r"^tr\|"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text))   # answers of the guided /buy, /sell
@@ -1363,7 +1366,6 @@ def run_standalone(notify_q: Queue, command_q: Queue) -> None:
     app.add_handler(CallbackQueryHandler(_cb_pick, pattern=r"^(hist|sapick)\|"))
     app.add_handler(CommandHandler("history", _cmd_history))
     app.add_handler(CommandHandler("transactions", _cmd_transactions))
-    app.add_handler(CommandHandler("journal", _cmd_journal))
     app.add_handler(CommandHandler("restart", _cmd_restart))
 
     app.add_error_handler(_on_error)

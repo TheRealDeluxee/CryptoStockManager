@@ -1,12 +1,10 @@
-"""Alarm journal: record sent alarms, fill in the result 20 trading days later, statistics and /journal."""
-import asyncio
+"""Alarm journal: record sent alarms, fill in the result 20 trading days later, statistics and the report."""
 import types
 
 import pandas as pd
 import pytest
 
 import classes as cl
-import telegram_bot as tb
 
 
 def prices(start, values):
@@ -53,17 +51,10 @@ def test_empty_journal_report():
     assert 'No alarms recorded yet' in cl.journal_report()
 
 
-def test_journal_command(monkeypatch):
-    replies = []
-    monkeypatch.setattr(tb, '_authorized', lambda *a: True)
-
-    async def reply_text(text, **kwargs):
-        replies.append(text)
+def test_journal_report_text(sandbox):
     cl.journal_add('crypto', 'bitcoin', 'Bitcoin', '121', '100h', '2026-11-01 14:00', 70000, 9, True)
-    update = types.SimpleNamespace(message=types.SimpleNamespace(reply_text=reply_text))
-    context = types.SimpleNamespace(args=[], application=types.SimpleNamespace(bot_data={'chat_id': 1}))
-    asyncio.run(tb._cmd_journal(update, context))
-    assert 'Positive-5' in replies[0] and '1 alarms still waiting' in replies[0]
+    text = cl.journal_report()
+    assert 'Positive-5' in text and '1 alarms still waiting' in text
 
 
 def test_main_records_alarms_but_not_in_test_mode(sandbox):

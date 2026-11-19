@@ -1,4 +1,4 @@
-"""Files and inputs: assets.ini, transactions.csv (FIFO), events.ini, valuealert.ini, numbers and prices."""
+"""Files and inputs: assets.ini, transactions.csv (FIFO), events.ini, numbers and prices."""
 import datetime
 
 import pytest
@@ -141,21 +141,3 @@ def test_event_in_the_past_or_unknown_asset():
         cl.add_event('XYZ', '01/01/2099', 'unknown')
 
 
-# ── valuealert.ini ─────────────────────────────────────────────────────────
-def test_value_alerts_add_read_delete(sandbox):
-    key, name, asset_type = cl.add_value_alert('APC.DE', 'below', 320.82, 'wait for pullback')
-    assert (name, asset_type) == ('Apple', 'stock')
-    text = (sandbox.path / 'valuealert.ini').read_text(encoding='utf-8')
-    assert text.startswith('# CaSa price alerts')        # new file with explanations
-    alerts = cl.read_value_alerts()
-    assert alerts[0]['price'] == pytest.approx(320.82)
-    assert alerts[0]['direction'] == 'below'
-    key2, _, _ = cl.add_value_alert('APC.DE', 'below', 320.82, 'second one')
-    assert key2 != key                                    # names stay unique
-    cl.delete_value_alert(key)
-    assert [a['key'] for a in cl.read_value_alerts()] == [key2]
-
-
-def test_value_alert_invalid_direction():
-    with pytest.raises(ValueError):
-        cl.add_value_alert('APC.DE', 'sideways', 100, '')

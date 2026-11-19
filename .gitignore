@@ -17,4 +17,6 @@ Thumbs.db
 /assets.ini
 /events.ini
 /valuealert.ini
+/valuealert.old.ini
+/planalert.ini
 /alarm_journal.csv

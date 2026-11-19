@@ -28,7 +28,7 @@ import telegram_bot
 
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
-VERSION = "0.1.11"
+VERSION = "0.1.12"
 GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
 LOGO_FILE = "logo.png"   # shown in the start message (in Git as logo.png)
 # Recommended number of assets with 1 for the free APIs (see README "How many assets with 1?")
@@ -103,6 +103,50 @@ AI_SCORE_NOTE = {'stock': 'stocks: high = no edge, very low = slight rebound',
                  'crypto': 'crypto: high = strength tended to continue'}
 
 
+# /ai_api_decision3s and /ai_api_plan: the filled ai_prompt.txt plus one of these tasks (instead of the full answer D)
+AI_API_TASKS = {
+    'decision': ("\n\nE. Answer for this request (replaces D): reply only with item 1 of D, the decision in exactly "
+                 "three sentences. Plain text, no heading, no list, no other items, no sources list."),
+    'plan': ("\n\nE. Answer for this request (replaces D): reply only with the trading plan of item 3 of D as at most "
+             "three short lines 'scenario: observable signal -> my action' (plain text, no table, no sources list), "
+             "then exactly this block for my program:\n"
+             "```planalert\n"
+             "support = <price in EUR where the buy zone starts, or empty>\n"
+             "max_entry = <buy only up to this many % above support, 0 to 10>\n"
+             "target = <price in EUR for partial profits, or empty>\n"
+             "stop = <the plan fails at a daily close below this price in EUR, or empty>\n"
+             "note = <one line: tranche size and the conditions that are not price levels>\n"
+             "```\n"
+             "Prices from the series in A, two decimals, no currency sign. support or target is required; "
+             "target above support + max_entry; stop below the buy zone and below the target."),
+}
+
+
+def split_plan_answer(answer):
+    """Claude's /ai_api_plan answer -> (text without the block, content of the ```planalert block or '')."""
+    match = re.search(r"```planalert\s*\n(.*?)```", answer, re.DOTALL)
+    if not match:
+        return answer.strip(), ''
+    return (answer[:match.start()] + answer[match.end():]).strip(), match.group(1)
+
+
+def parse_plan_block(block):
+    """'support = 312.15' ... lines from the ```planalert block -> dict for cl.add_plan. ValueError if unusable."""
+    if not block.strip():
+        raise ValueError('the answer contains no planalert block.')
+    values = {}
+    for line in block.splitlines():
+        if '=' in line:
+            key, value = line.split('=', 1)
+            values[key.strip().lower()] = value.strip()
+    price = lambda key: cl.parse_price(values[key]) if values.get(key, '').strip('<>- ') else None
+    plan = {'support': price('support'), 'target': price('target'), 'stop': price('stop'),
+            'max_entry': cl.parse_percent(values.get('max_entry', '').strip() or '0'),
+            'note': ' '.join(values.get('note', '').split())}
+    cl.check_plan(plan['support'], plan['max_entry'], plan['target'], plan['stop'])
+    return plan
+
+
 def update_ai_prompt_file():
     """Create ai_prompt.txt, or replace an unchanged earlier default template with the current one."""
     if os.path.exists(AI_PROMPT_FILE):
@@ -125,6 +169,8 @@ class CryptoStockManager:
         # Bring config.ini up to date first (old section name, new settings), then read it
         for change in cl.update_config(config_file_path):
             func.log_print(f"config.ini: {change}")
+        for change in cl.convert_value_alerts():   # price alerts up to 0.1.11 -> plans
+            func.log_print(change)
         config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
         config.read(config_file_path, encoding="utf-8-sig")
         self.version = VERSION   # an old [version] section in config.ini is ignored
@@ -145,6 +191,8 @@ class CryptoStockManager:
             raise ValueError('total_loss_limit must be negative, e.g. -5 (= alarm at a total P&L below -5 %).')
         # Optional CoinGecko demo key: used if set, otherwise the free public access
         func.coingecko_api_key = config.get('coingecko', 'api_key', fallback='').strip()
+        func.anthropic_api_key = config.get('anthropic', 'api_key', fallback='').strip()
+        func.anthropic_model = config.get('anthropic', 'model', fallback='').strip() or 'claude-opus-5-5'
         self.stock_update = False
         # For the health check in the log: start time, last runs, alarms since the start, bot state
         self.started = time.time()
@@ -166,12 +214,20 @@ class CryptoStockManager:
         # Kept when assets are reloaded and on days without stock analysis (weekend).
         self.daily_prices = {}   # (type, symbol lower) -> price per day
         self.events_done = set()   # events already reminded today (in memory only)
+        self.missing_held_notified = set()   # held assets missing in assets.ini, already reported in Telegram
+        self.plan_stop_checked = {}   # plan -> day the stop was last checked with the daily closes
+        self.plan_zone_sent = {}   # (plan, buy_zone/target) -> day of the last message: at most one per day
+        self.pending_plans = {}   # /ai_api_plan proposals waiting for the save button (in memory only)
 
     def load_config_items(self):
         """Build the new lists completely first, then replace the old ones."""
         all_entries = cl.read_assets()
         entries = cl.read_assets(alarm_only=True)   # only assets with 1 are part of the alarm analysis
         rows = cl.read_transactions()
+        # Assets you hold are always analysed (P&L, loss limit, Cross-EMA Sell), even without 1.
+        held = cl.held_assets(rows)
+        added = [key for key in all_entries if key in held and key not in entries]
+        entries.update({key: all_entries[key] for key in added})
         crypto_hh, crypto_hd, stock_hh, stock_hd = [], [], [], []
         old_hh = {(item.type, item.symbol.lower()): item
                   for item in self.crypto_items_hh + self.stock_items_hh}
@@ -193,12 +249,22 @@ class CryptoStockManager:
             else:
                 stock_hh.append(item_hh)
                 stock_hd.append(item_hd)
-        for row in rows:
-            key = (row['type'], row['symbol'])
-            if key not in all_entries:
-                func.log_print(f"Inactive transaction: {row['symbol']} is missing in assets.ini and is not analysed.", 'WARN')
-            elif key not in entries and row['action'] != 'watchlist':
-                func.log_print(f"{row['symbol']} is held, but without 1 it is not part of the alarm analysis.", 'WARN')
+        show = lambda key: key[1].upper() if key[0] == 'stock' else key[1]
+        if added:
+            func.log_print(f"Held without 1 in assets.ini, analysed anyway: {', '.join(show(key) for key in added)}")
+        missing_held = sorted(show(key) for key in held if key not in all_entries)
+        inactive = sorted({show((row['type'], row['symbol'])) for row in rows
+                           if (row['type'], row['symbol']) not in all_entries} - set(missing_held))
+        if inactive:
+            func.log_print(f"Inactive transactions (not in assets.ini, not held): {', '.join(inactive)}")
+        if missing_held:
+            func.log_print(f"Held but missing in assets.ini, not analysed: {', '.join(missing_held)}", 'WARN')
+            if set(missing_held) != self.missing_held_notified:   # once, not on every reload
+                func.pushover("<b>Positions without prices</b>\nYou hold these assets according to transactions.csv, "
+                              f"but they are missing in assets.ini: <b>{html.escape(', '.join(missing_held))}</b>\n"
+                              "They are not in the daily P&L and get no loss limit alarm. Add the symbol to "
+                              "assets.ini or use the same symbol as there in transactions.csv.", html_format=True)
+        self.missing_held_notified = set(missing_held)
         self.crypto_items_hh, self.crypto_items_hd = crypto_hh, crypto_hd
         self.stock_items_hh, self.stock_items_hd = stock_hh, stock_hd
         # Daily tables are kept: price, P&L and rating do not depend on the holdings.
@@ -261,7 +327,7 @@ class CryptoStockManager:
         parts, problems = self._health()
         next_runs = {}
         names = {'hundred_hour_analysis': 'hourly analysis', 'hundred_day_analysis': 'daily analysis',
-                 'send_summary': 'summary', 'event_reminders': 'reminders', 'value_alert_check': 'price alerts'}
+                 'send_summary': 'summary', 'event_reminders': 'reminders', 'plan_alert_check': 'plan alerts'}
         for job in schedule.jobs:
             name = names.get(getattr(getattr(job.job_func, 'func', None), '__name__', ''))
             if name and job.next_run and (name not in next_runs or job.next_run < next_runs[name]):
@@ -310,9 +376,9 @@ class CryptoStockManager:
             problems.append('hourly analysis has not run yet')
         parts.append(f"alarms since start {self.alarms_sent}")
         try:
-            parts.append(f"price alerts {len(cl.read_value_alerts())}")
+            parts.append(f"plan alerts {sum(plan['status'] != 'ended' for plan in cl.read_plans())}")
         except (OSError, ValueError, configparser.Error) as error:
-            problems.append(f"valuealert.ini: {error}")
+            problems.append(f"planalert.ini: {error}")
         # Memory of the main program (Linux/Raspberry Pi; on Windows only if psutil is installed)
         memory = None
         try:
@@ -395,7 +461,7 @@ class CryptoStockManager:
         return name, symbol, item, df, full, sr_zones, details
 
     def single_daily_analysis(self, symbol, asset_type, ask_ai=False):
-        """ask_ai=True (only /check): afterwards ask with buttons whether an AI prompt should be created."""
+        """ask_ai=True (only /check): the AI buttons below the chart, as below alarms and infos."""
         name, symbol, item, df, full, sr_zones, details = self._daily_analysis(symbol, asset_type)
         # Telegram HTML as for the alarms (bold/italic/monospace)
         message = (f"<b>{html.escape(name)} ({html.escape(symbol)}) — daily analysis (100d)</b>\n"
@@ -405,15 +471,11 @@ class CryptoStockManager:
                                            f"({item.state.amount_older_than_one_year_pct:.2f} %)")
         image_name = 'manual_' + uuid.uuid4().hex
         func.plot_and_save(df, image_name, '100d', item.state.zero_line, sr_zones, item.state.pattern)
-        func.pushover_image(image_name, message, delete_after_send=True, html_format=True)
-        if ask_ai:
-            # Same queue as the chart: the question arrives right after it. "Yes" works like a /ai button.
-            key = symbol.lower()
-            func.pushover(f"Create an AI prompt for {html.escape(name)} (ChatGPT/Claude)?", html_format=True,
-                          buttons=[[('Yes, create', f'ai|{asset_type}|{key}'), ('No', 'noai')]])
+        func.pushover_image(image_name, message, delete_after_send=True, html_format=True,
+                            buttons=func.ai_buttons(asset_type, symbol) if ask_ai else None)
 
-    def ai_prompt(self, symbol, asset_type):
-        """/ai: fill the prompt for ChatGPT/Claude from ai_prompt.txt and send it as copyable text."""
+    def _ai_question(self, symbol, asset_type):
+        """Fill the prompt from ai_prompt.txt with the daily analysis. Returns (name, symbol, prompt text)."""
         name, symbol, item, df, full, sr_zones, details = self._daily_analysis(symbol, asset_type)
         update_ai_prompt_file()
         with open(AI_PROMPT_FILE, encoding='utf-8-sig') as file:
@@ -573,7 +635,11 @@ class CryptoStockManager:
         # Simple replace instead of format(): other {brackets} in the file do no harm this way.
         for key, value in values.items():
             question = question.replace('{' + key + '}', value)
-        question = question.strip()
+        return name, symbol, question.strip()
+
+    def ai_prompt(self, symbol, asset_type):
+        """/ai_prompt: the filled prompt from ai_prompt.txt as copyable text for ChatGPT or Claude (no API)."""
+        name, symbol, question = self._ai_question(symbol, asset_type)
         message = (f"<b>AI prompt: {html.escape(name)}</b> – copy into ChatGPT or Claude\n"
                    f"<pre>{html.escape(question)}</pre>")
         # Telegram counts only the visible text (max. 4096), not the HTML tags
@@ -591,6 +657,62 @@ class CryptoStockManager:
                 func.pushover(text, html_format=True)
             else:   # even half is too long (heavily extended template): send without formatting
                 func.pushover(part)
+
+    def ai_api(self, symbol, asset_type, mode):
+        """/ai_api_decision3s (mode 'decision') and /ai_api_plan (mode 'plan'): the same data as /ai_prompt,
+        answered directly by the Claude API (with web search for the news). Without a key: error message."""
+        if not func.claude_available():
+            func.pushover(func.CLAUDE_NO_KEY)
+            return
+        name, symbol, question = self._ai_question(symbol, asset_type)
+        try:
+            answer, usage = func.claude(question + AI_API_TASKS[mode], web_search=True, with_usage=True)
+        except (PermissionError, RuntimeError) as error:
+            func.pushover(f"Claude API for {name}: {error}")
+            return
+        footer = f"<i>🧾 {html.escape(func.claude_usage_text(usage))} · {time.strftime('%d/%m/%Y %H:%M')}</i>"
+        if mode == 'decision':
+            func.pushover(f"<b>🤖 Decision: {html.escape(name)}</b>\n{html.escape(answer[:3500])}\n{footer}",
+                          html_format=True)
+            return
+        text, block = split_plan_answer(answer)
+        message = f"<b>🤖 Trading plan: {html.escape(name)}</b>\n{html.escape(text[:2500])}\n{footer}"
+        try:
+            plan = parse_plan_block(block)
+        except ValueError as error:
+            func.pushover(message + f"\n\nNo plan to save: {html.escape(str(error))}", html_format=True)
+            return
+        key = uuid.uuid4().hex[:10]
+        self.pending_plans[key] = dict(plan, symbol=symbol, type=asset_type, name=name)
+        shown = symbol.upper() if asset_type == 'stock' else symbol
+        try:
+            replaces = any(p['symbol'] == symbol.lower() for p in cl.read_plans())
+        except (OSError, ValueError, configparser.Error):
+            replaces = False
+        preview = '\n'.join(cl.plan_lines(shown, plan['support'], plan['max_entry'], plan['target'], plan['stop'],
+                                          plan['note'], datetime.date.today())[:6])
+        func.pushover(message + f"\n\n<b>For planalert.ini:</b>\n<pre>{html.escape(preview)}</pre>"
+                      + ("\nSaving replaces your current plan for this asset." if replaces else ''),
+                      html_format=True, buttons=[[('✅ Save as plan', f'aiplanok|{key}'),
+                                                  ('Discard', f'aiplanno|{key}')]])
+
+    def save_ai_plan(self, key, save):
+        """Button below an /ai_api_plan answer: save the proposed plan in planalert.ini or discard it."""
+        plan = self.pending_plans.pop(key, None)
+        if plan is None:
+            func.pushover('This plan proposal is no longer available (already handled or CaSa was restarted).')
+            return
+        if not save:
+            func.pushover(f"Plan proposal for {plan['name']} discarded.")
+            return
+        try:
+            name, _, replaced = cl.add_plan(plan['symbol'], plan['support'], plan['max_entry'], plan['target'],
+                                            plan['stop'], plan['note'])
+        except (OSError, ValueError, configparser.Error) as error:
+            func.pushover(f"Plan for {plan['name']} not saved: {error}")
+            return
+        func.pushover(f"Plan {'replaced' if replaced else 'saved'} in planalert.ini: {name}. Show it with /plan_alert.")
+        self.plan_alert_check()   # zone or target may already be reached
 
     def send_summary(self):
         if self.df_crypto_hd.empty and self.df_stock_hd.empty:
@@ -683,47 +805,102 @@ class CryptoStockManager:
                 func.pushover(f"Daily analysis for {event['name']} failed: {error}")
         self.earnings_reminders()
 
-    def value_alert_check(self):
-        """Price alerts from valuealert.ini: message with note and daily analysis when the mark is reached,
-        then the alert is removed. Stocks only Monday to Friday 08:00-22:00 (outside, the price does not move)."""
+    def plan_alert_check(self):
+        """Plans from planalert.ini: buy zone and target every hour with the current price (stocks only Monday
+        to Friday 08:00-22:00), the stop with the daily closes. Each message once per change of the status;
+        whether you hold the asset (transactions.csv) decides the wording. The plan ends at the stop."""
         try:
-            alerts = cl.read_value_alerts()
+            plans = [plan for plan in cl.read_plans() if plan['status'] != 'ended']
+            held = cl.held_assets(cl.read_transactions())
         except (OSError, ValueError, configparser.Error) as error:
-            func.log_print(f'valuealert.ini could not be read: {error}', 'ERROR')
-            func.pushover(f'valuealert.ini could not be read: {error}')
+            func.log_print(f'planalert.ini could not be read: {error}', 'ERROR')
+            func.pushover(f'planalert.ini could not be read: {error}')
             return
-        if not alerts:
+        if not plans:
             return
         self._is_stock_trading_hours()
-        checked = triggered = 0
-        for alert in alerts:
-            if alert['type'] == 'stock' and not self.stock_update:
-                continue
+        checked = messages = 0
+        for plan in plans:
+            is_held = (plan['type'], plan['symbol']) in held
+            symbol = plan['symbol'].upper() if plan['type'] == 'stock' else plan['symbol']
             try:
-                price = func.current_price(alert['symbol'].upper() if alert['type'] == 'stock' else alert['symbol'],
-                                           alert['type'])
+                if plan['stop'] is not None and self._plan_stop(plan, symbol, is_held):
+                    messages += 1
+                    continue
+                if plan['type'] == 'stock' and not self.stock_update:
+                    continue
+                price = func.current_price(symbol, plan['type'])
             except Exception as error:
-                func.log_print(f"Price alert {alert['name']}: price not available ({error})", 'WARN')
+                func.log_print(f"Plan {plan['name']}: price not available ({error})", 'WARN')
                 continue
             checked += 1
-            below = alert['direction'] == 'below'
-            if (below and price > alert['price']) or (not below and price < alert['price']):
+            top = cl.plan_zone_top(plan)
+            status = 'buy_zone' if top is not None and price <= top else \
+                'target' if plan['target'] is not None and price >= plan['target'] else 'waiting'
+            if status == plan['status']:
                 continue
-            triggered += 1
-            try:
-                cl.delete_value_alert(alert['key'])
-            except (OSError, ValueError) as error:
-                func.log_print(f"Price alert {alert['key']} could not be removed: {error}", 'WARN')
-            note = f"\nYour note: {html.escape(alert['note'])}" if alert['note'] else ''
-            func.pushover(f"<b>Price alert: {html.escape(alert['name'])}</b>\n"
-                          f"Price {func.format_euro(price)} is {'at or below' if below else 'at or above'} "
-                          f"your mark {func.format_euro(alert['price'])}.{note}\n"
-                          f"The alert is removed. Daily analysis follows.", priority=1, html_format=True)
-            try:
-                self.single_daily_analysis(alert['symbol'], alert['type'])
-            except Exception as error:
-                func.pushover(f"Daily analysis for {alert['name']} failed: {error}")
-        func.log_print(f"Price alerts: {checked} of {len(alerts)} checked, {triggered} triggered")
+            cl.set_plan_value(plan['key'], 'status', status)
+            if status == 'buy_zone':
+                title = '🟢 Add-on zone (retest)' if is_held else '🟢 Buy zone'
+                action = ('You already hold it: add only if your note allows a further tranche.' if is_held else
+                          'Check the conditions in your note before buying (e.g. rebound, higher low, daily close).')
+            elif status == 'target' and is_held:
+                title, action = '💰 Take partial profits', 'Target reached: take partial profits as planned.'
+            else:
+                func.log_print(f"Plan {plan['name']}: status {status}, price {price:.2f}")
+                continue
+            sent_key = (plan['key'].lower(), status)
+            if self.plan_zone_sent.get(sent_key) == datetime.date.today():
+                # at most one buy zone / target message per day and plan (price moving around the mark)
+                func.log_print(f"Plan {plan['name']}: status {status} again today, no second message")
+                continue
+            self.plan_zone_sent[sent_key] = datetime.date.today()
+            messages += 1
+            self._plan_message(plan, title, f"Price {func.format_euro(price)}. {action}", priority=1)
+        func.log_print(f"Plan alerts: {checked} of {len(plans)} checked, {messages} messages")
+
+    def _plan_stop(self, plan, symbol, is_held):
+        """Stop of a plan: a daily close below it since the start of the plan (only finished days) ends the plan.
+        Checked once per day and plan. Returns True when the plan ended."""
+        today = datetime.date.today()
+        if self.plan_stop_checked.get(plan['key'].lower()) == today:
+            return False
+        closes = self.daily_prices.get((plan['type'], plan['symbol']))
+        if closes is None or closes.empty:
+            item = cl.CryptoStock(symbol, plan['name'], plan['type'])
+            closes = cl.daily_prices(item.get_API_data('100d'))
+        self.plan_stop_checked[plan['key'].lower()] = today
+        start = plan['start']
+        if start is None:   # plan written by hand without start: closes count from today on
+            start = today
+            cl.set_plan_value(plan['key'], 'start', f"{today:%d/%m/%Y}")
+        dates = closes.index.date
+        days = closes[(dates < today) & (dates >= start)]
+        below = days[days < plan['stop']]
+        if below.empty:
+            return False
+        day, close = below.index[0].date(), float(below.iloc[0])
+        reason = f"daily close {close:.2f} on {day:%d/%m/%Y} below stop {plan['stop']:.2f}"
+        cl.set_plan_value(plan['key'], 'status', f"ended {today:%d/%m/%Y}: {reason}")
+        if is_held:
+            title, action = '🔴 Exit', 'Plan failed: sell as planned, do not average down.'
+        else:
+            title, action = '❌ Setup cancelled', 'Plan failed before buying: no purchase.'
+        self._plan_message(plan, title, f"Daily close {func.format_euro(close)} on {day:%d/%m/%Y} is below "
+                                        f"the stop {func.format_euro(plan['stop'])}. {action}\nThe plan has ended "
+                                        f"(still listed in /plan_alert until you delete it).", priority=1)
+        return True
+
+    def _plan_message(self, plan, title, text, priority=1):
+        """Message with plan numbers and note, followed by the daily analysis."""
+        note = f"\nYour note: {html.escape(plan['note'])}" if plan['note'] else ''
+        func.pushover(f"<b>{title}: {html.escape(plan['name'])}</b>\n{html.escape(text)}\n"
+                      f"<i>{html.escape(cl.plan_text(plan))}</i>{note}\nDaily analysis follows.",
+                      priority=priority, html_format=True)
+        try:
+            self.single_daily_analysis(plan['symbol'], plan['type'])
+        except Exception as error:
+            func.pushover(f"Daily analysis for {plan['name']} failed: {error}")
 
     def earnings_reminders(self):
         """Stocks in the alarm analysis (1 in assets.ini): reminder one day before the quarterly results
@@ -809,15 +986,19 @@ class CryptoStockManager:
             self.single_daily_analysis(command['symbol'], command['type'], ask_ai=True)
         elif action == 'ai':
             self.ai_prompt(command['symbol'], command['type'])
+        elif action in ('ai_decision', 'ai_plan'):
+            self.ai_api(command['symbol'], command['type'], action[3:])
+        elif action == 'ai_plan_save':
+            self.save_ai_plan(command['key'], command['save'])
         elif action == 'reload_transactions':
             self.load_config_items()
             func.pushover('Transactions were reloaded in the main program.')
         elif action == 'events':
             # after /event with tomorrow's date: reminder and analysis immediately
             self.event_reminders()
-        elif action == 'value_alerts':
-            # after /price_alert: check the new alert right away (mark may already be reached)
-            self.value_alert_check()
+        elif action in ('plan_alerts', 'value_alerts'):
+            # after /plan_alert: check the new plan right away (zone or target may already be reached)
+            self.plan_alert_check()
         elif action == 'reload_assets':
             # after /smart_alert: apply the changed alarm flags from assets.ini
             self.load_config_items()
@@ -850,7 +1031,8 @@ def run_program():
             func.log_print(f"CaSa {VERSION} {'restarted (/restart)' if old_manager else 'started'} on "
                            f"{socket.gethostname()} ({platform.system()} {platform.release()}, "
                            f"Python {platform.python_version()}), test mode {'on' if manager.test_mode == 1 else 'off'}, "
-                           f"CoinGecko key {'yes' if func.coingecko_api_key else 'no'}")
+                           f"CoinGecko key {'yes' if func.coingecko_api_key else 'no'}, "
+                           f"Claude API {'yes' if func.claude_available() else 'no'}")
             # A restart via /restart must not send known alarms again.
             if old_manager is not None:
                 manager.crypto_items_hh, manager.crypto_items_hd = old_manager.crypto_items_hh, old_manager.crypto_items_hd
@@ -860,6 +1042,9 @@ def run_program():
                 manager.daily_prices = old_manager.daily_prices
                 manager.df_crypto_hd, manager.df_stock_hd = old_manager.df_crypto_hd, old_manager.df_stock_hd
                 manager.last_daily_update = old_manager.last_daily_update
+                manager.missing_held_notified = old_manager.missing_held_notified   # no second notice
+                manager.plan_stop_checked = old_manager.plan_stop_checked
+                manager.plan_zone_sent = old_manager.plan_zone_sent
             manager.load_config_items()
             telegram_bot._load_config()  # detect a missing bot configuration before the start
             bot_process = mp.Process(target=telegram_bot.run_standalone,
@@ -882,9 +1067,9 @@ def run_program():
             schedule.every().day.at(EVENT_REMINDER).do(manager.event_reminders)
             if time.strftime('%H:%M') >= EVENT_REMINDER:
                 manager.event_reminders()   # start after 08:00: catch up on today's reminders
-            # Price alerts from valuealert.ini: checked every hour and once at the start, also in test mode
-            schedule.every().hour.do(manager.value_alert_check)
-            manager.value_alert_check()
+            # Plan alerts from planalert.ini: checked every hour and once at the start, also in test mode
+            schedule.every().hour.do(manager.plan_alert_check)
+            manager.plan_alert_check()
             # Health check every 6 hours, only in logfile.txt (not sent to Telegram)
             manager.bot_alive = bot_process.is_alive
             schedule.every(6).hours.do(manager.health_check)

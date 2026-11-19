@@ -89,34 +89,34 @@ def test_rejected_html_is_sent_as_plain_text():
     assert sent == ['Title\ndetails']
 
 
-# ── /menu ─────────────────────────────────────────────────────────────────
-def test_menu_pages_and_back(ui):
-    ui.run(tb._cmd_menu)
+# ── /record: buy, sell and sell all in one command ─────────────────────────
+def test_record_buttons(ui):
+    ui.run(tb._cmd_record)
     text, markup = ui.sent[-1]
-    assert 'CaSa menu' in text and callbacks(markup) == ['menu|analysis', 'menu|portfolio', 'menu|alarms', 'menu|system']
-    ui.tap(tb._cb_menu, 'menu|portfolio')
-    page = callbacks(ui.edits[-1][1])
-    assert 'menu|do|buy' in page and page[-1] == 'menu|main'
+    assert text == 'What do you want to record?'
+    assert callbacks(markup) == ['rec|buy', 'rec|sell', 'rec|sellall', 'rec|cancel']
 
 
-def test_every_menu_button_has_an_action():
-    for _text, rows in tb._MENU_PAGES.values():
-        for row in rows:
-            for _label, data in row:
-                parts = data.split('|')
-                assert (parts[1] == 'do' and parts[2] in tb._MENU_ACTIONS) or parts[1] in tb._MENU_PAGES, data
+@pytest.mark.parametrize('data, expected', [('rec|buy', 'Which asset did you buy?'),
+                                            ('rec|sell', 'Which asset did you sell?'),
+                                            ('rec|sellall', 'Sell the full position of which asset?')])
+def test_record_button_starts_input(ui, data, expected):
+    ui.tap(tb._cb_record, data)
+    assert expected in ui.sent[-1][0]
 
 
-@pytest.mark.parametrize('action, expected', [('portfolio', {'cmd': 'portfolio'}), ('status', {'cmd': 'status'}),
-                                              ('daily', {'cmd': 'analyse', 'mode': 'daily'})])
-def test_menu_runs_commands(ui, action, expected):
-    ui.tap(tb._cb_menu, f'menu|do|{action}')
-    assert ui.queue == [expected]
+def test_record_cancel_and_unknown(ui):
+    ui.tap(tb._cb_record, 'rec|cancel')
+    assert ui.edits[-1][0] == 'Nothing recorded.'
+    ui.run(tb._cmd_record, 'kaufen')
+    assert ui.sent[-1][0].startswith('Unknown: kaufen')
 
 
-def test_menu_buy_starts_guided_input(ui):
-    ui.tap(tb._cb_menu, 'menu|do|buy')
-    assert 'Which asset did you buy?' in ui.sent[-1][0]
+def test_record_in_one_line(ui, sandbox):
+    ui.run(tb._cmd_record, 'buy', 'Nvidia', '450', '3', '05/01/2025')
+    assert 'Buy saved: Nvidia' in ui.sent[-1][0]
+    ui.run(tb._cmd_record, 'SELL', 'Nvidia', '200', '1')
+    assert 'Sell saved: Nvidia' in ui.sent[-1][0]
 
 
 # ── /status and /portfolio in the main program ────────────────────────────

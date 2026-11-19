@@ -62,14 +62,22 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 - Holding period: amount held longer than one year (tax-relevant for crypto in Germany)
 
 **Planning and Research**
-- `/ai` creates a detailed prompt for ChatGPT or Claude: technical data, support/resistance with risk/reward, chart pattern, bottom/top formation, score 1–10, market phase of the asset and its leading market, your position and common investment rules – no AI API needed, just copy and paste
+- `/ai_prompt` creates a detailed prompt for ChatGPT or Claude: technical data, support/resistance with risk/reward, chart pattern, bottom/top formation, score 1–10, market phase of the asset and its leading market, your position and common investment rules – no AI API needed, just copy and paste
+- With a Claude API key: `/ai_api_decision3s` answers directly with the decision in three sentences, `/ai_api_plan` with a trading plan that you save as plan alert with one tap
 - Important dates (earnings, central bank meetings, ...) in `events.ini` or via `/event`: reminder one day before, plus daily analysis
-- Price alerts in `valuealert.ini` or via `/price_alert`: message with your note when a price reaches your mark, plus daily analysis
+- Trading plans in `planalert.ini` or via `/plan_alert`: buy zone, target and stop per asset; messages depend on whether you hold the asset, plus daily analysis
 - Quarterly results: automatic reminder one day before for all stocks in the alarm analysis (date from Yahoo), plus daily analysis
 
 ## What's New
 
-**Version 0.1.11** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.12** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- Plan alerts: `planalert.ini` (replaces `valuealert.ini`, converted automatically) with one simple trading plan per asset – buy zone, target, stop; messages depend on whether you hold the asset; `/plan_alert`
+- Optional Claude API (`config.ini` `[anthropic]`): buttons 🤖 AI decision (API) and 🤖 AI plan (API) below alarms, infos and `/check`, with web search, cost per answer; the plan can be saved as plan alert with one tap
+- `/record` for buy, sell and sell all; `/menu`, `/start` and `/journal` removed; AI buttons directly below `/check`
+- Fix: positions you hold are always analysed (daily P&L, loss limit), also without `1` in `assets.ini`
+
+**Version 0.1.11**
 
 - Easier bot: `/menu` with buttons, `/buy`/`/sell` step by step with ↩ Undo, 🤖 AI prompt button below alarms, collapsible figure blocks, `/portfolio`, detailed `/status`
 - Alarms and infos separated; every signal per stock/crypto as alarm, info or off (`config.ini` `[alerts]`, `/smart_alert_config`)
@@ -153,23 +161,21 @@ After the start, the bot sends the CaSa logo with a short message: the version, 
 | Command | Function |
 |---|---|
 | **Analysis** | |
-| `/menu` | All functions as buttons (Analysis · Portfolio · Alarms & dates · System); each button runs the same command as typing it |
-| `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol or name>`); afterwards a question whether an AI prompt (`/ai`) should be created |
-| `/ai` | AI prompt to copy into ChatGPT or Claude (buttons or `/ai <symbol or name>`) |
+| `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol or name>`); below the chart the same buttons as below alarms: 🤖 AI prompt, with a Claude API key also 🤖 AI decision (API) and 🤖 AI plan (API) |
+| 🤖 AI prompt (button) | AI prompt to copy into ChatGPT or Claude; below every alarm, info and `/check`. Typing `/ai_prompt <symbol or name>` (or the old `/ai`) still works, it is just not in the command list any more |
+| 🤖 AI decision (API) (button, `/ai_api_decision3s`) | Claude API (key needed): the same data as `/ai_prompt`, answered directly with only the decision in three sentences (with web search for news) |
+| 🤖 AI plan (API) (button, `/ai_api_plan`) | Claude API (key needed): the same data, answered with a short trading plan and the values for `planalert.ini`; **✅ Save as plan** saves it (replaces an existing plan of the asset), **Discard** drops it |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | **Alarms and Dates** | |
 | `/smart_alert` | Switch assets on/off for the alarm analysis (buttons or `/smart_alert <symbol or name> <on\|off>`); the old `/alarm` still works |
 | `/smart_alert_config` | Alarm, info or off per signal, separately for stocks and crypto (buttons); saved in `config.ini` `[alerts]` |
 | `/event` | List upcoming dates with a 🗑 button to delete each one (with confirmation), or add one: `/event <symbol or name> <DD/MM/YYYY> <text>` |
-| `/price_alert` | List price alerts with a 🗑 button to delete each one (with confirmation), or add one: `/price_alert <symbol or name> <price> <note>` (below/above is detected from the current price, or add it: `/price_alert APC.DE below 320.82 ...`) |
+| `/plan_alert` | List trading plans with status and a 🗑 button to delete each one (with confirmation), or save one: `/plan_alert <symbol or name> <support> <max_entry %> <target> <stop> <note>`, `-` for a value you do not use (e.g. `/plan_alert TSMC 312.15 2 358.93 312.15 1/4 after a rebound`). A new plan replaces the old one of the same asset. The old `/price_alert` still works |
 | **Portfolio** | |
 | `/portfolio` | Daily P&L table and 13-week P&L chart now (otherwise with the evening summary) |
-| `/buy` | Record a buy step by step: choose the asset with a button, then amount, quantity and date (today, yesterday or other), confirm; afterwards ↩ Undo. In one line still possible: `/buy <symbol or name> <amount €> <qty> <DD/MM/YYYY>` (crypto or stock is taken from `assets.ini`) |
-| `/sell` | Record a sell step by step like `/buy`, only assets you hold are offered; in one line: `/sell <symbol or name> <amount €> <qty>` (today) |
-| `/sellall` | Record the sale of the full position: choose the asset with a button (current price) or `/sellall <symbol or name> [amount €]`; confirmation required |
+| `/record` | Record a transaction: buttons **🟢 Buy**, **🔴 Sell** and **Sell all**. Buy and sell go step by step: choose the asset with a button (sell: only assets you hold), then amount, quantity and date (today, yesterday or other), confirm; afterwards ↩ Undo. Sell all records the full position at the current price (confirmation required). In one line: `/record buy <symbol or name> <amount €> <qty> <DD/MM/YYYY>`, `/record sell <symbol or name> <amount €> <qty>` (today), `/record sellall <symbol or name> [amount €]`. The old `/buy`, `/sell` and `/sellall` still work |
 | `/history` | Transactions of one asset as a table (newest first); asset via button or `/history <symbol or name>` |
 | `/transactions` | All transactions as a table like the daily summary (newest first, 40 per image) |
-| `/journal` | Alarm journal: how many alarms moved in the right direction 20 trading days later, compared with the backtest |
 | **System** | |
 | `/status` | Status of the main program: last analyses, next scheduled runs, alarms since the start, memory, disk space, problems (during a running analysis it follows afterwards) |
 | `/restart` | Restart the main program (reloads all files; after a program update stop and start CaSa completely) |
@@ -183,7 +189,7 @@ Only messages from the chat id in `config.ini` are accepted.
 |---|---|
 | every hour | 100-hour analysis of all crypto assets with `1` |
 | 08:00 | Reminder for tomorrow's dates from `events.ini` and tomorrow's quarterly results (stocks with `1`), each plus daily analysis of the asset |
-| every hour | Price alerts from `valuealert.ini` (stocks Monday to Friday, 08:00–22:00) |
+| every hour | Plan alerts from `planalert.ini`: buy zone and target (stocks Monday to Friday, 08:00–22:00), stop with the daily closes |
 | 09:30 and 12:30 | 100-day analysis of all assets with `1` (stocks Monday to Friday, 08:00–22:00) |
 | 18:30 | Daily ranking (crypto and stocks) |
 
@@ -193,7 +199,7 @@ If the program is started after 12:30, the daily analysis runs immediately; miss
 
 CaSa sends two kinds of messages, and you choose for every signal – separately for stocks and crypto – whether it comes as an alarm, as an info or not at all: in `config.ini` `[alerts]` (required, created automatically) or in Telegram with `/smart_alert_config`.
 
-- **🔔 Alarm**: header "Potential buy" / "Potential sell", can be marked as important, recorded in the alarm journal (`/journal`)
+- **🔔 Alarm**: header "Potential buy" / "Potential sell", can be marked as important, recorded in the alarm journal (monthly report)
 - **ℹ️ Info**: header "Info: …", never marked as important, not part of the alarm journal
 
 | Signal | Switch | Default stocks; crypto | Meaning |
@@ -233,7 +239,7 @@ The averages come from a few large moves: for most buy alarms the median is slig
 
 **Message content**
 
-Below every alarm and info a **🤖 AI prompt** button creates the `/ai` prompt for this asset. The figure blocks are **collapsed** (tap the quote to open them); score and traffic lights stay visible. Wrong or incomplete input (e.g. an unknown name in `/check`, `/history` without an asset) is answered with buttons to choose from instead of only the format.
+Below every alarm and info a **🤖 AI prompt** button creates the `/ai_prompt` prompt for this asset; with a Claude API key there are also **🤖 AI decision (API)** and **🤖 AI plan (API)** (as `/ai_api_decision3s` and `/ai_api_plan`). The figure blocks are **collapsed** (tap the quote to open them); score and traffic lights stay visible. Wrong or incomplete input (e.g. an unknown name in `/check`, `/history` without an asset) is answered with buttons to choose from instead of only the format.
 
 ![Alarm message in Telegram: score 1–10 with traffic-light lines and figure blocks](docs/telegram_message.png)
 
@@ -278,8 +284,8 @@ api_key =
 [alerts]
 # Which signals CaSa sends, separately for stocks and crypto:
 #   name = <stocks>; <crypto>      each one of: alarm, info, off
-#   alarm = message "Potential buy/sell", can be marked important, counted in /journal
-#   info  = message "Info: ...", never important, not counted in /journal
+#   alarm = message "Potential buy/sell", can be marked important, counted in the alarm journal
+#   info  = message "Info: ...", never important, not counted in the alarm journal
 #   off   = no message
 # The comment behind each line: what the signal means and how often the price moved in the expected
 # direction within 20 days in the backtest (54 assets, up to 14 years); "normal" = the same on an
@@ -295,6 +301,12 @@ negative5      = info;  info  # price -10 % in 5 days | rises: stocks 53 % (norm
 high100        = info;  alarm # new highest price of 100 days | rises: stocks 55 % (normal 52 %), crypto 60 % (normal 49 %)
 low100         = info;  info  # new lowest price of 100 days | rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)
 pattern        = info;  info  # chart pattern breaks out | in breakout direction: stocks 51 % (normal 51 %), crypto 56 % (normal 50 %)
+
+[anthropic]
+# optional: key for the Claude API (https://console.anthropic.com), empty = Claude API not used
+# the API costs money per request (billed by Anthropic per token)
+api_key =
+model = claude-opus-5-5
 ```
 
 **Section names:** `[alertsconfig]` holds the thresholds (it was called `[alarm]` up to 0.1.10 and is renamed automatically at the start; a missing `total_loss_limit` is added with -5). `one_day_price_change` and `one_day_profit_limit` from older versions are no longer used and can be deleted.
@@ -303,6 +315,8 @@ pattern        = info;  info  # chart pattern breaks out | in breakout direction
 
 **CoinGecko key (optional):** if `api_key` is set, CaSa uses it; otherwise the free public access. With a key, the limit (30 requests per minute, 10,000 per month) applies per key instead of per internet connection – useful for more cryptos or several CaSa instances on one network.
 
+**Claude API key (optional):** with an `api_key` in `[anthropic]`, `/ai_api_decision3s` and `/ai_api_plan` work and the function `func.claude(prompt)` sends a prompt to Claude and returns the answer as text (`web_search=True`: Claude may search the web, at most 5 searches); without a key the Claude API is not used (`func.claude_available()` is False). It needs the Python package `anthropic` (`python -m pip install anthropic`, also on the Raspberry Pi). Each request costs money (billed by Anthropic per token); the answers of `/ai_api_decision3s` and `/ai_api_plan` end with a line showing tokens in/out, web searches, the cost at list price in USD (and roughly in EUR), duration and model, e.g. `12,345 tokens in · 678 out · 3 web searches · $0.062 (≈ 0.053 €) · 41 s · claude-sonnet-5-5`. The log shows the same, never the key. The prices are in `func.CLAUDE_PRICES`; for a model not listed there only the tokens are shown. Refusal fallbacks are on: if the model refuses a request, the API retries it once with a fallback model. CaSa adds the empty section at the start if it is missing.
+
 ### assets.ini
 
 All assets known to the program. Crypto symbols are CoinGecko IDs, stock symbols are Yahoo Finance symbols. Names should have at most about 15 characters; longer names are shortened with "…" in the daily summary.
@@ -310,7 +324,7 @@ All assets known to the program. Crypto symbols are CoinGecko IDs, stock symbols
 ```ini
 # Format: symbol = Name; crypto|stock; 1
 # 1 at the end = part of the automatic alarm analysis
-# without 1    = only available for /check and /ai
+# without 1    = only available for /check and /ai_prompt
 # # at the start hides the entry completely
 
 [crypto]
@@ -323,6 +337,8 @@ APC.DE         = Apple; stock
 ```
 
 The `1` can also be switched in Telegram with `/smart_alert`.
+
+**Assets you hold are always analysed:** everything you hold according to `transactions.csv` (bought minus sold above zero) is part of the analysis even without `1` – so it is in the daily P&L, gets the loss limit alarm and Cross-EMA Sell. The symbol in `transactions.csv` must be the same as in `assets.ini` (e.g. `TSFA.F`, not `TSFA.DU`). If a held asset is missing in `assets.ini`, CaSa sends one Telegram message "Positions without prices" with the symbols.
 
 **How many assets with `1`?** The free APIs limit the requests:
 - **Crypto (CoinGecko): at most about 8, with own key about 12.** Each coin needs about 26 requests a day (hourly analysis); more coins cause "too many requests" errors.
@@ -340,21 +356,45 @@ nvda_20261117  = NVD.DE; 17/11/2026; Q3 earnings after US market close
 
 Entries can also be added with `/event` and deleted via the 🗑 buttons in the `/event` list. The reminder comes at 08:00 one day before. Past dates are ignored.
 
-### valuealert.ini (optional)
+### planalert.ini (optional)
 
-Price alerts: a message as soon as a price reaches your mark – for example the entry price of an AI analysis ("I'd wait for a pullback toward €320.82").
+Simple trading plans, one per asset – for example from the trading plan table of an AI analysis. CaSa watches four numbers; everything else (tranche size, "higher low", news) stays in your note, which comes with every message.
 
 ```ini
-# Format: name = symbol; below|above; price in EUR; note
-[alerts]
-apc_de_below_320_82  = APC.DE; below; 320.82; Wait for pullback, buy small amount
+[TSFA.F]
+support   = 312.15
+max_entry = 2
+target    = 358.93
+stop      = 312.15
+note      = 1/4 of the position after a rebound; also cancel if revenue guidance is cut
+start     = 19/11/2026
+status    = waiting
 ```
 
-`below` = the price falls to the mark or lower, `above` = it rises to the mark or higher. The file is created automatically with the first `/price_alert`. Alerts are checked every hour (stocks Monday to Friday, 08:00–22:00). When the mark is reached you get your note plus the daily analysis, and the alert is removed.
+| Setting | Meaning |
+|---|---|
+| `support` | Buy zone starts here |
+| `max_entry` | Buy only up to this many % above the support (0 = only at or below it) |
+| `target` | Take partial profits at or above this price |
+| `stop` | The plan fails at a daily close below this price |
+| `note` | Your plan in words |
+| `start`, `status` | Set by CaSa: daily closes from `start` on count for the stop; `status` = waiting, buy_zone, target or ended |
+
+`support` or `target` is required, the rest is optional. Whether you hold the asset according to `transactions.csv` decides the message:
+
+| Event | Checked | Not held | Held |
+|---|---|---|---|
+| Price in the buy zone (support up to + max_entry %) | every hour | 🟢 Buy zone: check the conditions in your note | 🟢 Add-on zone (retest) |
+| Price at or above the target | every hour | – | 💰 Take partial profits |
+| Daily close below the stop | with the daily closes | ❌ Setup cancelled | 🔴 Exit: sell, do not average down |
+
+Each message comes once and again only after the price has left the zone, at most once per day and plan (a price moving around the mark does not send a message every hour); it includes the daily analysis. At the stop the plan ends; it stays in the file and in `/plan_alert` until you delete it. Stocks are checked Monday to Friday, 08:00–22:00. The file is created with explanations by the first `/plan_alert`.
+
+**From valuealert.ini (up to 0.1.11):** at the first start CaSa converts the price alerts into plans – `below` becomes `support` (with `max_entry = 0`, so it triggers as before), `above` becomes `target`, notes are kept. The old file is kept as `valuealert.old.ini`. Converted plans have no stop yet: add it in the file or save the plan again with `/plan_alert`.
 
 ### transactions.csv
 
-Written by `/buy`, `/sell` and `/sellall`:
+Written by `/record` (buy, sell, sell all):
 
 ```
 type;symbol;name;action;amount;qty;date
@@ -364,11 +404,11 @@ stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
 
 ### ai_prompt.txt
 
-Template for the `/ai` prompt. It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program. Since 0.1.11 also `{signals}` (alarms and infos the analysis would send today for this asset) and `{evidence}` (the backtest findings for stocks or crypto, e.g. that stocks recovered slightly after strong sell-offs while crypto tended to keep falling). The leading market is chosen by the company's home country (Nvidia on Xetra: S&P 500), not by the exchange. An unchanged template from an earlier version is replaced by the current one automatically; your own changes are never overwritten.
+Template for the `/ai_prompt` prompt (also the data for `/ai_api_decision3s` and `/ai_api_plan`, which add their own answer format at the end). It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program. Since 0.1.11 also `{signals}` (alarms and infos the analysis would send today for this asset) and `{evidence}` (the backtest findings for stocks or crypto, e.g. that stocks recovered slightly after strong sell-offs while crypto tended to keep falling). The leading market is chosen by the company's home country (Nvidia on Xetra: S&P 500), not by the exchange. An unchanged template from an earlier version is replaced by the current one automatically; your own changes are never overwritten.
 
 ### alarm_journal.csv (created automatically)
 
-Every sent alarm is recorded with date, asset, alarm, price and score. After 20 trading days (crypto: 20 days) CaSa fills in the price, the change in % and whether the price moved in the alarm direction (buy: up, sell: down). This shows over time whether the alarms also work on new data and not only in the backtest. `/journal` shows the statistics at any time; on the 1st of each month they come with the evening summary. Alarms are not recorded in test mode (`test_mode = 1`), because all analyses run at every start there. The file is private and not part of the repository.
+Every sent alarm is recorded with date, asset, alarm, price and score. After 20 trading days (crypto: 20 days) CaSa fills in the price, the change in % and whether the price moved in the alarm direction (buy: up, sell: down). This shows over time whether the alarms also work on new data and not only in the backtest. On the 1st of each month the statistics come with the evening summary. Alarms are not recorded in test mode (`test_mode = 1`), because all analyses run at every start there. The file is private and not part of the repository.
 
 ### logfile.txt
 
@@ -391,7 +431,7 @@ Every 6 hours a **health check** is written to the log (not sent to Telegram): u
 
 Useful searches, e.g. on a Raspberry Pi: `grep -a "CaSa 0" logfile.txt | tail` (starts and versions), `grep -a "Health check" logfile.txt | tail` (state), `grep -a ERROR logfile.txt | tail` (errors).
 
-`config.ini`, `assets.ini`, `events.ini`, `valuealert.ini`, `transactions.csv` and the log files contain personal data and are excluded from Git via `.gitignore`.
+`config.ini`, `assets.ini`, `events.ini`, `planalert.ini`, `transactions.csv` and the log files contain personal data and are excluded from Git via `.gitignore`.
 
 ## Project Structure
 
@@ -418,9 +458,12 @@ Run the second line in the CaSa folder. All tests should end with `passed`; a `F
 
 | File | Checks |
 |---|---|
-| `tests/test_files.py` | `assets.ini`, `transactions.csv` (FIFO), `events.ini`, `valuealert.ini`, symbol or name lookup, number and price input |
+| `tests/test_files.py` | `assets.ini`, `transactions.csv` (FIFO), `events.ini`, symbol or name lookup, number and price input |
+| `tests/test_ai_api.py` | `/ai_api_decision3s` and `/ai_api_plan` with a fake Claude answer: no key, plan block, save/discard button |
+| `tests/test_claude.py` | Claude API function: no key, request, web search, errors, key never in the log |
+| `tests/test_plans.py` | `planalert.ini`: plans, conversion from `valuealert.ini`, buy zone/target/stop messages (held or not), `/plan_alert` |
 | `tests/test_analysis.py` | Indicators, score 1–10, traffic lights, alarm rules (Positive-5, SMA200 filter, sell alarms only for your portfolio), daily P&L values |
-| `tests/test_bot.py` | Bot commands `/buy`, `/sell`, `/check`, `/ai`, `/smart_alert`, `/event`, `/history`, `/transactions` |
+| `tests/test_bot.py` | Bot commands `/record` (buy, sell), `/check`, `/ai_prompt`, `/smart_alert`, `/event`, `/history`, `/transactions` |
 | `tests/test_output.py` | Summary, P&L and transaction images, Telegram length, `logfile.txt` |
 | `tests/test_filter.py` | Duplicate filter for alarms |
 
@@ -460,6 +503,8 @@ Run the second line in the CaSa folder. All tests should end with `passed`; a `F
 
 ### Alerts & events
 - [x] **Own price alarms**, e.g. `/price_alert NVD.DE below 130`. User-defined price levels, independent of the indicators.
+- [x] **Simple trading plans** (`planalert.ini`, `/plan_alert`): buy zone, target and stop per asset.
+- [ ] **Plan conditions**: higher low, close above the first rebound high, above EMA12/SMA200; the AI prompt writes a ready plan line.
 - [ ] **Options expiry and market holidays**: The major expiry date (third Friday of March, June, September and December) is calculated automatically. Exchange holidays come from a fixed list.
 - [ ] **Crypto events**: Known dates such as Bitcoin halvings in `events.ini`.
 - [ ] **Automatic import of economic dates**: Fed, CPI and ECB dates without manual entry. Needs a calendar source.
@@ -497,7 +542,7 @@ This project is licensed under the MIT License.
 
 ## Disclaimer
 
-This application generates alerts based on technical indicators and market data analysis. All alerts are purely informational and require independent user evaluation. Users are solely responsible for their own investment decisions. CaSa does not recommend buying or selling any assets, nor does it provide personalized investment advice. Answers of AI tools to the `/ai` prompt are not investment advice either.
+This application generates alerts based on technical indicators and market data analysis. All alerts are purely informational and require independent user evaluation. Users are solely responsible for their own investment decisions. CaSa does not recommend buying or selling any assets, nor does it provide personalized investment advice. Answers of AI tools to the `/ai_prompt` prompt, `/ai_api_decision3s` and `/ai_api_plan` are not investment advice either.
 
 ## Links
 
