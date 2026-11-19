@@ -6,11 +6,15 @@ The actual calculations stay in classes.py and func.py.
 import configparser
 import copy
 import datetime
+import hashlib
 import html
 import math
 import multiprocessing as mp
 import os
+import platform
 import re
+import shutil
+import socket
 import time
 import traceback
 import uuid
@@ -24,7 +28,7 @@ import telegram_bot
 
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
-VERSION = "0.1.10"
+VERSION = "0.1.11"
 GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
 LOGO_FILE = "logo.png"   # shown in the start message (in Git as logo.png)
 # Recommended number of assets with 1 for the free APIs (see README "How many assets with 1?")
@@ -59,27 +63,56 @@ EUR prices from {source}; compare levels only with this source.
 - Market phase {name}: {phase}
 - Market phase {market_name}: {market}
 - Program score: {score}
+- Signals today: {signals}
 
 B. News and dates
-Web search (if unavailable, say so): news of the last 14 days, confirmed dates of the next 4 weeks; older figures only as dated baseline.
+Web search (if unavailable, say so): news of the last 14 days, confirmed dates of the next 4 weeks; older figures only dated.
 {research}
 
 C. Rules
 - Report only what supports, contradicts or changes risk or entry/exit; minor points in one sentence; merge identical signals.
 - Technicals only from part A; news with date and source. Missing essentials: write exactly "not verifiable" plus what is missing.
-- Price levels critically: a period low or low RSI is only a possible support or recovery; a bottom needs an observable price reaction.
-- Trading plan: with a falling price buy only after a confirmed bottom, staggered near support; set the exit below support in advance (daily close?). Bearish phase: small tranches only; trend change only above SMA200.
-- After a strong rise wait for a pullback; partial profits at resistance; limit position size. {tax}Max. three price zones, few numbers, no disclaimers.
+- Price levels critically: a period low or low RSI is only a possible support or recovery.
+- Trading plan: staggered tranches; exit below support set in advance (daily close?). Bearish phase: small tranches; trend change only above SMA200. Partial profits at resistance; limit size. {tax}Max. three price zones, few numbers, no disclaimers.
+- {evidence}
 
 D. Output
-1. Decision in exactly three sentences: (1) {decision}, both market phases, main reason. (2) Support/resistance in euro; bottom confirmed? Top formation only if decisive. (3) Program score from A unchanged; risk and confidence (high/medium/low).
-2. Decision drivers: max. four points (technicals, news, valuation): what is proven, what it means for me; assumptions or data gaps only if decisive.
+1. Decision in three sentences: (1) {decision}, both market phases, main reason. (2) Support/resistance in euro; bottom/top formation only if decisive. (3) Program score from A; risk and confidence (high/medium/low).
+2. Decision drivers: max. four points (technicals, news, valuation): what is proven and what it means for me.
 3. Trading plan table (scenario | observable signal | my action):
 {plan}
 4. Strongest counterargument (max. two sentences) and what would strengthen it.
 5. Max. four confirmed dates (next 4 weeks) as table: date and German time, event, relevance, source.
 6. Conclusion in max. four simple sentences: what I do now, what I wait for, what triggers or rules out {action}; max. two price levels, no score or abbreviations.
 """
+# Earlier default templates (SHA-256 of the text): an unchanged ai_prompt.txt with one of them is replaced by
+# the current template. Your own changes in ai_prompt.txt are never overwritten.
+OLD_AI_PROMPT_HASHES = {
+    'd1e2b611158317a4a773e7cb1731b04a95dc5e4d97f52dbbb17484d1a83e716e',   # 0.1.8 - 0.1.10
+    'de1e14d1b2b86e561090bba6a801e5d4191da15ff68d9c23fc050db1d5dc01d6',   # 0.1.5 - 0.1.7
+    '6aa0b27ab548496d7690d153bd3c6930b6b36a3042d93b414d9ec2d3c4156856',   # 0.1.0
+}
+# Backtest findings for the AI (54 own assets, up to 14 years, 20 days after a signal vs. an average day)
+AI_EVIDENCE = {
+    'stock': ("My backtest, stocks: slight rebound after strong sell-offs (58 % up after 20 days, normal 52 %), "
+              "waiting for a confirmed bottom did not help; rises and chart patterns: no follow-through."),
+    'crypto': ("My backtest, crypto: strength continued (100-day high: 60 % up after 20 days, normal 49 %); "
+               "sell-offs often continued: buy only after an observable bottom."),
+}
+AI_SCORE_NOTE = {'stock': 'stocks: high = no edge, very low = slight rebound',
+                 'crypto': 'crypto: high = strength tended to continue'}
+
+
+def update_ai_prompt_file():
+    """Create ai_prompt.txt, or replace an unchanged earlier default template with the current one."""
+    if os.path.exists(AI_PROMPT_FILE):
+        with open(AI_PROMPT_FILE, encoding='utf-8-sig') as file:
+            text = file.read()
+        if hashlib.sha256(text.strip().encode('utf-8')).hexdigest() not in OLD_AI_PROMPT_HASHES:
+            return   # current template or your own version: keep it
+        func.log_print('ai_prompt.txt: unchanged earlier template replaced by the current one')
+    with open(AI_PROMPT_FILE, 'w', encoding='utf-8') as file:
+        file.write(AI_PROMPT_TEMPLATE)
 
 
 class CryptoStockManager:
@@ -87,36 +120,51 @@ class CryptoStockManager:
         self.output_dir = output_dir
         func.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        config = configparser.ConfigParser()
-        if not config.read(config_file_path, encoding="utf-8-sig"):
+        if not os.path.exists(config_file_path):
             raise FileNotFoundError(f"{config_file_path} not found.")
+        # Bring config.ini up to date first (old section name, new settings), then read it
+        for change in cl.update_config(config_file_path):
+            func.log_print(f"config.ini: {change}")
+        config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
+        config.read(config_file_path, encoding="utf-8-sig")
         self.version = VERSION   # an old [version] section in config.ini is ignored
-        self.test_mode = config.getint('alarm', 'test_mode')
-        func.one_day_price_change = config.getfloat('alarm', 'one_day_price_change')
-        func.seven_day_price_change = config.getfloat('alarm', 'seven_day_price_change')
-        func.one_day_profit_limit = config.getfloat('alarm', 'one_day_profit_limit')
-        func.previous_alarm_change = config.getfloat('alarm', 'previous_alarm_change')
-        limits = (func.one_day_price_change, func.seven_day_price_change,
-                  func.one_day_profit_limit, func.previous_alarm_change)
+        self.config_file_path = config_file_path
+        func.alert_settings = cl.read_alert_settings(config_file_path)   # invalid values stop the start
+        self.test_mode = config.getint('alertsconfig', 'test_mode')
+        func.seven_day_price_change = config.getfloat('alertsconfig', 'seven_day_price_change')
+        func.previous_alarm_change = config.getfloat('alertsconfig', 'previous_alarm_change')
+        func.total_loss_limit = config.getfloat('alertsconfig', 'total_loss_limit')
+        limits = (func.seven_day_price_change, func.previous_alarm_change, func.total_loss_limit)
         if not all(math.isfinite(value) for value in limits):
             raise ValueError('Alarm values must be finite numbers.')
         if self.test_mode not in (0, 1):
             raise ValueError('test_mode must be 0 or 1.')
         if func.seven_day_price_change < 0 or func.previous_alarm_change < 0:
             raise ValueError('Alarm thresholds must not be negative.')
+        if func.total_loss_limit >= 0:
+            raise ValueError('total_loss_limit must be negative, e.g. -5 (= alarm at a total P&L below -5 %).')
         # Optional CoinGecko demo key: used if set, otherwise the free public access
         func.coingecko_api_key = config.get('coingecko', 'api_key', fallback='').strip()
         self.stock_update = False
+        # For the health check in the log: start time, last runs, alarms since the start, bot state
+        self.started = time.time()
+        self.last_runs = {}   # "crypto 100h" -> (time, ok, total)
+        self.alarms_sent = 0
+        self.bot_alive = lambda: True   # replaced by the bot process check in run_program()
         self.crypto_items_hh = []
         self.crypto_items_hd = []
         self.stock_items_hh = []
         self.stock_items_hd = []
-        cols = ['Name', 'Piece [€]', '7d P&L [%]', '1d P&L [%]', 'Rating']
+        cols = ['Name', 'Piece [€]', '7d P&L [%]', '1d P&L [%]', 'Rating',
+                'Type', 'Value [€]', '1d P&L [€]', 'Total P&L [€]', 'Total P&L [%]']
         self.df_crypto_hd = pd.DataFrame(columns=cols)
         self.df_stock_hd = pd.DataFrame(columns=cols)
         self.df_crypto_hh = pd.DataFrame(columns=cols)
         self.df_stock_hh = pd.DataFrame(columns=cols)
         self.last_daily_update = None
+        # Daily closing prices per asset from the last daily analysis, for the P&L chart.
+        # Kept when assets are reloaded and on days without stock analysis (weekend).
+        self.daily_prices = {}   # (type, symbol lower) -> price per day
         self.events_done = set()   # events already reminded today (in memory only)
 
     def load_config_items(self):
@@ -161,7 +209,16 @@ class CryptoStockManager:
         # Numbers work independently of the Windows language.
         self.stock_update = self.test_mode == 1 or (now.tm_wday < 5 and 8 <= now.tm_hour < 22)
 
+    def load_alert_settings(self):
+        """Alarm/info switches from config.ini [alerts]; read before every analysis so that changes
+        from /smart_alert_config apply without a restart. On an error the previous switches stay."""
+        try:
+            func.alert_settings = cl.read_alert_settings(self.config_file_path)
+        except (OSError, ValueError, configparser.Error) as error:
+            func.log_print(f"config.ini [alerts] could not be read, previous settings stay: {error}", 'WARN')
+
     def _analyse_items(self, items, data_type, label=''):
+        self.load_alert_settings()
         results, failed, alarm_count, start = [], [], 0, time.time()
         for item in items:
             try:
@@ -169,8 +226,11 @@ class CryptoStockManager:
                 if df is None:
                     raise ValueError('no data received after 5 attempts (source unavailable or too many requests)')
                 df, alarms = item.process_data(df, data_type)  # df is cut to 100 values afterwards
+                if data_type == '100d':
+                    self.daily_prices[(item.type, item.symbol.lower())] = cl.daily_prices(df)
                 item.plot_send(df, data_type, alarms)
                 alarm_count += len(alarms)
+                self._journal_alarms(item, df, data_type, alarms)
                 results.append(item.get_summary(df))
             except Exception as error:
                 # One failed asset must not block the others.
@@ -178,6 +238,8 @@ class CryptoStockManager:
                 failed.append(f"{item.search}: {error}")
         # Status line for monitoring: one per run
         if items:
+            self.last_runs[f"{label} {data_type}".strip()] = (time.time(), len(results), len(items))
+            self.alarms_sent += alarm_count
             func.log_print(f"Analysis {label} {data_type} done: {len(results)}/{len(items)} ok, "
                            f"{alarm_count} alarms, {len(failed)} failed, {time.time() - start:.0f} s",
                            'WARN' if failed else 'INFO')
@@ -186,6 +248,114 @@ class CryptoStockManager:
             func.pushover(f"Analysis ({data_type}) failed for {len(failed)} of {len(items)} assets:\n"
                           + "\n".join(failed))
         return results
+
+    def health_check(self):
+        """One status line in logfile.txt only (not sent to Telegram): is everything still running?
+        WARN if something looks wrong (bot stopped, analysis overdue or failing, little disk space)."""
+        parts, problems = self._health()
+        func.log_print("Health check: " + ", ".join(parts) + (f" | PROBLEMS: {'; '.join(problems)}" if problems else ''),
+                       'WARN' if problems else 'INFO')
+
+    def send_status(self):
+        """/status: the health check plus version, device and the next scheduled runs, sent to Telegram."""
+        parts, problems = self._health()
+        next_runs = {}
+        names = {'hundred_hour_analysis': 'hourly analysis', 'hundred_day_analysis': 'daily analysis',
+                 'send_summary': 'summary', 'event_reminders': 'reminders', 'value_alert_check': 'price alerts'}
+        for job in schedule.jobs:
+            name = names.get(getattr(getattr(job.job_func, 'func', None), '__name__', ''))
+            if name and job.next_run and (name not in next_runs or job.next_run < next_runs[name]):
+                next_runs[name] = job.next_run
+        try:
+            transactions = len(cl.read_transactions())
+        except (OSError, UnicodeError, ValueError) as error:
+            transactions = f'not readable ({error})'
+        lines = [f"<b>CaSa status</b> · version {html.escape(str(self.version))} on {html.escape(socket.gethostname())}",
+                 f"Test mode {'on' if self.test_mode == 1 else 'off'} · "
+                 f"{len(self.crypto_items_hd) + len(self.stock_items_hd)} assets in the alarm analysis · "
+                 f"{transactions} transactions",
+                 '', html.escape(', '.join(parts))]
+        if next_runs:
+            lines += ['', 'Next: ' + ', '.join(f"{name} {when:%d/%m %H:%M}" for name, when in
+                                               sorted(next_runs.items(), key=lambda item: item[1]))]
+        lines += ['', ('⚠ Problems: ' + html.escape('; '.join(problems))) if problems else '✅ No problems found.']
+        func.pushover('\n'.join(lines), html_format=True)
+
+    def send_portfolio(self):
+        """/portfolio: daily P&L table and 13-week chart now (from the last daily analysis)."""
+        if self.df_crypto_hd.empty and self.df_stock_hd.empty:
+            func.pushover('No daily results yet. Please run /analyse daily first.')
+            return
+        self.send_pnl()
+        self.send_pnl_chart()
+
+    def _health(self):
+        """(parts, problems) for the health check and /status."""
+        now, problems = time.time(), []
+        hours = (now - self.started) / 3600
+        parts = [f"up {int(hours // 24)} d {int(hours % 24)} h"]
+        alive = self.bot_alive()
+        parts.append('bot ok' if alive else 'bot stopped')
+        if not alive:
+            problems.append('Telegram bot stopped')
+        # Last run of each analysis; overdue if the hourly one is older than 2 h or the daily one older than 26 h
+        limits = {'crypto 100h': 2, 'crypto 100d': 26}
+        for name, (when, ok, total) in sorted(self.last_runs.items()):
+            parts.append(f"{name} {time.strftime('%d/%m %H:%M', time.localtime(when))} {ok}/{total} ok")
+            if ok < total:
+                problems.append(f"{name}: {total - ok} failed")
+            if self.test_mode != 1 and name in limits and now - when > limits[name] * 3600:
+                problems.append(f"{name} overdue")
+        if self.test_mode != 1 and self.crypto_items_hh and 'crypto 100h' not in self.last_runs and hours > 2:
+            problems.append('hourly analysis has not run yet')
+        parts.append(f"alarms since start {self.alarms_sent}")
+        try:
+            parts.append(f"price alerts {len(cl.read_value_alerts())}")
+        except (OSError, ValueError, configparser.Error) as error:
+            problems.append(f"valuealert.ini: {error}")
+        # Memory of the main program (Linux/Raspberry Pi; on Windows only if psutil is installed)
+        memory = None
+        try:
+            with open('/proc/self/status') as file:
+                memory = next(int(line.split()[1]) / 1024 for line in file if line.startswith('VmRSS'))
+        except (OSError, StopIteration, ValueError):
+            try:
+                import psutil
+                memory = psutil.Process().memory_info().rss / 1024 / 1024
+            except Exception:
+                pass
+        if memory:
+            parts.append(f"memory {memory:.0f} MB")
+        free = shutil.disk_usage('.').free / 1e9
+        parts.append(f"disk free {free:.1f} GB")
+        if free < 1:
+            problems.append('less than 1 GB disk space')
+        if os.path.exists(func.LOG_FILE):
+            parts.append(f"log {os.path.getsize(func.LOG_FILE) / 1024:.0f} KB")
+        return parts, problems
+
+    def _journal_alarms(self, item, df, data_type, alarms):
+        """Record sent alarms (not infos) in alarm_journal.csv (not in test mode: there all analyses run at every start)."""
+        if not alarms or self.test_mode == 1:
+            return
+        for code, info in alarms.items():
+            if info.get('kind') == 'info':
+                continue   # infos are not alarms: not part of the hit-rate statistics
+            try:
+                cl.journal_add(item.type, item.symbol, item.search, code, data_type, df['Date'].iloc[-1],
+                               df['Price'].iloc[-1], item.state.score, item.state.watch_list)
+            except (OSError, ValueError) as error:
+                func.log_print(f"Alarm journal: {item.symbol} {code} not recorded: {error}", 'WARN')
+
+    def update_journal(self):
+        """Fill in the results of alarms that are 20 trading days (crypto: days) old."""
+        try:
+            done = cl.journal_update(self.daily_prices)
+        except (OSError, ValueError) as error:
+            func.log_print(f"Alarm journal could not be updated: {error}", 'WARN')
+            return
+        if done:
+            func.log_print(f"Alarm journal: {done} results filled in")
 
     def hundred_day_analysis(self):
         self._is_stock_trading_hours()
@@ -197,6 +367,7 @@ class CryptoStockManager:
         else:
             func.log_print('Analysis stocks 100d skipped: outside trading hours')
         self.last_daily_update = time.strftime('%d/%m/%Y %H:%M:%S')
+        self.update_journal()
 
     def hundred_hour_analysis(self):
         # As before: automatic hourly analysis only for cryptocurrencies.
@@ -244,9 +415,7 @@ class CryptoStockManager:
     def ai_prompt(self, symbol, asset_type):
         """/ai: fill the prompt for ChatGPT/Claude from ai_prompt.txt and send it as copyable text."""
         name, symbol, item, df, full, sr_zones, details = self._daily_analysis(symbol, asset_type)
-        if not os.path.exists(AI_PROMPT_FILE):
-            with open(AI_PROMPT_FILE, 'w', encoding='utf-8') as file:
-                file.write(AI_PROMPT_TEMPLATE)
+        update_ai_prompt_file()
         with open(AI_PROMPT_FILE, encoding='utf-8-sig') as file:
             question = file.read()
 
@@ -315,9 +484,9 @@ class CryptoStockManager:
 
         def formation_text(signals, names):
             # grouped by result (yes / no / not assessable) instead of one entry per sign: shorter, same content
-            groups = {'yes': [], 'no': [], 'n/a (no recent extreme)': []}
+            groups = {'yes': [], 'no': [], 'n/a': []}   # n/a = no recent extreme
             for key, label in names:
-                result = 'n/a (no recent extreme)' if signals[key] is None else 'yes' if signals[key] else 'no'
+                result = 'n/a' if signals[key] is None else 'yes' if signals[key] else 'no'
                 groups[result].append(label)
             parts = [f"{result}: {', '.join(labels)}" for result, labels in groups.items() if labels]
             return f"{len(groups['yes'])}/{len(names)} – {'; '.join(parts)}"
@@ -332,8 +501,21 @@ class CryptoStockManager:
                                         ('bestaetigung', 'price below EMA12')))
         rr = func.risk_reward(price, sr_zones)
         rank = details.get('rank')
-        score_text = (f"{rank}/10 (vs. the last 100 days; not a buy signal alone)"
-                      if rank else f"{details['score']} (-18 to +18, positive = rather buy)")
+        score_text = (f"{rank}/10 (vs. the last 100 days; {AI_SCORE_NOTE[asset_type]})"
+                      if rank else f"{details['score']} (-18 to +18; {AI_SCORE_NOTE[asset_type]})")
+
+        # Alarms and infos that the analysis would send today for this asset (with your [alerts] settings)
+        state = item.state
+        labels = {code: label for _codes, label, *_ in func.ALERTS.values() for code in _codes}
+        try:
+            today_alarms, _, _ = func.alarm(df, name, state.watch_list, state.current_profit_pct,
+                                            state.amount_older_than_one_year, state.amount_older_than_one_year_pct,
+                                            '100d', state.pattern, state.score_rank, sr_zones, asset_type,
+                                            yesterday_profit_pct=state.yesterday_profit_pct)
+            signals = ', '.join(f"{labels.get(code, code)} ({info.get('kind', 'alarm')})"
+                                for code, info in today_alarms.items()) or 'none'
+        except Exception as error:   # extra information: an error must not stop /ai
+            signals = f'not verifiable ({str(error)[:60]})'
         # Short forms for the prompt: it has to fit into one Telegram message (4096 characters)
         rsi_label = details['texts']['rsi'].split(': ', 1)[-1].rstrip('.')   # "neutral", "overbought – ..."
         pattern_short = re.sub(r' \([^)]*\)', '', details['texts']['pattern'], count=1)   # without the explanation
@@ -353,8 +535,8 @@ class CryptoStockManager:
         high = full['PriceHigh'].max() if 'PriceHigh' in full else full['Price'].max()
         low = full['PriceLow'].min() if 'PriceLow' in full else full['Price'].min()
         if asset_type == 'stock':
-            research = ("- Earnings/outlook: last revenue, guidance, consensus, next confirmed date (German time); "
-                        "separate actuals/guidance/estimates; which outlook statement would change the call.\n"
+            research = ("- Earnings/outlook: last revenue, guidance, consensus, next date (German time); "
+                        "separate actuals/estimates; what would change the call.\n"
                         "- Analyst targets/valuation: major target changes (original currency), trailing and forward P/E (estimate period).\n"
                         "- Company/industry: management, demand, competition, regulation, exports.")
         else:
@@ -377,12 +559,16 @@ class CryptoStockManager:
             'resistance': zone_text(resistance, 'high'), 'support': zone_text(support, 'low'),
             'score': score_text,
             'pattern': pattern_short,
-            'risk_reward': rr['text'],   # facts only: a "good" ratio did not predict better results
+            # facts only: a "good" ratio did not predict better results; the levels are in the two lines above
+            'risk_reward': (f"ratio {(resistance['center'] / price - 1) / (1 - support['center'] / price):.1f} : 1 "
+                            "(room to resistance vs. distance to support)" if resistance and support
+                            else rr['short'].rstrip('.')),
             'rsi': f"{df['RSI14'].iloc[-1]:.0f} ({rsi_label})",
             'macd': macd, 'bollinger': bollinger,
             'trend': details['texts']['trend'], 'short_term': details['texts']['short'],
             'bottom': bottom_text, 'top': top_text, 'research': research,
             'phase': phase, 'market_name': market_name, 'market': market,
+            'signals': signals, 'evidence': AI_EVIDENCE[asset_type],
         }
         # Simple replace instead of format(): other {brackets} in the file do no harm this way.
         for key, value in values.items():
@@ -420,6 +606,59 @@ class CryptoStockManager:
             func.create_table_image(frame, os.path.join(self.output_dir, image_name + '.png'), title=title)
             message = f'Data as of: {self.last_daily_update}'  # title is already in the image
             func.pushover_image(image_name, message, delete_after_send=True)
+        self.send_pnl()
+        self.send_pnl_chart()
+        if datetime.date.today().day == 1:   # monthly: how did the alarms do on new data?
+            self.send_journal_report()
+
+    def send_journal_report(self):
+        try:
+            func.pushover(cl.journal_report(), html_format=True)
+        except (OSError, ValueError) as error:
+            func.log_print(f"Alarm journal report failed: {error}", 'WARN')
+
+    def send_pnl(self):
+        """Own positions (crypto and stocks together): value, 1d P&L and total P&L as a table image."""
+        frames = [frame for frame in (self.df_crypto_hd, self.df_stock_hd) if not frame.empty]
+        if not frames:
+            return
+        frame = pd.concat(frames, ignore_index=True)
+        frame = frame[frame['Value [€]'] > 0]   # only assets you own
+        if frame.empty:
+            return
+        value, d1 = frame['Value [€]'].sum(), frame['1d P&L [€]'].sum()
+        subtitle = f"Portfolio {func.format_euro(value)}"
+        image_name = 'pnl_' + uuid.uuid4().hex
+        func.create_pnl_image(frame, os.path.join(self.output_dir, image_name + '.png'),
+                              title='My Daily P&L', subtitle=subtitle)
+        message = f'Data as of: {self.last_daily_update}'
+        if self.df_stock_hd.empty:
+            message += '\nStocks not included (no stock analysis today, e.g. weekend).'
+        func.log_print(f"Daily P&L: {len(frame)} positions, value {value:.2f} €, 1d {d1:+.2f} €")
+        func.pushover_image(image_name, message, delete_after_send=True)
+
+    def send_pnl_chart(self, weeks=13):
+        """Total profit/loss of the portfolio over the last 13 full weeks (3 months, Monday to Sunday,
+        the current week up to today) as weekly bars (not the portfolio value)."""
+        today = datetime.date.today()
+        days = today.weekday() + 1 + (weeks - 1) * 7   # from Monday 12 weeks ago up to today
+        try:
+            rows = cl.read_transactions()
+        except (OSError, UnicodeError, ValueError) as error:
+            func.log_print(f"P&L chart skipped: transactions.csv could not be read: {error}", 'WARN')
+            return
+        if not any(row['action'] in ('buy', 'sell') for row in rows) or not self.daily_prices:
+            return
+        history, missing = cl.pnl_history(rows, self.daily_prices, days, today=today)
+        if len(history) < 2:
+            return
+        image_name = 'pnl_chart_' + uuid.uuid4().hex
+        func.create_pnl_chart(history, os.path.join(self.output_dir, image_name + '.png'),
+                              title=f'P&L · last {weeks} weeks')
+        message = 'Profit/loss of all positions (realized + unrealized), not the portfolio value.'
+        if missing:
+            message += f"\nWithout prices (not in the daily analysis): {', '.join(missing)}"
+        func.pushover_image(image_name, message, delete_after_send=True)
 
     def event_reminders(self):
         """Events from events.ini: one reminder the day before, followed by a daily analysis like /check."""
@@ -584,6 +823,10 @@ class CryptoStockManager:
             self.load_config_items()
             names = [item.search for item in self.crypto_items_hd + self.stock_items_hd]
             func.pushover(f"Alarm analysis reloaded ({len(names)} assets): {', '.join(names)}")
+        elif action == 'portfolio':
+            self.send_portfolio()
+        elif action == 'status':
+            self.send_status()
         elif action == 'restart_main':
             return True
         else:
@@ -603,11 +846,20 @@ def run_program():
         func.set_message_queue(notify_q)
         try:
             manager = CryptoStockManager()
+            # Clear start line: which version runs on which device (PC or Raspberry Pi)?
+            func.log_print(f"CaSa {VERSION} {'restarted (/restart)' if old_manager else 'started'} on "
+                           f"{socket.gethostname()} ({platform.system()} {platform.release()}, "
+                           f"Python {platform.python_version()}), test mode {'on' if manager.test_mode == 1 else 'off'}, "
+                           f"CoinGecko key {'yes' if func.coingecko_api_key else 'no'}")
             # A restart via /restart must not send known alarms again.
             if old_manager is not None:
                 manager.crypto_items_hh, manager.crypto_items_hd = old_manager.crypto_items_hh, old_manager.crypto_items_hd
                 manager.stock_items_hh, manager.stock_items_hd = old_manager.stock_items_hh, old_manager.stock_items_hd
                 manager.events_done = old_manager.events_done   # no second reminder for the same day
+                # Daily results stay: summary, P&L chart and alarm journal work right after the restart
+                manager.daily_prices = old_manager.daily_prices
+                manager.df_crypto_hd, manager.df_stock_hd = old_manager.df_crypto_hd, old_manager.df_stock_hd
+                manager.last_daily_update = old_manager.last_daily_update
             manager.load_config_items()
             telegram_bot._load_config()  # detect a missing bot configuration before the start
             bot_process = mp.Process(target=telegram_bot.run_standalone,
@@ -633,6 +885,9 @@ def run_program():
             # Price alerts from valuealert.ini: checked every hour and once at the start, also in test mode
             schedule.every().hour.do(manager.value_alert_check)
             manager.value_alert_check()
+            # Health check every 6 hours, only in logfile.txt (not sent to Telegram)
+            manager.bot_alive = bot_process.is_alive
+            schedule.every(6).hours.do(manager.health_check)
             while not restart:
                 if not bot_process.is_alive():
                     raise RuntimeError('Telegram bot has stopped. Please check the log.')

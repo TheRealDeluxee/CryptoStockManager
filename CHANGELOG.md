@@ -7,6 +7,49 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [0.1.11] – 2026-11-19
+
+### Added
+- `/menu`: all functions as buttons (Analysis · Portfolio · Alarms & dates · System)
+- `/buy` and `/sell` step by step: asset via button (sell: only assets you hold), then amount, quantity and date (today/yesterday/other), confirmation; after saving ↩ Undo. The one-line input still works
+- 🤖 AI prompt button below every alarm and info
+- `/portfolio`: daily P&L table and 13-week chart at any time
+- `/status` with the status of the main program: last analyses, next scheduled runs, alarms, memory, disk space, problems
+- Wrong or incomplete input is answered with buttons: unknown asset in `/check`/`/ai`, `/history` and `/sellall` without asset, wrong `/smart_alert`; incomplete `/buy`/`/sell` start the step-by-step input
+- Loss limit alarm (`loss_limit`): message when the total P&L of a position you own falls below `total_loss_limit` (new in `[alertsconfig]`, default -5 %); on the day it crosses the limit, again after a recovery above it. Like all signals switchable as alarm, info or off for stocks and crypto
+- Alarms and infos separated: 🔔 alarms ("Potential buy/sell", can be important, in the alarm journal) and ℹ️ infos ("Info", never important, not in the alarm journal)
+- Infos: trend turns up (Cross-EMA Buy) and sharp drop (Negative-5) are back as infos; new 100-day high and 100-day low of the price (replace the former 100-Minimum/-Maximum of the fast EMA); each info names its backtest result
+- Every signal is set to alarm, info or off, separately for stocks and crypto: `config.ini` `[alerts]` with lines `name = <stocks>; <crypto>` or in Telegram with `/smart_alert_config` (two buttons per signal); changes apply from the next analysis on without a restart. The section is required: CaSa creates it (or missing lines) at the start, with an explanation of the format and per line a comment with the meaning and the backtest probability for stocks and crypto. Defaults follow the backtest (e.g. Score>8 and the 100-day high as alarm only for crypto, Oversold only for stocks)
+- Alarm journal (`alarm_journal.csv`): every sent alarm is recorded with its price; 20 trading days later (crypto: days) the change and whether it moved in the alarm direction are filled in. `/journal` shows the hit rate per alarm next to the backtest value; monthly report on the 1st with the evening summary. Not recorded in test mode
+- Oversold alarm (buy, stocks only): the score falls to -8 or lower for the first time – after a strong sell-off stocks often recover a little (backtest 47 stocks: 58 % hits, +1.3 % vs. an average day after 20 days, positive in all periods); not for crypto, never marked as important
+- README: results of the second backtest (54 assets) per alarm
+- P&L chart after the daily P&L table: total profit/loss of all positions over the last 13 weeks (Monday to Sunday, current week up to today) as weekly bars with the value on each bar (sales included, not the portfolio value), green above zero, red below; positions without prices are named in the message
+- Automatic function tests in `tests/` (pytest, 79 tests, without internet and without touching your own files): files, FIFO, alarm rules, bot commands, images, log; run with `python -m pytest`
+- Daily P&L as an extra table image after the daily summary (`My Daily P&L`): your own positions from crypto and stocks together, sorted by 1-day profit in €, with value, bar, 1-day P&L (€ and %), total P&L (€ and %, open position vs. FIFO cost) and a total row; on days without stock analysis only crypto (noted in the message)
+- Bot commands accept the symbol or the name from `assets.ini`, e.g. `/buy RHM.DE …` or `/buy Rheinmetall …`; names with spaces and the beginning of a name (at least 3 letters, e.g. `Trane`) work too
+- `crypto|stock` no longer needed in the bot commands (`/buy`, `/sell`, `/check`, `/ai`): the type comes from `assets.ini`; the old format still works
+- `/transactions` and `/history` as a table image like the daily summary: date, name, BUY/SELL, quantity, amount and price per unit, newest first; totals bought/sold at the top
+- Health check every 6 hours in `logfile.txt` only (not sent to Telegram): uptime, bot, last analyses, alarms, price alerts, memory, disk space, log size; WARN with the problems if something looks wrong
+
+### Changed
+- Alarm, info and `/check` messages: the figure blocks are collapsed (Telegram expandable quote), score and traffic lights stay visible; if Telegram ever rejects the formatting, the message is sent as plain text instead of being lost
+- `/ai` prompt: the fixed rules "buy only after a confirmed bottom" and "after a strong rise wait for a pullback" are replaced by the backtest findings for the asset type (stocks: slight rebound after strong sell-offs, waiting for a bottom did not help; crypto: strength continued, sell-offs often continued); the score gets a short note what it meant for stocks/crypto; new line "Signals today" with the alarms and infos of the day; leading market by the company's home country (US companies on German exchanges: S&P 500 instead of DAX); risk/reward line shortened to the ratio. An unchanged `ai_prompt.txt` from an earlier version is updated automatically, own changes stay
+- Faster analysis with identical results: 5-day slope (ROC5/VROC5) for all values in one step instead of one regression per value (about 60x faster), score rank and alarms calculate only the score instead of the whole message, the score of the previous value is calculated at most once
+- Exchange rates (e.g. USD/EUR) are fetched once per currency and hour instead of once per stock: fewer Yahoo requests
+- Fewer packages to install: `scipy`, `plotly` and `pytrends` are no longer needed (`install_venv.bat` also without `mplfinance` and `ruptures`); `pytrends` is only needed for the unused `google_trends` function
+- `config.ini`: section `[alarm]` renamed to `[alertsconfig]` (renamed automatically at the start, comments, token and key stay); `one_day_price_change` and `one_day_profit_limit` are no longer read
+- Chart patterns: a breakout counts only when the close is clearly beyond the neckline (at least half an average daily range, 0.5 ATR); weaker breakouts are no longer reported. Backtest 54 assets: half as many messages, crypto +4.7 % instead of +2.8 % vs. an average day after 20 days (all periods positive), stocks unchanged (±0 %). Rule tested with ideas from the open-source projects stock-pattern and chart_patterns (own code)
+- Pattern breakout is now an info instead of a buy/sell alarm (no advantage in the backtest with 54 assets)
+- `logfile.txt`: clear start line with version, device, operating system, Python version, test mode and CoinGecko key (also for `/restart`)
+- `logfile.txt`: short Telegram connection problems as one WARN line instead of an ERROR with traceback (the bot retries on its own); two instances with the same bot as one clear ERROR line
+
+### Fixed
+- After `/restart` the daily prices and tables are kept: summary, P&L chart and alarm journal work right away instead of only after the next daily analysis
+- AI prompt: stocks from all German exchanges (`.SG`, `.MU`, `.DU`, `.BE`, `.HM`, `.HA`) use the DAX as leading market, not the S&P 500
+- Charts are deleted even if sending fails (the `plots` folder no longer fills up during network problems)
+- Long HTML messages (over 4,096 visible characters) are sent as plain text in several parts instead of being cut inside a tag and rejected by Telegram
+- Chart captions: the 1,024-character limit counts the visible text only, so more charts arrive together with their text
+
 ## [0.1.10] – 2026-11-15
 
 ### Changed

@@ -15,6 +15,7 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 - [Understanding Alerts and Charts](#understanding-alerts-and-charts)
 - [Configuration](#configuration)
 - [Project Structure](#project-structure)
+- [Tests](#tests)
 - [Known Limitations](#known-limitations)
 - [Roadmap](#roadmap)
 - [License, Disclaimer and Links](#license)
@@ -50,6 +51,8 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 - Chart without weekend gaps: price with price tag, EMAs, Bollinger Bands, signals, support/resistance (R1/S1), chart pattern, volume bars and volume profile
 - Clean Telegram messages (bold headers, aligned values)
 - Daily ranking of all assets by 1-day P&L
+- Daily P&L of your own positions (crypto and stocks together) after the summary: value, 1-day profit/loss in € and %, total profit/loss, total row
+- P&L chart of the last 13 weeks (3 months) as weekly bars: total profit/loss of all positions at the end of each week (realized + unrealized, not the portfolio value)
 
 ![Example summary](docs/example_summary.png)
 
@@ -66,7 +69,18 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 
 ## What's New
 
-**Version 0.1.10** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.11** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- Easier bot: `/menu` with buttons, `/buy`/`/sell` step by step with ↩ Undo, 🤖 AI prompt button below alarms, collapsible figure blocks, `/portfolio`, detailed `/status`
+- Alarms and infos separated; every signal per stock/crypto as alarm, info or off (`config.ini` `[alerts]`, `/smart_alert_config`)
+- New: Oversold alarm (stocks), loss limit alarm, new 100-day high/low, sharp drop and trend-turn infos
+- Second backtest with 54 assets: results per alarm in the README; chart patterns only on clear breakouts
+- Daily P&L table and 13-week P&L chart, alarm journal (`/journal`) with the hit rate on new data
+- Bot commands with symbol or name, transactions as table images, AI prompt with backtest findings
+- Faster analysis, fewer packages, automatic tests (`python -m pytest`)
+
+**Version 0.1.10**
+
 
 - Clearer figure blocks: real value first, then `(>73% of days)` instead of signal marks
 - RSI comparison now in the same direction as all other lines
@@ -139,21 +153,25 @@ After the start, the bot sends the CaSa logo with a short message: the version, 
 | Command | Function |
 |---|---|
 | **Analysis** | |
-| `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol> <crypto\|stock>`); afterwards a question whether an AI prompt (`/ai`) should be created |
-| `/ai` | AI prompt to copy into ChatGPT or Claude (buttons or `/ai <symbol>`) |
+| `/menu` | All functions as buttons (Analysis · Portfolio · Alarms & dates · System); each button runs the same command as typing it |
+| `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol or name>`); afterwards a question whether an AI prompt (`/ai`) should be created |
+| `/ai` | AI prompt to copy into ChatGPT or Claude (buttons or `/ai <symbol or name>`) |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | **Alarms and Dates** | |
-| `/smart_alert` | Switch assets on/off for the alarm analysis (buttons or `/smart_alert <symbol> <on\|off>`); the old `/alarm` still works |
-| `/event` | List upcoming dates with a 🗑 button to delete each one (with confirmation), or add one: `/event <symbol> <DD/MM/YYYY> <text>` |
-| `/price_alert` | List price alerts with a 🗑 button to delete each one (with confirmation), or add one: `/price_alert <symbol> <price> <note>` (below/above is detected from the current price, or add it: `/price_alert APC.DE below 320.82 ...`) |
+| `/smart_alert` | Switch assets on/off for the alarm analysis (buttons or `/smart_alert <symbol or name> <on\|off>`); the old `/alarm` still works |
+| `/smart_alert_config` | Alarm, info or off per signal, separately for stocks and crypto (buttons); saved in `config.ini` `[alerts]` |
+| `/event` | List upcoming dates with a 🗑 button to delete each one (with confirmation), or add one: `/event <symbol or name> <DD/MM/YYYY> <text>` |
+| `/price_alert` | List price alerts with a 🗑 button to delete each one (with confirmation), or add one: `/price_alert <symbol or name> <price> <note>` (below/above is detected from the current price, or add it: `/price_alert APC.DE below 320.82 ...`) |
 | **Portfolio** | |
-| `/buy <symbol> <crypto\|stock> <amount €> <qty> <DD/MM/YYYY>` | Record a buy |
-| `/sell <symbol> <crypto\|stock> <amount €> <qty>` | Record a sell (today) |
-| `/sellall <symbol> [amount €]` | Record the sale of the full position (current price if no amount, confirmation required) |
-| `/history <symbol>` | Transactions of one asset |
-| `/transactions` | All transactions |
+| `/portfolio` | Daily P&L table and 13-week P&L chart now (otherwise with the evening summary) |
+| `/buy` | Record a buy step by step: choose the asset with a button, then amount, quantity and date (today, yesterday or other), confirm; afterwards ↩ Undo. In one line still possible: `/buy <symbol or name> <amount €> <qty> <DD/MM/YYYY>` (crypto or stock is taken from `assets.ini`) |
+| `/sell` | Record a sell step by step like `/buy`, only assets you hold are offered; in one line: `/sell <symbol or name> <amount €> <qty>` (today) |
+| `/sellall` | Record the sale of the full position: choose the asset with a button (current price) or `/sellall <symbol or name> [amount €]`; confirmation required |
+| `/history` | Transactions of one asset as a table (newest first); asset via button or `/history <symbol or name>` |
+| `/transactions` | All transactions as a table like the daily summary (newest first, 40 per image) |
+| `/journal` | Alarm journal: how many alarms moved in the right direction 20 trading days later, compared with the backtest |
 | **System** | |
-| `/status` | Bot status and number of transactions |
+| `/status` | Status of the main program: last analyses, next scheduled runs, alarms since the start, memory, disk space, problems (during a running analysis it follows afterwards) |
 | `/restart` | Restart the main program (reloads all files; after a program update stop and start CaSa completely) |
 | `/help` | Overview of all commands |
 
@@ -173,20 +191,49 @@ If the program is started after 12:30, the daily analysis runs immediately; miss
 
 ## Understanding Alerts and Charts
 
-**Alarm triggers**
+CaSa sends two kinds of messages, and you choose for every signal – separately for stocks and crypto – whether it comes as an alarm, as an info or not at all: in `config.ini` `[alerts]` (required, created automatically) or in Telegram with `/smart_alert_config`.
 
-| Trigger | Signal | Meaning |
-|---|---|---|
-| Positive-5 | Buy | 5-period rate of change rises above `seven_day_price_change` (first value above it); only above the SMA200 |
-| Score>8 | Buy | Internal score (-18 to +18) rises above 8 for the first time (daily only); only above the SMA200 |
-| Cross-EMA | Sell | Fast EMA (12) crosses the slow EMA (26) downwards (daily only) |
-| Pattern-Breakout | Buy / Sell | Fresh close through the neckline of a chart pattern: Double/Triple Bottom or Inverse Head and Shoulders (buy), Double/Triple Top or Head and Shoulders (sell); never marked as important |
+- **🔔 Alarm**: header "Potential buy" / "Potential sell", can be marked as important, recorded in the alarm journal (`/journal`)
+- **ℹ️ Info**: header "Info: …", never marked as important, not part of the alarm journal
 
-Buy alarms are sent for all assets with `1` in `assets.ini`, also for watched assets you do not own yet (marked in the message). Sell alarms are only sent for assets you own. Messages with a score above +5 (buy) or below -5 (sell) are marked as important.
+| Signal | Switch | Default stocks; crypto | Meaning |
+|---|---|---|---|
+| Positive-5 | `positive5` | alarm; alarm | 5-period rate of change rises above `seven_day_price_change` (first value above it); only above the SMA200 |
+| Score>8 | `score8` | info; alarm | Internal score (-18 to +18) rises above 8 for the first time (daily only); only above the SMA200 |
+| Oversold | `oversold` | alarm; off | The internal score falls to -8 or lower for the first time (strong sell-off, possible rebound; daily only, no SMA200 filter, never marked as important) |
+| Trend turns down | `cross_ema_sell` | alarm; alarm | Fast EMA (12) crosses the slow EMA (26) downwards (daily only, only for assets you own) |
+| Loss limit | `loss_limit` | alarm; alarm | The total P&L of a position you own (value vs. FIFO buy price) falls below `total_loss_limit` in `[alertsconfig]` (e.g. -5 %); on the day it crosses the limit, again after a recovery above it (daily only). A risk alarm for your own limit, not a forecast |
+| Trend turns up | `cross_ema_buy` | info; info | Fast EMA (12) crosses the slow EMA (26) upwards (daily only) |
+| Sharp drop | `negative5` | info; info | Price falls more than `seven_day_price_change` in 5 periods (first value below it) |
+| New 100-day high | `high100` | info; alarm | Highest closing price of the last 100 days (daily only) |
+| New 100-day low | `low100` | info; info | Lowest closing price of the last 100 days (daily only) |
+| Pattern breakout | `pattern` | info; info | Clear close through the neckline of a chart pattern (Double/Triple Bottom/Top, (Inverse) Head and Shoulders): at least half an average daily range (0.5 ATR) beyond it; weaker breakouts are not reported |
+
+The defaults follow the backtest: an alarm where the signal showed an advantage for that asset type (for example Score>8 and the 100-day high only for crypto, Oversold only for stocks), otherwise an info.
+
+Buy alarms and infos are sent for all assets with `1` in `assets.ini`, also for watched assets you do not own yet (marked in the message). Sell alarms are only sent for assets you own. Alarm messages with a score above +5 (buy) or below -5 (sell) are marked as important.
+
+**History of the alarms:** versions up to 0.1.0 had six alarms for your own positions: Cross-EMA Buy, Positive-5, 100-Minimum, Cross-EMA Sell, Negative-5 and 100-Maximum. In 0.1.5 Cross-EMA Buy, Negative-5 and 100-Minimum/-Maximum were removed (no advantage in the first backtest), Score>8 and the pattern breakout were added. In 0.1.11 every signal can be an alarm or an info (separately for stocks and crypto); Cross-EMA Buy and Negative-5 came back (default: info), 100-Minimum/-Maximum (turn of the fast EMA after its 100-day low/high) were replaced by the clearer new 100-day high/low of the price, the pattern breakout became an info and Oversold was added.
 
 The selection is based on a backtest with 9 assets (Bitcoin, Ethereum, DAX and six stocks, 7–14 years of daily data): Cross-EMA Buy, Negative-5 and 100-Minimum/-Maximum showed no advantage over an average day and were removed. Positive-5 only works with a high threshold (about 10 %); the score was the strongest signal. Both buy alarms only worked in an uptrend (price above the 200-day average), so they are filtered by it. SMA200 breakout and golden cross were also tested as separate alarms, but added little beyond the existing ones.
 
+A second backtest (version 0.1.11) checked the alarms on 54 other assets (47 stocks, 7 cryptocurrencies, up to 14 years, about 555 asset-years) – assets that were not used to choose the rules. "Excess" is the price change 20 days after the alarm compared with an average day of the same asset; hits = share of buy alarms followed by a rise (sell: a fall) after 20 days, compared with an average day.
+
+| Alarm | Hits | Average day | Excess 20 days | Assets in the right direction | Note |
+|---|---|---|---|---|---|
+| Positive-5 (buy) | 54 % | 52 % | +2.7 % | 34 of 54 | mainly crypto (+5.3 %); stocks +1.5 % |
+| Score>8 (buy) | 55 % | 52 % | +1.2 % | 24 of 54 | crypto +7.6 % (7 of 7), stocks 0.0 % |
+| Oversold (buy, stocks) | 58 % | 52 % | +1.3 % | 38 of 47 | positive in 2013–19, 2020–22 and 2023–26 |
+| Cross-EMA (sell) | 46 % | 43 % | −1.5 % | 33 of 54 | most stable signal since 2020 |
+| Pattern-Breakout (info, since 0.1.11 only clear breakouts) | stocks 51 % / crypto 56 % | 51 % / 50 % | stocks ±0 %, crypto +4.7 % | 22 of 47 / 6 of 7 | only clear breakouts count (≥ 0.5 ATR beyond the neckline); before: +0.3 % / −0.2 %, no advantage |
+
+The infos in the same backtest (excess after 20 days; stocks / crypto): Trend turns up ±0.0 % / +2.2 %, Sharp drop +1.2 % / −1.8 % (afterwards clearly more volatile), New 100-day high −0.1 % / +9.1 % (7 of 7 cryptos), New 100-day low +0.8 % / −1.0 %. They describe what happened; only the 100-day high for crypto points clearly in one direction.
+
+The averages come from a few large moves: for most buy alarms the median is slightly negative, so a single alarm is a hint, not a forecast. Following all buy alarms (hold 60 days) earned less than buying and holding in 36 of 54 assets. Popular TradingView indicators (SuperTrend, Squeeze Momentum, WaveTrend, RSI divergence) showed no advantage on stocks either.
+
 **Message content**
+
+Below every alarm and info a **🤖 AI prompt** button creates the `/ai` prompt for this asset. The figure blocks are **collapsed** (tap the quote to open them); score and traffic lights stay visible. Wrong or incomplete input (e.g. an unknown name in `/check`, `/history` without an asset) is answered with buttons to choose from instead of only the format.
 
 ![Alarm message in Telegram: score 1–10 with traffic-light lines and figure blocks](docs/telegram_message.png)
 
@@ -218,17 +265,41 @@ All files are plain text and can be edited with any editor. After changes, send 
 token = YOUR_TELEGRAM_BOT_TOKEN
 chat_id = YOUR_CHAT_ID
 
-[alarm]
-seven_day_price_change = 10     # threshold for the Positive-5 alarm (%), 10 recommended by the backtest
+[alertsconfig]
+seven_day_price_change = 10     # threshold for Positive-5 / Negative-5 (%), 10 recommended by the backtest
 previous_alarm_change = 3       # minimum change before the same alarm is sent again
-one_day_price_change = 10       # currently not used
-one_day_profit_limit = -2       # currently not used
 test_mode = 0                   # 0 = scheduled analyses, 1 = run all analyses once at start
+total_loss_limit = -5           # loss limit alarm: total P&L of an own position in % (e.g. -5 = alarm when it falls below -5 %)
 
 [coingecko]
 # optional: free demo key from coingecko.com/en/developers/dashboard (empty = free public access)
 api_key =
+
+[alerts]
+# Which signals CaSa sends, separately for stocks and crypto:
+#   name = <stocks>; <crypto>      each one of: alarm, info, off
+#   alarm = message "Potential buy/sell", can be marked important, counted in /journal
+#   info  = message "Info: ...", never important, not counted in /journal
+#   off   = no message
+# The comment behind each line: what the signal means and how often the price moved in the expected
+# direction within 20 days in the backtest (54 assets, up to 14 years); "normal" = the same on an
+# average day. Also changeable in Telegram with /smart_alert_config.
+#                stocks crypto
+positive5      = alarm; alarm # price +10 % in 5 days (uptrend) | rises: stocks 54 % (normal 52 %), crypto 54 % (normal 49 %)
+score8         = info;  alarm # score above 8 for the first time (uptrend) | rises: stocks 55 % (normal 52 %, no average gain), crypto 56 % (normal 49 %)
+oversold       = alarm; off   # score -8 or lower: strong sell-off | rises: stocks 58 % (normal 52 %), crypto 48 % (normal 49 %)
+cross_ema_sell = alarm; alarm # trend turns down (only own positions) | falls: stocks 45 % (normal 48 %, but -0.9 % on average), crypto 55 % (normal 51 %)
+loss_limit     = alarm; alarm # total P&L of an own position falls below total_loss_limit in [alertsconfig] | risk alarm for your own limit, no backtest
+cross_ema_buy  = info;  info  # trend turns up | rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)
+negative5      = info;  info  # price -10 % in 5 days | rises: stocks 53 % (normal 52 %), crypto 48 % (normal 49 %)
+high100        = info;  alarm # new highest price of 100 days | rises: stocks 55 % (normal 52 %), crypto 60 % (normal 49 %)
+low100         = info;  info  # new lowest price of 100 days | rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)
+pattern        = info;  info  # chart pattern breaks out | in breakout direction: stocks 51 % (normal 51 %), crypto 56 % (normal 50 %)
 ```
+
+**Section names:** `[alertsconfig]` holds the thresholds (it was called `[alarm]` up to 0.1.10 and is renamed automatically at the start; a missing `total_loss_limit` is added with -5). `one_day_price_change` and `one_day_profit_limit` from older versions are no longer used and can be deleted.
+
+**Alarms and infos:** the `[alerts]` section is required. Each line is `name = <stocks>; <crypto>`, each one of `alarm`, `info` or `off`; the comment behind it says what the signal means and how often the price moved in the expected direction within 20 days in the backtest, for stocks and crypto, compared with an average day ("normal"). If the section or a line is missing, CaSa adds it at the start with the defaults; lines in the earlier format (one value: all, stock, crypto, off) are converted without changing their effect. `/smart_alert_config` in Telegram shows two buttons per signal (📈 stocks, 🪙 crypto); each tap switches alarm → info → off and rewrites only that line, with its comment. The change applies from the next analysis on, without `/restart`.
 
 **CoinGecko key (optional):** if `api_key` is set, CaSa uses it; otherwise the free public access. With a key, the limit (30 requests per minute, 10,000 per month) applies per key instead of per internet connection – useful for more cryptos or several CaSa instances on one network.
 
@@ -293,19 +364,32 @@ stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
 
 ### ai_prompt.txt
 
-Template for the `/ai` prompt. It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program.
+Template for the `/ai` prompt. It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program. Since 0.1.11 also `{signals}` (alarms and infos the analysis would send today for this asset) and `{evidence}` (the backtest findings for stocks or crypto, e.g. that stocks recovered slightly after strong sell-offs while crypto tended to keep falling). The leading market is chosen by the company's home country (Nvidia on Xetra: S&P 500), not by the exchange. An unchanged template from an earlier version is replaced by the current one automatically; your own changes are never overwritten.
+
+### alarm_journal.csv (created automatically)
+
+Every sent alarm is recorded with date, asset, alarm, price and score. After 20 trading days (crypto: 20 days) CaSa fills in the price, the change in % and whether the price moved in the alarm direction (buy: up, sell: down). This shows over time whether the alarms also work on new data and not only in the backtest. `/journal` shows the statistics at any time; on the 1st of each month they come with the evening summary. Alarms are not recorded in test mode (`test_mode = 1`), because all analyses run at every start there. The file is private and not part of the repository.
 
 ### logfile.txt
 
 Written by the program for error analysis and monitoring – one line per event:
 
 ```text
+2026-11-15 16:39:00  INFO   CaSa 0.1.10 started on raspberrypi (Linux 6.12, Python 3.13.5), test mode off, CoinGecko key yes
 2026-11-15 16:39:59  WARN   CoinGecko ripple: too many requests (attempt 1/5), waiting 60 s
 2026-11-15 16:40:12  INFO   Analysis crypto 100d done: 6/6 ok, 1 alarms, 0 failed, 23 s
 2026-11-15 16:41:02  ERROR  Analysis NVD.DE (100d) failed: no data received after 5 attempts
 ```
 
-`ERROR` = something failed, `WARN` = problem, the program continues, `INFO` = status (analyses, sent messages as one line). Errors include the full details below the line. Above 1 MB the file is renamed to `logfile.old.txt` and a new log starts.
+`ERROR` = something failed, `WARN` = problem, the program continues, `INFO` = status (start with version and device, analyses, sent messages as one line). Errors include the full details below the line. Short Telegram connection problems are only one `WARN` line (the bot retries on its own); two instances with the same bot (e.g. PC and Raspberry Pi) are reported as one clear `ERROR` line. Above 1 MB the file is renamed to `logfile.old.txt` and a new log starts.
+
+Every 6 hours a **health check** is written to the log (not sent to Telegram): uptime, Telegram bot, last run of each analysis, alarms since the start, price alerts, memory, free disk space and log size. If something looks wrong (bot stopped, hourly analysis older than 2 h, analyses failing, less than 1 GB disk space), the line is a `WARN` with the problems at the end:
+
+```text
+2026-11-19 12:00:00  INFO   Health check: up 3 d 5 h, bot ok, crypto 100h 19/11 11:43 6/6 ok, stocks 100d 19/11 09:30 14/14 ok, alarms since start 2, price alerts 1, memory 172 MB, disk free 21.4 GB, log 42 KB
+```
+
+Useful searches, e.g. on a Raspberry Pi: `grep -a "CaSa 0" logfile.txt | tail` (starts and versions), `grep -a "Health check" logfile.txt | tail` (state), `grep -a ERROR logfile.txt | tail` (errors).
 
 `config.ini`, `assets.ini`, `events.ini`, `valuealert.ini`, `transactions.csv` and the log files contain personal data and are excluded from Git via `.gitignore`.
 
@@ -319,6 +403,26 @@ Written by the program for error analysis and monitoring – one line per event:
 | `telegram_bot.py` | Telegram bot, runs as a separate process: sends messages, forwards commands to `main.py` |
 | `install_venv.bat` | Installation on Windows |
 | `requirements.txt` | Python packages |
+| `tests/` | Automatic function tests (pytest) |
+
+## Tests
+
+Automatic tests check the most important functions after every change, without internet and without touching your own files (each test runs in an empty temporary folder with sample data).
+
+```
+python -m pip install pytest
+python -m pytest
+```
+
+Run the second line in the CaSa folder. All tests should end with `passed`; a `FAILED` line names the function that no longer works as expected.
+
+| File | Checks |
+|---|---|
+| `tests/test_files.py` | `assets.ini`, `transactions.csv` (FIFO), `events.ini`, `valuealert.ini`, symbol or name lookup, number and price input |
+| `tests/test_analysis.py` | Indicators, score 1–10, traffic lights, alarm rules (Positive-5, SMA200 filter, sell alarms only for your portfolio), daily P&L values |
+| `tests/test_bot.py` | Bot commands `/buy`, `/sell`, `/check`, `/ai`, `/smart_alert`, `/event`, `/history`, `/transactions` |
+| `tests/test_output.py` | Summary, P&L and transaction images, Telegram length, `logfile.txt` |
+| `tests/test_filter.py` | Duplicate filter for alarms |
 
 ## Known Limitations
 
@@ -363,21 +467,21 @@ Written by the program for error analysis and monitoring – one line per event:
 
 ### Data & sentiment
 - [ ] **Fear & Greed index** as a sentiment line in the daily summary. Free for crypto (alternative.me), for stocks only via an unofficial CNN source.
-- [ ] **Google Trends**: Search interest as a sentiment indicator, especially for crypto. `pytrends` and a `google_trends` function already exist but are not used yet.
+- [ ] **Google Trends**: Search interest as a sentiment indicator, especially for crypto. A `google_trends` function already exists but is not used yet; `pytrends` is no longer installed by default (`python -m pip install pytrends`).
 - [ ] **Alarm for unusual news volume**: Triggers when an asset gets far more news than usual (source: yfinance `Ticker.news`). It shows that something is happening, not in which direction.
 - [ ] **Insider trades**: Purchases and sales by executives from free official sources: SEC EDGAR (Form 4) for US stocks, Directors' Dealings for German stocks. Large insider purchases are a documented signal.
 - [ ] **Regulatory news via RSS**: Press releases from SEC and BaFin, flagged when an asset from the watchlist is mentioned.
 
 ### Portfolio
 - [ ] **Read-only exchange API for crypto (ccxt)**: Loads holdings directly from the major exchanges. Read-only keys only, never with trading rights.
-- [ ] **Total value and daily P&L** in the evening summary.
+- [x] **Total value and daily P&L** in the evening summary.
 - [ ] **Position size suggestion**: Based on ATR, e.g. max. 2 % of the portfolio at risk per position.
 - [ ] **Tax-free reminder**: A message on the day a crypto position has been held for more than one year (tax-free under German law).
 
 ### Reliability
 - [ ] **Keep known alarms after a full restart**: They are currently lost, so the same alarm can be sent twice.
-- [ ] **Health check**: A daily "I'm alive" line, or a warning when an analysis keeps failing.
-- [ ] **Automated tests** for alarms and charts, so changes don't break existing behaviour.
+- [x] **Health check**: A status line in the log every 6 hours, with a warning when an analysis is overdue or failing.
+- [x] **Automated tests** for alarms and charts, so changes don't break existing behaviour.
 
 ### Not planned
 - **Opening/closing volatility**: Needs minute data, while CaSa works with daily data.

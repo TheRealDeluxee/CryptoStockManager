@@ -1,10 +1,7 @@
 # --- Standard Library ---
 import os
 import time
-import base64, hashlib, hmac
 from datetime import datetime, timedelta
-from urllib.parse import quote  # only if you need to encode URL parts
-import urllib.request, json
 import random
 import math
 import html
@@ -15,9 +12,6 @@ import warnings
 import requests #instal
 import pandas as pd #instal
 import numpy as np # install
-from scipy.stats import linregress #Install
-from scipy.stats import zscore
-from pytrends.request import TrendReq #Install
 import yfinance as yf #Install
 # yfinance itself still uses "inplace=True", which pandas 3.1 marks as deprecated. Harmless; only this
 # one notice is hidden (CaSa's own code does not use inplace), all other warnings stay visible.
@@ -26,18 +20,16 @@ warnings.filterwarnings('ignore', message=r'The inplace keyword .* is deprecated
 import matplotlib #Install
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import matplotlib.patches as mpatches
 import matplotlib.transforms as mtransforms
 import multiprocessing as mp
 
 _message_queue = None
-one_day_price_change = 0.0
 seven_day_price_change = 0.0
-one_day_profit_limit = 0.0
 output_dir = 'plots'
 previous_alarm_change = 0.0
+total_loss_limit = -5.0   # loss limit alarm: total P&L of a position in % (config.ini [alertsconfig])
 coingecko_api_key = ''   # optional, from config.ini [coingecko] api_key
 
 def get_stock(symbol, period):
@@ -110,6 +102,23 @@ def get_stock(symbol, period):
     return df_dropped
 
 
+_fx_cache = {}   # (currency, period) -> (time, daily rates): one request per currency and hour, not per stock
+
+
+def _fx_rates(currency, period):
+    """Daily exchange rates currency -> EUR as DataFrame (Date, Rate), kept for one hour."""
+    cached = _fx_cache.get((currency, period))
+    if cached and time.time() - cached[0] < 3600:
+        return cached[1]
+    fx = yf.Ticker(f"{currency}EUR=X").history(period=period, interval='1d', timeout=20)
+    if fx.empty:
+        raise ValueError(f"No exchange rate available for {currency}/EUR.")
+    rates = pd.DataFrame({'Date': pd.to_datetime(fx.index, utc=True).normalize(), 'Rate': fx['Close'].to_numpy()})
+    rates = rates.dropna().sort_values('Date').drop_duplicates('Date', keep='last')
+    _fx_cache[(currency, period)] = (time.time(), rates)
+    return rates
+
+
 def stock_prices_in_eur(stock, df, period):
     """Yahoo often returns USD/GBP. Our buys and charts are in EUR."""
     currency = stock.get_history_metadata().get('currency')
@@ -124,14 +133,9 @@ def stock_prices_in_eur(stock, df, period):
         prices = prices / 100
     if len(currency) != 3 or not currency.isalpha():
         raise ValueError(f"Unsupported price currency: {currency}")
-    fx = yf.Ticker(f"{currency.upper()}EUR=X").history(period=period, interval='1d', timeout=20)
-    if fx.empty:
-        raise ValueError(f"No exchange rate available for {currency}/EUR.")
+    rates = _fx_rates(currency.upper(), period)
     # Use the latest available daily exchange rate for each price day.
     dates = pd.to_datetime(df.index, utc=True).normalize()
-    fx_dates = pd.to_datetime(fx.index, utc=True).normalize()
-    rates = pd.DataFrame({'Date': fx_dates, 'Rate': fx['Close'].to_numpy()})
-    rates = rates.dropna().sort_values('Date').drop_duplicates('Date', keep='last')
     joined = pd.merge_asof(pd.DataFrame({'Date': dates}).sort_values('Date'), rates,
                            on='Date', direction='backward', tolerance=pd.Timedelta(days=7))
     if joined['Rate'].isna().any() or (joined['Rate'] <= 0).any():
@@ -381,6 +385,12 @@ def chart_pattern(df, recent=60):
     pts = zigzag(df)
     same = lambda a, b: abs(b / a - 1) <= tol
     found = []
+    # Average true range (14 values): stocks from daily high/low, crypto from closing prices only
+    has_wicks = 'PriceHigh' in df and 'PriceLow' in df and df[['PriceHigh', 'PriceLow']].notna().all().all()
+    hi = df['PriceHigh'].to_numpy(float) if has_wicks else p
+    lo = df['PriceLow'].to_numpy(float) if has_wicks else p
+    true_range = np.maximum(hi[1:] - lo[1:], np.maximum(np.abs(hi[1:] - p[:-1]), np.abs(lo[1:] - p[:-1])))
+    atr = pd.Series(np.r_[np.nan, true_range]).rolling(14).mean().to_numpy()
 
     def neck_at(neck, i):   # neckline through two points, value at index i
         (ia, va), (ib, vb) = neck
@@ -388,6 +398,9 @@ def chart_pattern(df, recent=60):
 
     def status(top, neck, extreme, last_point):
         """Breakout = first close beyond the neckline after the last pattern point.
+        It counts only as a clear breakout: at least half an average daily range (0.5 ATR) beyond the
+        neckline, otherwise 'weak' (not reported). Backtest 54 assets: clear breakouts did better,
+        crypto +3.1 % vs. an average day after 20 days (all periods positive), weak ones did not.
         Invalid if the price runs above the high (top) / below the low (bottom) of the pattern.
         Old if the breakout is more than 10 values ago (no fresh signal any more)."""
         breakout = None
@@ -398,6 +411,9 @@ def chart_pattern(df, recent=60):
                 breakout = i
         if breakout is None:
             return 'forming', None
+        margin = (neck_at(neck, breakout) - p[breakout]) if top else (p[breakout] - neck_at(neck, breakout))
+        if np.isfinite(atr[breakout]) and margin < 0.5 * atr[breakout]:
+            return 'weak', breakout
         return ('breakout', breakout) if breakout >= n - 10 else ('old', breakout)
 
     def add(name, top, points, labels, neck, extreme, rank):
@@ -530,14 +546,33 @@ def trend_phase(prices):
     # compact wording: the /ai prompt must fit into one Telegram message
     return (f"{phase}: price {distance} vs. SMA200, SMA50 {'>' if s50 > s200 else '<'} SMA200 ({slope}), {cross}")
 
+# Leading stock index per home country of the company (Yahoo "country")
+MARKET_BY_COUNTRY = {
+    'United States': ('^GSPC', 'S&P 500'), 'Germany': ('^GDAXI', 'DAX'), 'Italy': ('FTSEMIB.MI', 'FTSE MIB'),
+    'United Kingdom': ('^FTSE', 'FTSE 100'), 'France': ('^FCHI', 'CAC 40'), 'Netherlands': ('^AEX', 'AEX'),
+    'Switzerland': ('^SSMI', 'SMI'), 'Spain': ('^IBEX', 'IBEX 35'), 'Sweden': ('^OMX', 'OMX Stockholm 30'),
+    'Norway': ('OBX.OL', 'OBX'), 'Japan': ('^N225', 'Nikkei 225'), 'Taiwan': ('^TWII', 'TAIEX'),
+    'China': ('^HSI', 'Hang Seng'), 'Hong Kong': ('^HSI', 'Hang Seng'), 'Canada': ('^GSPTSE', 'S&P/TSX'),
+}
+
+
 def market_prices(asset_type, symbol):
-    """Leading market for the market phase: Bitcoin for crypto, stock index per exchange for stocks."""
+    """Leading market for the market phase: Bitcoin for crypto; for stocks the index of the company's home
+    country (Nvidia listed in Frankfurt -> S&P 500), if unknown the index of the exchange."""
     if asset_type == 'crypto':
         df = get_crypto('bitcoin', {'vs_currency': 'eur', 'days': '260'})
         return 'Bitcoin (crypto leader)', None if df is None else df['Price']
-    suffix = symbol.upper().rsplit('.', 1)[-1] if '.' in symbol else ''
-    ticker, name = {'DE': ('^GDAXI', 'DAX'), 'F': ('^GDAXI', 'DAX'),
-                    'MI': ('FTSEMIB.MI', 'FTSE MIB')}.get(suffix, ('^GSPC', 'S&P 500'))
+    try:
+        country = (yf.Ticker(symbol).info or {}).get('country')
+    except Exception:
+        country = None
+    if country in MARKET_BY_COUNTRY:
+        ticker, name = MARKET_BY_COUNTRY[country]
+    else:
+        suffix = symbol.upper().rsplit('.', 1)[-1] if '.' in symbol else ''
+        # all German exchanges (Xetra, Frankfurt, Stuttgart, Munich, Duesseldorf, Berlin, Hamburg, Hanover): DAX
+        german = {exchange: ('^GDAXI', 'DAX') for exchange in ('DE', 'F', 'SG', 'MU', 'DU', 'BE', 'HM', 'HA')}
+        ticker, name = {**german, 'MI': ('FTSEMIB.MI', 'FTSE MIB')}.get(suffix, ('^GSPC', 'S&P 500'))
     hist = yf.Ticker(ticker).history(period='2y', interval='1d', timeout=20)   # index in its own currency
     return name, None if hist.empty else hist['Close'].tail(250)
 
@@ -621,40 +656,21 @@ def ROC5(df, column='Price', window=7):
     
     if len(df) < window:
         return pd.Series(index=df.index, dtype=float)
-    
-    def calc_slope_pct(series):
-        if len(series) < window or series.isna().any():
-            return np.nan
-        
-        try:
-            # Create index for regression (0 to window-1)
-            x = np.arange(len(series))
-            y = series.values
-            
-            # Perform linear regression
-            result = linregress(x, y)
-            slope = result.slope
-            intercept = result.intercept
-            
-            # Calculate predicted values at start and end
-            y_start = intercept  # when x = 0
-            y_end = slope * (len(series) - 1) + intercept  # when x = window-1
-            
-            # Prevent division by zero
-            if y_start == 0:
-                return np.nan
-            
-            # Calculate percentage change
-            slope_pct = (y_end / y_start - 1) * 100
-            return slope_pct
-            
-        except Exception:
-            return np.nan
-    
-    # Apply rolling calculation
-    rolling_slope = df[column].rolling(window=window).apply(calc_slope_pct, raw=False)
-    
-    return rolling_slope
+
+    # Linear regression over every window at once (same result as linregress per window, about 50x faster):
+    # x = 0 .. window-1, slope = sum((x - mean x) * y) / sum((x - mean x)^2), line through the mean
+    y = df[column].to_numpy(float)
+    x_centered = np.arange(window) - (window - 1) / 2
+    windows = np.lib.stride_tricks.sliding_window_view(y, window)    # one row per window
+    slope = windows @ x_centered / (x_centered ** 2).sum()           # a window with NaN gives NaN
+    y_start = windows.mean(axis=1) - slope * (window - 1) / 2        # regression line at x = 0
+    y_end = y_start + slope * (window - 1)                           # regression line at x = window-1
+    with np.errstate(divide='ignore', invalid='ignore'):
+        slope_pct = np.where(y_start == 0, np.nan, (y_end / y_start - 1) * 100)
+
+    rolling_slope = np.full(len(y), np.nan)
+    rolling_slope[window - 1:] = slope_pct
+    return pd.Series(rolling_slope, index=df.index)
 
 def save_csv(df, path=None, index=False, date_cols=()):
     d = df.copy()
@@ -1005,16 +1021,21 @@ def pushover_photo(path: str, message: str, html_format=False):
     else:
         log_print("No queue – image discarded.", 'WARN')
 
-def pushover_image(symbol: str, message: str, priority: int = 0, delete_after_send=False, html_format=False):
+def pushover_image(symbol: str, message: str, priority: int = 0, delete_after_send=False, html_format=False, buttons=None):
     # html_format=True: message contains Telegram HTML (<b>, <i>, <pre>)
+    # buttons: optional Telegram buttons below the message, as rows of (label, callback_data)
     log_message('chart', message)
     if _message_queue:
-        _message_queue.put({'type': 'image', 'symbol': symbol, 'message': message, 'priority': priority, 'output_dir': output_dir, 'delete_after_send': delete_after_send, 'html': html_format})
+        _message_queue.put({'type': 'image', 'symbol': symbol, 'message': message, 'priority': priority, 'output_dir': output_dir,
+                            'delete_after_send': delete_after_send, 'html': html_format, 'buttons': buttons})
     else:
         log_print("No queue – image discarded.", 'WARN')
 
 def google_trends(search):
-    
+    # currently not used by CaSa: pytrends is imported only here, so it is no longer a required package
+    # (install it with "python -m pip install pytrends" before using this function)
+    from pytrends.request import TrendReq
+
     for i in range(5):
         try:
             pytrends = TrendReq(hl='en-US', tz=360) 
@@ -1065,7 +1086,7 @@ def seven_day_slope_pct(df, current):
         
         # ✅ Problem 4b fix: direct np.arange(7) instead of index reset
         # x = [0, 1, 2, 3, 4, 5, 6] independent of the DataFrame index
-        slope, intercept = linregress(np.arange(7), y)[:2]
+        slope, intercept = np.polyfit(np.arange(7), y, 1)   # straight line through the 7 values
         
         # values at day 0 and day 6
         y_start = intercept
@@ -1161,7 +1182,8 @@ def score_rank(full, window=100):
     scores = []
     for end in range(max(30, len(full) - window + 1), len(full) + 1):
         try:
-            scores.append(analysis_details(cut_to_window(full.iloc[:end]))['score'])
+            # only the score (no message text); the 100 values before "end" as in cut_to_window()
+            scores.append(score_only(full.iloc[max(0, end - 100):end]))
         except ValueError:
             continue
     if len(scores) < 20:
@@ -1170,10 +1192,8 @@ def score_rank(full, window=100):
     return max(1, math.ceil(sum(s <= today for s in scores) / len(scores) * 10))
 
 
-def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
-    """Shared figures for alarms and /check; this function sends nothing.
-    rank: score 1-10 from score_rank(); unit: 'days' (daily analysis) or 'hours' (hourly analysis);
-    sr_zones: (resistance, support) from support_resistance() for the risk/reward line."""
+def score_signals(df):
+    """Position of RSI14, SMA7, VMA7, ROC5, VROC5 within the last 100 values: (signals -3..+3, quantiles)."""
     signals, quantiles = {}, {}
     for column in ('RSI14', 'SMA7', 'VMA7', 'ROC5', 'VROC5'):
         count, quantile = calc_stat_limits(df, column, window=100, invert=(column == 'RSI14'))
@@ -1185,6 +1205,23 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
             else:
                 raise ValueError(f"Not enough data for {column}.")
         signals[column], quantiles[column] = int(count), quantile
+    return signals, quantiles
+
+
+def score_only(df):
+    """Score -18..+18 like analysis_details(), without building the message (fast, for score_rank and alarms)."""
+    signals, _ = score_signals(df)
+    _, score = tech_analyse1(signals['RSI14'], 0)
+    _, score = tech_analyse2(signals['ROC5'], signals['VROC5'], score)
+    _, score = tech_analyse3(signals['SMA7'], signals['VMA7'], score)
+    return score + signals['ROC5']
+
+
+def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
+    """Shared figures for alarms and /check; this function sends nothing.
+    rank: score 1-10 from score_rank(); unit: 'days' (daily analysis) or 'hours' (hourly analysis);
+    sr_zones: (resistance, support) from support_resistance() for the risk/reward line."""
+    signals, quantiles = score_signals(df)
     # Score parts: each assessment sentence raises (🟢) or lowers (🔴) the score
     text1, part_rsi = tech_analyse1(signals['RSI14'], 0)
     text2, score = tech_analyse2(signals['ROC5'], signals['VROC5'], part_rsi)
@@ -1195,7 +1232,7 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
 
     def line(column):
         # real value first, in brackets its position within the last 100 values (as "376.25 €  (+6.4 %)")
-        count, quantile = signals[column], quantiles[column]
+        quantile = quantiles[column]
         current = df[column].iloc[-1] if column in df else float('nan')
         if not math.isfinite(quantile) or not math.isfinite(current):
             return f"{column:<6}{'no data':>13}  (rated neutral)"
@@ -1271,14 +1308,60 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
         head = f"<b>Score {rank}/10</b> – stronger than {(rank - 1) * 10} % of the last 100 {unit}"
     summary = head + "\n" + "\n".join(f"{light} <b>{name}:</b> {html.escape(sentence)}"
                                       for light, name, sentence, _ in sections)
-    message = summary + "\n\n" + "\n\n".join(content for *_, content in sections if content)
+    # Figure blocks collapsed (Telegram "expandable blockquote", tap to open): the message stays short on the phone
+    details = "\n\n".join(content for *_, content in sections if content)
+    message = summary + "\n\n<blockquote expandable>" + details + "</blockquote>"
     # assessments without header (e.g. for the /ai prompt)
     texts = {'rsi': rsi_text, 'trend': text3.split(': ', 1)[-1], 'short': text2.split(': ', 1)[-1],
              'pattern': pattern_text}
     return {'score': score, 'rank': rank, 'quantiles': quantiles, 'message': message, 'texts': texts}
 
 
-def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type, pattern=None, rank=None, sr_zones=None):
+# Alarm and info switches (config.ini [alerts], see classes.read_alert_settings)
+# Alarms: signals with an advantage in the backtest; infos: notable events without a proven forecast.
+# Per line in config.ini: name = <stocks>; <crypto>, each one of alarm | info | off
+ALERTS = {
+    # key: (codes, label, default for stocks, default for crypto, short description, probability from the
+    #       backtest 0.1.11: 54 assets, share of signals with the price moving in the expected direction
+    #       after 20 days, "normal" = the same for an average day)
+    'positive5':      (('121',), 'Positive-5', 'alarm', 'alarm', 'price +10 % in 5 days (uptrend)',
+                       'rises: stocks 54 % (normal 52 %), crypto 54 % (normal 49 %)'),
+    'score8':         (('141',), 'Score>8', 'info', 'alarm', 'score above 8 for the first time (uptrend)',
+                       'rises: stocks 55 % (normal 52 %, no average gain), crypto 56 % (normal 49 %)'),
+    'oversold':       (('151',), 'Oversold', 'alarm', 'off', 'score -8 or lower: strong sell-off',
+                       'rises: stocks 58 % (normal 52 %), crypto 48 % (normal 49 %)'),
+    'cross_ema_sell': (('201',), 'Cross-EMA Sell', 'alarm', 'alarm', 'trend turns down (only own positions)',
+                       'falls: stocks 45 % (normal 48 %, but -0.9 % on average), crypto 55 % (normal 51 %)'),
+    'loss_limit':     (('211',), 'Loss limit', 'alarm', 'alarm',
+                       'total P&L of an own position falls below total_loss_limit in [alertsconfig]',
+                       'risk alarm for your own limit, no backtest'),
+    'cross_ema_buy':  (('301',), 'Cross-EMA Buy', 'info', 'info', 'trend turns up',
+                       'rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)'),
+    'negative5':      (('321',), 'Negative-5', 'info', 'info', 'price -10 % in 5 days',
+                       'rises: stocks 53 % (normal 52 %), crypto 48 % (normal 49 %)'),
+    'high100':        (('361',), '100-day high', 'info', 'alarm', 'new highest price of 100 days',
+                       'rises: stocks 55 % (normal 52 %), crypto 60 % (normal 49 %)'),
+    'low100':         (('362',), '100-day low', 'info', 'info', 'new lowest price of 100 days',
+                       'rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)'),
+    'pattern':        (('331', '332'), 'Pattern breakout', 'info', 'info', 'chart pattern breaks out',
+                       'in breakout direction: stocks 51 % (normal 51 %), crypto 56 % (normal 50 %)'),
+}
+ALERT_KINDS = ('alarm', 'info', 'off')
+
+
+def alert_active(settings, key, asset_type=None):
+    """'alarm', 'info' or None (off). settings: {key: (kind for stocks, kind for crypto)};
+    a missing entry uses the default. Without a known asset type the stock setting is used, else crypto."""
+    stock, crypto = (settings or {}).get(key, (ALERTS[key][2], ALERTS[key][3]))
+    kind = crypto if asset_type == 'crypto' else stock if asset_type == 'stock' else (stock if stock != 'off' else crypto)
+    return None if kind == 'off' else kind
+
+
+alert_settings = {}   # set by main.py from config.ini
+
+
+def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type, pattern=None, rank=None, sr_zones=None, asset_type=None,
+          yesterday_profit_pct=None):
 
     alarms = {}
     tech_indicators = None  
@@ -1304,44 +1387,104 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
             message += "\n\n<i>Watched asset – not in your portfolio.</i>"
         else:
             message += "\n\n" + html.escape(f"Amount >1 year: {amount_older_than_one_year:.2f} ({amount_older_than_one_year_pct:.2f} %)")
-        alarms[code] = {"value": value, "priority": priority, "msg": message}
+        alarms[code] = {"value": value, "priority": priority, "msg": message, "kind": "alarm"}
 
     # Date only: CoinGecko returns the current time as the last value.
     value_ts = int(pd.Timestamp(df['Date'].iloc[-1]).normalize().timestamp())
 
-    # Selection based on a backtest (9 assets, 7-14 years of daily data): Cross-EMA Buy and Negative-5
-    # showed no advantage and were removed; Positive-5 only works with a high threshold (about 10 %).
-    # Chart pattern: fresh breakout through the neckline (today or the value before).
-    # Value = date of the breakout, so the same breakout is reported only once.
-    # Never high priority: no reliable advantage in the backtest.
-    breakout = pattern is not None and pattern['status'] == 'breakout' and pattern['at'][0] <= 1
-    if breakout:
-        breakout_ts = int(pd.Timestamp(df['Date'].iloc[-1 - pattern['at'][0]]).normalize().timestamp())
+    def create_info(code, title, value, note):
+        # Info: a notable event (no buy/sell wording, never important, not counted in /journal)
+        message = (f"<b>{html.escape(symbol)} — ℹ️ Info: {html.escape(title)}</b>\n"
+                   f"Trigger: {html.escape(title)} ({data_type})\n\n" + details['message']
+                   + f"\n\n<i>{html.escape(note)}</i>")
+        if watch_list:
+            message += "\n<i>Watched asset – not in your portfolio.</i>"
+        alarms[code] = {"value": value, "priority": 0, "msg": message, "kind": "info"}
 
-    # BUY Signals: for all assets with 1 in assets.ini, also watched ones you do not own yet
-    # Trend filter: Positive-5 and Score>8 only above the SMA200 (uptrend). In the backtest both
-    # had no advantage below it. Without 200 values (SMA200 empty) the filter does not block.
+    def emit(key, code, buy_sell, title, value, note, important=True):
+        # Alarm or info, as chosen in config.ini [alerts] (or nothing when switched off for this asset type)
+        kind = alert_active(alert_settings, key, asset_type)
+        if kind == 'alarm':
+            create_alarm(code, buy_sell, title, value, important)
+            alarms[code]["msg"] += f"\n\n<i>{html.escape(note)}</i>"
+        elif kind == 'info':
+            create_info(code, title, value, note)
+
+    # Signals for all assets with 1 in assets.ini, also watched ones you do not own yet (sell: only your own).
+    # Trend filter: Positive-5 and Score>8 only above the SMA200 (uptrend); without 200 values it does not block.
     sma200 = df['SMA200'].iloc[-1] if 'SMA200' in df else np.nan
     uptrend = not df['Price'].iloc[-1] <= sma200
+    roc_now, roc_before = df['ROC5'].iloc[-1], df['ROC5'].iloc[-2]
+    daily = data_type == "100d"
+    previous = []   # score of the value before: calculated at most once, only when needed
+
+    def score_before():
+        if not previous:
+            previous.append(score_only(df.iloc[:-1]))
+        return previous[0]
 
     # Positive-5: only on the first value above the threshold, not on every following value
-    if uptrend and df['ROC5'].iloc[-1] > seven_day_price_change and not df['ROC5'].iloc[-2] > seven_day_price_change:
-        create_alarm("121", "Buy", "Positive-5", value_ts)
+    if uptrend and roc_now > seven_day_price_change and not roc_before > seven_day_price_change:
+        emit('positive5', "121", "Buy", "Positive-5", value_ts,
+             "Backtest: rises after 20 days: stocks 54 % (normal 52 %), crypto 54 % (normal 49 %).")
 
-    # Score: first daily value above 8 (strongest signal in the backtest)
-    if uptrend and data_type == "100d" and score > 8 and analysis_details(df.iloc[:-1])['score'] <= 8:
-        create_alarm("141", "Buy", "Score>8", value_ts)
+    # Score>8: first daily value above 8 (crypto: +7.6 % vs. an average day after 20 days; stocks: no advantage)
+    if daily and uptrend and score > 8 and score_before() <= 8:
+        emit('score8', "141", "Buy", "Score>8", value_ts,
+             "Backtest: rises after 20 days: stocks 55 % (normal 52 %, no average gain), crypto 56 % (normal 49 %, +7.6 %).")
 
-    if breakout and not pattern['top']:
-        create_alarm("131", "Buy", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
+    # Oversold: score falls to -8 or lower for the first time. Stocks often recover a little after a strong
+    # sell-off (backtest 47 stocks: +1.3 % vs. an average day after 20 days, 58 % hits, all periods positive).
+    # Crypto tends to keep falling (-5.5 %), therefore the default is stocks only. No SMA200 filter.
+    if daily and score <= -8 and score_before() > -8:
+        emit('oversold', "151", "Buy", "Oversold (strong sell-off, possible rebound)", value_ts,
+             "Oversold: after a strong sell-off stocks often recover a little. Backtest: right in about 58 % "
+             "of cases, about +1.3 % more than on an average day after 20 days. Not a confirmed bottom – "
+             "the price may keep falling.", important=False)
 
-    # SELL Signals: only for assets in your portfolio
-    if not watch_list:
-        if yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0 and data_type == "100d":
-            create_alarm("201", "Sell", "Cross-EMA", value_ts)
+    # Trend turns down: only for assets in your portfolio; the most stable signal since 2020
+    if daily and not watch_list and yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0:
+        emit('cross_ema_sell', "201", "Sell", "Cross-EMA", value_ts,
+             "Backtest: falls after 20 days: stocks 45 % (normal 48 %, but -0.9 % on average), crypto 55 % (normal 51 %).")
 
-        if breakout and pattern['top']:
-            create_alarm("231", "Sell", f"Pattern-Breakout {pattern['name']}", breakout_ts, important=False)
+    # Loss limit: the total P&L of an own position (value vs. FIFO buy price) falls below your limit
+    # (config.ini [alertsconfig] total_loss_limit) - on the day it crosses the limit, again after a recovery above it
+    if daily and not watch_list and yesterday_profit_pct is not None \
+            and current_profit_pct < total_loss_limit <= yesterday_profit_pct:
+        emit('loss_limit', "211", "Sell", f"Total P&L {current_profit_pct:+.1f} % (your limit {total_loss_limit:g} %)",
+             value_ts, f"Your position is now more than {abs(total_loss_limit):g} % below your buy price (FIFO). "
+             "Check your plan: stop loss, hold or buy more? Risk alarm for your own limit, not a forecast.")
+
+    if daily and yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0:
+        emit('cross_ema_buy', "301", "Buy", "Trend turns up (Cross-EMA)", value_ts,
+             "The 12-day average crossed the 26-day average upwards. Backtest: rises after 20 days: "
+             "stocks 57 %, crypto 53 % (normal 52 %, 49 %).", important=False)
+
+    if roc_now < -seven_day_price_change and not roc_before < -seven_day_price_change:
+        emit('negative5', "321", "Sell", f"Sharp drop ({roc_now:+.1f} % in 5 days)", value_ts,
+             "Backtest: afterwards clearly more volatile. Stocks often recovered a little (+1.2 % vs. an "
+             "average day after 20 days), crypto kept falling more often (-1.8 %).", important=False)
+
+    if daily and len(df) >= 100:
+        price, before = df['Price'].iloc[-1], df['Price'].iloc[:-1]
+        if price >= before.max() and not before.iloc[-1] >= before.iloc[:-1].max():
+            emit('high100', "361", "Buy", "New 100-day high", value_ts,
+                 "Highest price of the last 100 days. Backtest: crypto rose further afterwards (+9.1 % vs. an "
+                 "average day after 20 days, 7 of 7), stocks ±0 %.", important=False)
+        if price <= before.min() and not before.iloc[-1] <= before.iloc[:-1].min():
+            emit('low100', "362", "Sell", "New 100-day low", value_ts,
+                 "Lowest price of the last 100 days. Backtest: stocks recovered a little afterwards (+0.8 % vs. "
+                 "an average day after 20 days), crypto fell further (-1.0 %).", important=False)
+
+    # Chart pattern: fresh breakout through the neckline (today or the value before); value = date of the
+    # breakout, so the same breakout is reported only once.
+    if pattern is not None and pattern['status'] == 'breakout' and pattern['at'][0] <= 1:
+        breakout_ts = int(pd.Timestamp(df['Date'].iloc[-1 - pattern['at'][0]]).normalize().timestamp())
+        direction = 'down' if pattern['top'] else 'up'
+        emit('pattern', "332" if pattern['top'] else "331", "Sell" if pattern['top'] else "Buy",
+             f"{pattern['name']} breakout {direction}", breakout_ts,
+             "Clear chart pattern breakout (at least half an average daily range beyond the neckline). Backtest: "
+             "stocks ±0 %, crypto +4.7 % vs. an average day after 20 days.", important=False)
 
     return alarms, tech_indicators, score
 
@@ -1556,6 +1699,190 @@ def create_table_image(df, output_path, title='', subtitle='', dpi=200):
     plt.close(fig)
 
 
+def create_pnl_image(df, output_path, title='', subtitle='', dpi=200):
+    """Daily P&L of the own positions (crypto and stocks together) in the style of the daily summary:
+    sorted by 1d P&L in €, bar for the 1d P&L, total row at the bottom.
+    df columns: Name, Type, Value [€], 1d P&L [€], 1d P&L [%], Total P&L [€], Total P&L [%]."""
+    GREEN, RED, GREY, DARK = '#1e8449', '#c0392b', '#8a8a8a', '#222222'
+
+    def pct_color(value):
+        return GREEN if value > 0 else RED if value < 0 else GREY
+
+    def euro_signed(value):
+        return ('+' if value > 0 else '−' if value < 0 else '') + format_euro(abs(value))
+
+    df = df.sort_values('1d P&L [€]', ascending=False).reset_index(drop=True)
+    rows = len(df)
+    fig, ax = plt.subplots(figsize=(6.4, 1.4 + (rows + 1) * 0.42))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(rows + 2.7, -0.2)   # y downwards: title, header, rows, total row
+    ax.axis('off')
+
+    col = {'rank': (0.03, 'center'), 'name': (0.07, 'left'), 'value': (0.42, 'right'),
+           'bar': (0.45, 0.63), 'd1': (0.79, 'right'), 'total': (1.0, 'right')}
+    ax.text(0.0, 0.25, title, fontsize=12, fontweight='bold', color=DARK, va='center')
+    ax.text(1.0, 0.25, subtitle, fontsize=7.5, color=GREY, va='center', ha='right')
+    header_y = 1.0
+    for key, label in (('rank', '#'), ('name', 'NAME'), ('value', 'VALUE'), ('d1', '1D P&L'), ('total', 'TOTAL P&L')):
+        x, align = col[key]
+        ax.text(x, header_y, label, fontsize=6.5, color=GREY, fontweight='bold', ha=align, va='center')
+    ax.plot([0, 1], [header_y + 0.35, header_y + 0.35], color='#dddddd', linewidth=0.8)
+
+    bar_left, bar_right = col['bar']
+    bar_mid = (bar_left + bar_right) / 2
+    max_abs = max(df['1d P&L [€]'].abs().max(), 0.01)
+    renderer = fig.canvas.get_renderer()
+
+    def money_cells(y, euro, pct, weight='bold'):
+        # € value on top, % below in small print (1D and total)
+        for key, value, percent in (('d1', euro[0], pct[0]), ('total', euro[1], pct[1])):
+            ax.text(col[key][0], y - 0.13, euro_signed(value), fontsize=8.5, color=pct_color(value),
+                    fontweight=weight, ha='right', va='center')
+            sign = '+' if percent > 0 else '−' if percent < 0 else ''
+            ax.text(col[key][0], y + 0.22, f"{sign}{abs(percent):.2f} %", fontsize=6.5, color=pct_color(percent),
+                    ha='right', va='center')
+
+    for i, row in df.iterrows():
+        y = header_y + 1 + i
+        d1 = row['1d P&L [€]']
+        background = '#e9f6ec' if i == 0 and d1 > 0 else '#f7f7f7' if i % 2 else 'white'
+        ax.add_patch(mpatches.FancyBboxPatch((0, y - 0.42), 1, 0.84, boxstyle='round,pad=0,rounding_size=0.01',
+                                             facecolor=background, edgecolor='none', zorder=0))
+        ax.text(col['rank'][0], y, str(i + 1), fontsize=8, color=GREY, ha='center', va='center')
+        name_text = ax.text(col['name'][0], y - 0.13, str(row['Name']), fontsize=9, color=DARK, fontweight='bold',
+                            ha='left', va='center')
+        ax.text(col['name'][0], y + 0.22, 'Crypto' if row['Type'] == 'crypto' else 'Stock', fontsize=6.5,
+                color=GREY, ha='left', va='center')
+        value_text = ax.text(col['value'][0], y, format_euro(row['Value [€]']), fontsize=8.5, color=DARK,
+                             ha='right', va='center')
+        # Long names must not run into the value: shorten with "…" until they fit
+        gap = value_text.get_window_extent(renderer).x0 - 6
+        name = str(row['Name'])
+        while len(name) > 4 and name_text.get_window_extent(renderer).x1 > gap:
+            name = name[:-1]
+            name_text.set_text(name.rstrip() + '…')
+
+        length = d1 / max_abs * (bar_right - bar_left) / 2
+        ax.add_patch(mpatches.Rectangle((min(bar_mid, bar_mid + length), y - 0.15), abs(length), 0.3,
+                                        facecolor=pct_color(d1), edgecolor='none', alpha=0.85, zorder=1))
+        ax.plot([bar_mid, bar_mid], [y - 0.3, y + 0.3], color='#cccccc', linewidth=0.8, zorder=2)
+        money_cells(y, (d1, row['Total P&L [€]']), (row['1d P&L [%]'], row['Total P&L [%]']))
+
+    # total row: sum of all positions, percentages relative to yesterday's value / cost
+    y = header_y + 1 + rows + 0.25
+    ax.plot([0, 1], [y - 0.55, y - 0.55], color='#bbbbbb', linewidth=0.8)
+    value = df['Value [€]'].sum()
+    d1 = df['1d P&L [€]'].sum()
+    total = df['Total P&L [€]'].sum()
+    yesterday, cost = value - d1, value - total
+    ax.text(col['name'][0], y, 'Total', fontsize=9, color=DARK, fontweight='bold', ha='left', va='center')
+    ax.text(col['value'][0], y, format_euro(value), fontsize=8.5, color=DARK, fontweight='bold', ha='right', va='center')
+    money_cells(y, (d1, total), (d1 / yesterday * 100 if yesterday else 0.0, total / cost * 100 if cost else 0.0))
+
+    fig.patch.set_facecolor('white')
+    plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+
+def create_pnl_chart(pnl, output_path, title='', dpi=200):
+    """Total profit/loss as weekly bars: one bar per week with the P&L at the end of the week
+    (the current week up to today), green above zero, red below. pnl: Series of € per day (index = date)."""
+    GREEN, RED, GREY = '#1e8449', '#c0392b', '#8a8a8a'
+    weekly = pnl.resample('W-SUN').last().dropna()
+    weekly.index = [min(day, pnl.index[-1]) for day in weekly.index]   # current week: today, not next Sunday
+    values = weekly.to_numpy(float)
+    now, change = pnl.iloc[-1], pnl.iloc[-1] - pnl.iloc[0]
+    start = pnl.index[0]
+
+    def euro_signed(value):
+        return ('+' if value > 0 else '−' if value < 0 else '') + format_euro(abs(value))
+
+    fig, ax = plt.subplots(figsize=(6.4, 3.4))
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+    # header: current P&L large, change over the period below (like the broker app)
+    fig.text(0.02, 0.97, title, fontsize=9, color=GREY, fontweight='bold', va='top')
+    fig.text(0.02, 0.89, euro_signed(now), fontsize=16, color=GREEN if now >= 0 else RED, fontweight='bold', va='top')
+    fig.text(0.02, 0.77, f"{euro_signed(change)} since {start:%d/%m/%Y}", fontsize=8,
+             color=GREEN if change >= 0 else RED, va='top')
+
+    x = np.arange(len(values))
+    colors = [GREEN if value >= 0 else RED for value in values]
+    ax.bar(x, values, width=0.7, color=colors, alpha=0.85, zorder=3)
+    ax.axhline(0, color=GREY, linewidth=0.8, zorder=4)
+    low, high = min(values.min(), 0), max(values.max(), 0)
+    pad = (high - low) * 0.15 or 1
+    ax.set_ylim(low - pad, high + pad)
+    # value of each week above (gain) or below (loss) its bar
+    for i, value in enumerate(values):
+        ax.text(i, value + (pad * 0.15 if value >= 0 else -pad * 0.15), f"{value:,.0f}", fontsize=5.5,
+                color=colors[i], ha='center', va='bottom' if value >= 0 else 'top')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{day:%d/%m}" for day in weekly.index], fontsize=6)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:,.0f} €"))
+    for side in ('top', 'right', 'left'):
+        ax.spines[side].set_visible(False)
+    ax.spines['bottom'].set_color('#dddddd')
+    ax.tick_params(colors=GREY, labelsize=7, length=0)
+    ax.grid(axis='y', color='#eeeeee', linewidth=0.6, zorder=0)
+    ax.set_axisbelow(True)
+    fig.subplots_adjust(top=0.68, left=0.13, right=0.98, bottom=0.1)
+    plt.savefig(output_path, dpi=dpi, facecolor='white')
+    plt.close(fig)
+
+
+def create_transactions_image(rows, output_path, title='', subtitle='', dpi=200):
+    """Transactions (/transactions, /history) as a table in the style of the daily summary.
+    rows: dicts with date (datetime), name, type ('crypto'/'stock'), action ('buy'/'sell'), amount (€), qty."""
+    GREEN, RED, GREY, DARK = '#1e8449', '#c0392b', '#8a8a8a', '#222222'
+    rows = sorted(rows, key=lambda row: row['date'], reverse=True)   # newest first
+    count = len(rows)
+    fig, ax = plt.subplots(figsize=(6.4, 0.95 + count * 0.42))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(count + 1.6, -0.2)   # y downwards: title on top, then header, then rows
+    ax.axis('off')
+
+    # columns (x position, alignment)
+    col = {'rank': (0.03, 'center'), 'date': (0.07, 'left'), 'name': (0.225, 'left'), 'action': (0.48, 'center'),
+           'qty': (0.65, 'right'), 'amount': (0.83, 'right'), 'unit': (1.0, 'right')}
+    ax.text(0.0, 0.25, title, fontsize=12, fontweight='bold', color=DARK, va='center')
+    ax.text(1.0, 0.25, subtitle, fontsize=7.5, color=GREY, va='center', ha='right')
+    header_y = 1.0
+    for key, label in (('rank', '#'), ('date', 'DATE'), ('name', 'NAME'), ('action', 'ACTION'),
+                       ('qty', 'QUANTITY'), ('amount', 'AMOUNT'), ('unit', 'PRICE/UNIT')):
+        x, align = col[key]
+        ax.text(x, header_y, label, fontsize=6.5, color=GREY, fontweight='bold', ha=align, va='center')
+    ax.plot([0, 1], [header_y + 0.35, header_y + 0.35], color='#dddddd', linewidth=0.8)
+
+    renderer = fig.canvas.get_renderer()
+    for i, row in enumerate(rows):
+        y = header_y + 1 + i
+        ax.add_patch(mpatches.FancyBboxPatch((0, y - 0.42), 1, 0.84, boxstyle='round,pad=0,rounding_size=0.01',
+                                             facecolor='#f7f7f7' if i % 2 else 'white', edgecolor='none', zorder=0))
+        ax.text(col['rank'][0], y, str(i + 1), fontsize=8, color=GREY, ha='center', va='center')
+        ax.text(col['date'][0], y, row['date'].strftime('%d/%m/%Y'), fontsize=7.5, color=GREY, ha='left', va='center')
+        name_text = ax.text(col['name'][0], y, str(row['name']), fontsize=9, color=DARK,
+                            fontweight='bold', ha='left', va='center')
+        buy = row['action'] == 'buy'
+        badge = ax.text(col['action'][0], y, 'BUY' if buy else 'SELL', fontsize=7, color='white', fontweight='bold',
+                        ha='center', va='center', bbox=dict(boxstyle='round,pad=0.3', facecolor=GREEN if buy else RED,
+                                                            edgecolor='none'))
+        # Long names must not run into the action badge: shorten with "…" until they fit
+        gap = badge.get_window_extent(renderer).x0 - 10
+        name = str(row['name'])
+        while len(name) > 4 and name_text.get_window_extent(renderer).x1 > gap:
+            name = name[:-1]
+            name_text.set_text(name.rstrip() + '…')
+        qty = f"{row['qty']:.8f}".rstrip('0').rstrip('.') if row['type'] == 'crypto' else f"{row['qty']:g}"
+        ax.text(col['qty'][0], y, qty, fontsize=8, color=DARK, ha='right', va='center')
+        ax.text(col['amount'][0], y, format_euro(row['amount']), fontsize=8.5, color=DARK, fontweight='bold',
+                ha='right', va='center')
+        unit_price = row['amount'] / row['qty'] if row['qty'] else 0.0
+        ax.text(col['unit'][0], y, format_euro(unit_price), fontsize=7.5, color=GREY, ha='right', va='center')
+
+    fig.patch.set_facecolor('white')
+    plt.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
 
 
 LOG_FILE = 'logfile.txt'
@@ -1582,7 +1909,7 @@ def log_print(message, level='INFO'):
 
 def _strip_telegram_html(message):
     # Only the Telegram tags (<b>, <i>, <pre>, <a href=...> ...), not e.g. "<module>" in a traceback
-    text = re.sub(r'</?(?:b|i|u|s|pre|code|a)(?:\s[^>]*)?>', '', str(message))
+    text = re.sub(r'</?(?:b|i|u|s|pre|code|a|blockquote)(?:\s[^>]*)?>', '', str(message))
     return html.unescape(text).strip()
 
 

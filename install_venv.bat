@@ -50,15 +50,10 @@ echo Installing/Updating packages inside venv...
 python -m pip install --upgrade ^
     pandas ^
     numpy ^
-    scipy ^
     requests ^
     matplotlib ^
-    plotly ^
-    pytrends ^
     yfinance ^
     schedule ^
-    mplfinance ^
-    ruptures ^
     psutil ^
     python-telegram-bot
 if %errorlevel% neq 0 (

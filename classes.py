@@ -6,6 +6,7 @@ import tempfile
 import uuid
 
 import func
+import numpy as np
 import pandas as pd
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -199,7 +200,7 @@ class CryptoStock:
         self.state.score_rank = func.score_rank(df)   # 1-10 vs. the last 100 values, before cutting
         df = func.cut_to_window(df)
         self.state = func.calc_state_fuctions(self.state, df)
-        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type, self.state.pattern, self.state.score_rank, self.state.sr_zones)
+        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type, self.state.pattern, self.state.score_rank, self.state.sr_zones, self.type, yesterday_profit_pct=self.state.yesterday_profit_pct)
         alarms_filter = func.filter(alarms, self.state)
 
         # Return the cut data so that chart and summary use the same 100 values.
@@ -212,7 +213,10 @@ class CryptoStock:
         for info in alarms_filter.values():
             image_name = "alarm_" + uuid.uuid4().hex
             func.plot_and_save(df, image_name, data_type, self.state.zero_line, self.state.sr_zones, self.state.pattern)
-            func.pushover_image(image_name, info['msg'], info['priority'], delete_after_send=True, html_format=True)
+            # one tap below the alarm/info: AI prompt for this asset (as /ai)
+            button = [[('🤖 AI prompt', f"aibtn|{self.type}|{self.symbol.lower()}")]]
+            func.pushover_image(image_name, info['msg'], info['priority'], delete_after_send=True, html_format=True,
+                                buttons=button)
 
     def get_summary(self, df):
         return {
@@ -220,7 +224,13 @@ class CryptoStock:
             'Piece [€]': round(float(df['Price'].iloc[-1]), 2),
             '7d P&L [%]': round(self.state.current_seven_days_slope_pct, 2),
             '1d P&L [%]': round(self.state.current_one_day_price_change_pct, 2),
-            'Rating': self.state.score_rank or 0   # score 1-10 (0 = not available)
+            'Rating': self.state.score_rank or 0,   # score 1-10 (0 = not available)
+            # own position for the daily P&L message (0 = not held)
+            'Type': self.type,
+            'Value [€]': round(self.state.current_balance_eur, 2),
+            '1d P&L [€]': round(self.state.current_balance_eur - self.state.yesterday_balance_eur, 2),
+            'Total P&L [€]': round(self.state.current_profit, 2),
+            'Total P&L [%]': round(self.state.current_profit_pct, 2),
         }
 
 
@@ -262,6 +272,34 @@ def read_assets(path="assets.ini", alarm_only=False):
     if not entries and not alarm_only:
         raise ValueError(f"{path} contains no active symbols.")
     return entries
+
+
+def take_asset(words, assets, types=('crypto', 'stock')):
+    """Find an asset at the start of a bot command by symbol or name (e.g. RHM.DE, Rheinmetall, "Trane Technologies").
+    Order: symbol or full name; then the beginning of a name ("Trane" -> Trane Technologies).
+    The longest fitting word group wins, so names with spaces work too.
+    Returns (asset type, symbol, name, remaining words); ValueError if nothing or several assets fit."""
+    candidates = [key for key in assets if key[0] in types]
+    for exact in (True, False):
+        for count in range(len(words), 0, -1):
+            text = ' '.join(words[:count]).lower()
+            if exact:
+                found = [key for key in candidates if text in (key[1], ' '.join(assets[key].lower().split()))]
+            elif len(text) >= 3:   # at least 3 letters, so that a typo does not hit a random asset
+                found = [key for key in candidates if ' '.join(assets[key].lower().split()).startswith(text)]
+            else:
+                found = []
+            if len(found) > 1:
+                names = ', '.join(f"{assets[key]} ({key[1].upper() if key[0] == 'stock' else key[1]})"
+                                  for key in found)
+                raise ValueError(f"'{' '.join(words[:count])}' fits several assets: {names}. "
+                                 'Please use the symbol or add the type (crypto|stock).')
+            if found:
+                asset_type, symbol = found[0]
+                return asset_type, symbol, assets[found[0]], list(words[count:])
+    text = words[0] if words else ''
+    section = ' or '.join('[crypto]' if t == 'crypto' else '[stocks]' for t in types)
+    raise ValueError(f"'{text}' is not in assets.ini {section} (neither as symbol nor as name).")
 
 
 def read_events(path="events.ini", assets_path="assets.ini"):
@@ -532,6 +570,323 @@ def read_transactions(path="transactions.csv"):
         except ValueError as error:
             raise ValueError(f"transactions.csv, line {line}: {error}") from error
     return rows
+
+
+def daily_prices(df):
+    """Closing price per calendar day from an analysis DataFrame (Date, Price); time zone and time of day removed."""
+    dates = pd.to_datetime(df['Date'])
+    if dates.dt.tz is not None:
+        dates = dates.dt.tz_convert(None)
+    series = pd.Series(df['Price'].to_numpy(float), index=dates.dt.normalize())
+    return series.groupby(level=0).last()   # CoinGecko: midnight value and the current value on the same day
+
+
+def pnl_history(rows, prices, days=100, today=None):
+    """Total profit/loss of the portfolio per day for the last `days` calendar days:
+    value of the holdings + money from sales - money spent on buys (realized and unrealized together).
+    rows: transactions (read_transactions); prices: {(type, symbol lower): daily price series}.
+    Returns (Series of P&L in € per day, list of held assets without prices)."""
+    today = pd.Timestamp(today or datetime.now()).normalize()
+    index = pd.date_range(today - pd.Timedelta(days=days - 1), today, freq='D')
+    total = pd.Series(0.0, index=index)
+    missing = []
+    trades = [row for row in rows if row['action'] in ('buy', 'sell')]
+    for key in sorted({(row['type'], row['symbol'].lower()) for row in trades}):
+        own = [row for row in trades if (row['type'], row['symbol'].lower()) == key]
+        dates = pd.to_datetime([row['date'] for row in own], format='%d/%m/%Y')
+        signed = [(1 if row['action'] == 'buy' else -1, *valid_numbers(row['amount'], row['qty'])) for row in own]
+        trade_df = pd.DataFrame({'qty': [s * q for s, _, q in signed], 'cash': [-s * a for s, a, _ in signed]}, index=dates)
+        trade_df = trade_df.groupby(level=0).sum().sort_index()
+        # holdings and money flow up to each day (trades before the window count from the first day)
+        qty = trade_df['qty'].cumsum().reindex(index.union(trade_df.index)).ffill().fillna(0).reindex(index)
+        cash = trade_df['cash'].cumsum().reindex(index.union(trade_df.index)).ffill().fillna(0).reindex(index)
+        if key not in prices or prices[key].empty:
+            if qty.iloc[-1] > 1e-12:
+                missing.append(key[1])
+            continue
+        # weekends and holidays: last known price (stocks)
+        price = prices[key].reindex(index.union(prices[key].index)).ffill().reindex(index)
+        value = (qty * price).where(qty.abs() > 1e-12, 0.0)
+        total += (value.fillna(0) + cash).where(price.notna() | (qty.abs() <= 1e-12), np.nan)
+    return total.dropna(), missing
+
+
+# ── Alarm and info switches (config.ini [alerts]) ──────────────────────────
+# Alarms: signals with an advantage in the backtest ("Potential buy/sell", recorded in the alarm journal).
+# Infos: notable events without a proven forecast ("Info", for your overview).
+# Value per entry: all | stock | crypto | off
+ALERTS = func.ALERTS
+ALERT_KINDS = func.ALERT_KINDS
+alert_active = func.alert_active
+
+ALERTS_SECTION_HEADER = [
+    '[alerts]',
+    '# Which signals CaSa sends, separately for stocks and crypto:',
+    '#   name = <stocks>; <crypto>      each one of: alarm, info, off',
+    '#   alarm = message "Potential buy/sell", can be marked important, counted in /journal',
+    '#   info  = message "Info: ...", never important, not counted in /journal',
+    '#   off   = no message',
+    '# The comment behind each line: what the signal means and how often the price moved in the expected',
+    '# direction within 20 days in the backtest (54 assets, up to 14 years); "normal" = the same on an',
+    '# average day. Also changeable in Telegram with /smart_alert_config.',
+    '#                stocks crypto',
+]
+# Before 0.1.11 final: one value per line (all, stock, crypto, off) and a fixed kind per signal
+_OLD_KIND = {'positive5': 'alarm', 'score8': 'alarm', 'oversold': 'alarm', 'cross_ema_sell': 'alarm'}
+
+
+def alert_line(key, kinds):
+    """One line of the [alerts] section: kinds for stocks and crypto, comment with meaning and probability."""
+    _codes, _label, _stock, _crypto, desc, odds = ALERTS[key]
+    stock, crypto = kinds
+    return f"{key:<15}= {stock + ';':<6} {crypto:<6}# {desc} | {odds}"
+
+
+def parse_alert_value(key, text):
+    """'alarm; info' -> ('alarm', 'info'). Old single values (all, stock, crypto, off, 1, 0) are converted.
+    Returns (kinds, old_format)."""
+    value = text.split('#', 1)[0].strip().lower()
+    parts = [part.strip() for part in value.split(';')]
+    if len(parts) == 2 and all(part in ALERT_KINDS for part in parts):
+        return (parts[0], parts[1]), False
+    old = {'1': 'all', 'on': 'all', '0': 'off', 'stocks': 'stock'}.get(value, value)
+    kind = _OLD_KIND.get(key, 'info')
+    converted = {'all': (kind, kind), 'stock': (kind, 'off'), 'crypto': ('off', kind), 'off': ('off', 'off')}
+    if len(parts) == 1 and old in converted:
+        return converted[old], True
+    raise ValueError(f"config.ini [alerts] {key} = {value}: expected '<stocks>; <crypto>', "
+                     f"each one of {', '.join(ALERT_KINDS)} (e.g. 'alarm; info')")
+
+
+def _alert_section(lines):
+    """(index of the [alerts] header or None, index after the section, {key: (line index, value text)})"""
+    section, start, end, found = None, None, len(lines), {}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            if section == 'alerts':
+                end = index
+            section = stripped[1:-1].strip().lower()
+            if section == 'alerts':
+                start = index
+            continue
+        if section == 'alerts' and '=' in line and not stripped.startswith(('#', ';')):
+            name, value = line.split('=', 1)
+            found[name.strip().lower()] = (index, value)
+    return start, end, found
+
+
+def ensure_alert_section(path='config.ini'):
+    """The [alerts] section is required. Creates it with the default values and comments, adds missing lines
+    and converts lines in the old format (one value per line) without changing their effect.
+    Returns a list of what was changed (empty = nothing to do)."""
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    start, end, found = _alert_section(lines)
+    kinds, changes = {}, []
+    for key in ALERTS:
+        if key in found:
+            kinds[key], old = parse_alert_value(key, found[key][1])
+            if old:
+                changes.append(f"{key} converted")
+        else:
+            kinds[key] = (ALERTS[key][2], ALERTS[key][3])
+            changes.append(f"{key} added")
+    if not changes:
+        return []
+    if start is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += [''] + ALERTS_SECTION_HEADER + [alert_line(key, kinds[key]) for key in ALERTS]
+    elif any(change.endswith('converted') for change in changes):
+        # old format: write the whole section new (header with the explanation, one line per signal)
+        tail = lines[end:]
+        lines = lines[:start] + ALERTS_SECTION_HEADER + [alert_line(key, kinds[key]) for key in ALERTS] \
+            + ([''] if tail else []) + tail
+    else:
+        insert = end   # missing lines at the end of the section (before trailing empty lines)
+        while insert > start + 1 and not lines[insert - 1].strip():
+            insert -= 1
+        lines[insert:insert] = [alert_line(key, kinds[key]) for key in ALERTS if key not in found]
+    _write_lines(path, lines)
+    return changes
+
+
+LOSS_LIMIT_LINE = ('total_loss_limit = -5           # loss limit alarm: total P&L of an own position in % '
+                   '(e.g. -5 = alarm when it falls below -5 %)')
+
+
+def update_config(path='config.ini'):
+    """Bring an older config.ini up to date (at the start of CaSa), line by line so that the token, the key
+    and all comments stay: [alarm] is renamed to [alertsconfig], total_loss_limit is added, [alerts] is
+    created or completed. Returns a list of what was changed."""
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    changes = []
+    headers = [line.strip()[1:-1].strip().lower() for line in lines if line.strip().startswith('[')]
+    if 'alertsconfig' not in headers:
+        for index, line in enumerate(lines):
+            if line.strip().lower() == '[alarm]':
+                lines[index] = '[alertsconfig]'
+                changes.append('section [alarm] renamed to [alertsconfig]')
+                break
+        else:
+            raise ValueError(f"{path}: section [alertsconfig] is missing.")
+    start = next(i for i, line in enumerate(lines) if line.strip().lower() == '[alertsconfig]')
+    end = start + 1
+    while end < len(lines) and not lines[end].strip().startswith('['):
+        end += 1
+    keys = {line.split('=', 1)[0].strip().lower() for line in lines[start + 1:end]
+            if '=' in line and not line.strip().startswith(('#', ';'))}
+    if 'total_loss_limit' not in keys:
+        insert = end
+        while insert > start + 1 and not lines[insert - 1].strip():
+            insert -= 1
+        lines.insert(insert, LOSS_LIMIT_LINE)
+        changes.append('total_loss_limit = -5 added to [alertsconfig]')
+    if changes:
+        _write_lines(path, lines)
+    changes += ensure_alert_section(path)
+    return changes
+
+
+def read_alert_settings(path='config.ini'):
+    """Kinds from config.ini [alerts] (required, see ensure_alert_section): {key: (stocks, crypto)}."""
+    config = configparser.ConfigParser(interpolation=None)
+    if not config.read(path, encoding='utf-8-sig'):
+        raise FileNotFoundError(f"{path} not found.")
+    if not config.has_section('alerts'):
+        raise ValueError(f"{path}: section [alerts] is missing (it is created at the start of CaSa).")
+    settings = {}
+    for key in ALERTS:
+        if not config.has_option('alerts', key):
+            raise ValueError(f"{path} [alerts]: line '{key}' is missing (it is added at the start of CaSa).")
+        settings[key] = parse_alert_value(key, config.get('alerts', key))[0]
+    return settings
+
+
+def set_alert_setting(key, asset_type, kind, path='config.ini'):
+    """Change one value in config.ini [alerts] (for /smart_alert_config). Only this line is rewritten, with its
+    comment; all other lines (token, key, own comments) stay exactly as they are."""
+    if key not in ALERTS or asset_type not in ('stock', 'crypto') or kind not in ALERT_KINDS:
+        raise ValueError(f"Unknown alert '{key}', asset type '{asset_type}' or kind '{kind}'.")
+    ensure_alert_section(path)
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    _start, _end, found = _alert_section(lines)
+    index, value = found[key]
+    stock, crypto = parse_alert_value(key, value)[0]
+    lines[index] = alert_line(key, (kind, crypto) if asset_type == 'stock' else (stock, kind))
+    _write_lines(path, lines)
+
+
+# ── Alarm journal (alarm_journal.csv) ──────────────────────────────────────
+# Every sent alarm with its price; 20 values (trading days for stocks, days for crypto) later the result is
+# filled in. This shows over time whether the alarms also work on new data, not only in the backtest.
+JOURNAL_PATH = 'alarm_journal.csv'
+JOURNAL_HEADER = ['date', 'time', 'type', 'symbol', 'name', 'code', 'alarm', 'direction', 'period', 'price',
+                  'score', 'watched', 'price_20', 'return_20', 'hit']
+JOURNAL_HORIZON = 20
+ALARM_NAMES = {'121': 'Positive-5', '141': 'Score>8', '151': 'Oversold', '201': 'Cross-EMA Sell', '211': 'Loss limit',
+               # infos can also be set to 'alarm' in config.ini [alerts]
+               '301': 'Cross-EMA Buy', '321': 'Negative-5', '361': '100-day high', '362': '100-day low',
+               '331': 'Pattern up', '332': 'Pattern down'}
+# Backtest 0.1.11 (54 assets, 20 days): share of alarms in the right direction
+ALARM_BACKTEST_HITS = {'121': 54, '141': 55, '151': 58, '201': 46}
+
+
+def read_journal(path=JOURNAL_PATH):
+    """All journal rows (missing file = empty journal)."""
+    try:
+        with open(path, newline='', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file, delimiter=';')
+            if reader.fieldnames != JOURNAL_HEADER:
+                raise ValueError(f"{path} has a wrong or missing header.")
+            return list(reader)
+    except FileNotFoundError:
+        return []
+
+
+def _write_journal(rows, path):
+    lines = [';'.join(JOURNAL_HEADER)] + [';'.join(str(row.get(column, '')) for column in JOURNAL_HEADER) for row in rows]
+    _write_lines(path, lines)
+
+
+def journal_add(asset_type, symbol, name, code, period, date, price, score, watched, path=JOURNAL_PATH):
+    """Record one sent alarm."""
+    rows = read_journal(path)
+    rows.append({'date': pd.Timestamp(date).strftime('%d/%m/%Y'), 'time': datetime.now().strftime('%H:%M'),
+                 'type': asset_type, 'symbol': symbol.lower(), 'name': ' '.join(str(name).replace(';', ',').split()),
+                 'code': code, 'alarm': ALARM_NAMES.get(code, code), 'direction': 'buy' if code.startswith('1') else 'sell',
+                 'period': period, 'price': f"{float(price):.6g}", 'score': score, 'watched': int(bool(watched)),
+                 'price_20': '', 'return_20': '', 'hit': ''})
+    _write_journal(rows, path)
+
+
+def journal_update(prices, path=JOURNAL_PATH, horizon=JOURNAL_HORIZON):
+    """Fill in the result of open alarms once `horizon` later prices exist.
+    prices: {(type, symbol lower): daily price series}. Returns the number of alarms evaluated now."""
+    rows = read_journal(path)
+    done = 0
+    for row in rows:
+        if row['return_20'] or (row['type'], row['symbol']) not in prices:
+            continue
+        series = prices[(row['type'], row['symbol'])]
+        later = series[series.index > pd.to_datetime(row['date'], format='%d/%m/%Y')]
+        if len(later) < horizon:
+            continue
+        end = float(later.iloc[horizon - 1])
+        change = (end / float(row['price']) - 1) * 100
+        row['price_20'], row['return_20'] = f"{end:.6g}", f"{change:.2f}"
+        row['hit'] = int(change > 0 if row['direction'] == 'buy' else change < 0)
+        done += 1
+    if done:
+        _write_journal(rows, path)
+    return done
+
+
+def journal_stats(path=JOURNAL_PATH):
+    """Per alarm: count, evaluated, hits in %, average change after 20 values, backtest hits."""
+    rows = read_journal(path)
+    stats = {}
+    for row in rows:
+        entry = stats.setdefault(row['code'], {'alarm': row['alarm'], 'count': 0, 'evaluated': 0, 'hits': 0, 'returns': []})
+        entry['count'] += 1
+        if row['return_20']:
+            entry['evaluated'] += 1
+            entry['hits'] += int(row['hit'])
+            entry['returns'].append(float(row['return_20']))
+    for code, entry in stats.items():
+        n = entry['evaluated']
+        entry['hit_pct'] = 100 * entry['hits'] / n if n else None
+        entry['avg_return'] = sum(entry['returns']) / n if n else None
+        entry['backtest_hit_pct'] = ALARM_BACKTEST_HITS.get(code)
+    first = min((pd.to_datetime(row['date'], format='%d/%m/%Y') for row in rows), default=None)
+    return stats, first
+
+
+def journal_report(path=JOURNAL_PATH):
+    """Telegram text (HTML) with the journal statistics."""
+    stats, first = journal_stats(path)
+    if not stats:
+        return '<b>Alarm journal</b>\nNo alarms recorded yet.'
+    order = [code for code in ALARM_NAMES if code in stats] + sorted(set(stats) - set(ALARM_NAMES))
+    lines = [f"{'Alarm':<15}{'n':>3}{'done':>5}{'hits':>6}{'avg':>8}{'test':>6}"]
+    for code in order:
+        e = stats[code]
+        hit = f"{e['hit_pct']:.0f}%" if e['hit_pct'] is not None else '–'
+        avg = f"{e['avg_return']:+.1f}%" if e['avg_return'] is not None else '–'
+        test = f"{e['backtest_hit_pct']}%" if e['backtest_hit_pct'] else '–'
+        lines.append(f"{e['alarm'][:15]:<15}{e['count']:>3}{e['evaluated']:>5}{hit:>6}{avg:>8}{test:>6}")
+    waiting = sum(e['count'] - e['evaluated'] for e in stats.values())
+    evaluated = sum(e['evaluated'] for e in stats.values())
+    text = (f"<b>Alarm journal</b> since {first:%d/%m/%Y}\n<pre>" + '\n'.join(lines) + "</pre>\n"
+            f"done = result after {JOURNAL_HORIZON} trading days (crypto: days) known, hits = price moved in the "
+            f"alarm direction, avg = average change (sell: falling is good), test = hits in the backtest.\n"
+            f"{waiting} alarms still waiting for their result.")
+    if evaluated < 30:
+        text += "\n<i>Still few results: wait for about 30 per alarm before drawing conclusions.</i>"
+    return text
 
 
 def apply_transactions(asset, rows):
