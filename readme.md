@@ -4,14 +4,11 @@
 
 CaSa watches your cryptocurrencies and stocks, analyses them with technical indicators and sends alerts, charts and daily summaries to **Telegram**. The same Telegram chat is used to control the program: run analyses on demand, record buys and sells, switch alarms on and off, plan important dates and create prompts for ChatGPT or Claude.
 
-<p align="center">
-  <a href="docs/installation.md"><img src="https://img.shields.io/badge/%E2%AC%87%20Install%20now-Windows%20%C2%B7%20Raspberry%20Pi-1e8449?style=for-the-badge" alt="Install now – Windows · Raspberry Pi" height="40"></a>
-</p>
 
 ## Contents
 
 - [Why CaSa?](#why-casa)
-- [In a Nutshell](#in-a-nutshell) – what CaSa does, setup in four steps, important Telegram commands
+- [In a Nutshell](#in-a-nutshell) – what CaSa does, what you need, important Telegram commands
 - [What's New](#whats-new)
 - [Learn More](#learn-more) – [features](docs/features.md), [installation](docs/installation.md), [commands](docs/commands.md), [alerts and charts](docs/alerts.md), [configuration](docs/configuration.md), [project structure](docs/project-structure.md), [roadmap](docs/roadmap.md)
 - [Known Limitations](#known-limitations)
@@ -42,29 +39,14 @@ CaSa gives signals, not investment advice. You decide.
 
 ### What you need
 
-- A **Raspberry Pi** 4 or 5 (a small, cheap computer), a microSD card and internet
+- A **Windows or Linux computer**, or for day and night a **Raspberry Pi** 4 or 5 (a small, cheap computer), and internet
 - **Telegram** on your phone
 
-### Set up in four steps
+<p><br>
+  <a href="docs/installation.md"><img src="https://img.shields.io/badge/%E2%AC%87%20Install%20now-Windows%20%C2%B7%20Linux-1e8449?style=for-the-badge" alt="Install now – Windows · Linux" height="40"></a>
+</p>
 
-1. **Create your Telegram bot**: in Telegram, send `/newbot` to [@BotFather](https://t.me/BotFather) and copy the token it gives you.
-2. **Write the CaSa image** to the microSD card with the free [Raspberry Pi Imager](https://www.raspberrypi.com/software/).
-3. **Start the Pi and log in once** from your PC – a short setup asks for your bot.
-4. **Done.** CaSa runs by itself from now on, also after a power cut.
-
-The step-by-step guide (about 20 minutes): [Option B: CaSa Image for the Raspberry Pi](docs/installation.md#option-b-casa-image-for-the-raspberry-pi-about-20-minutes).
-
-### Important Telegram commands
-
-| You want to … | Send |
-|---|---|
-| look at one stock or crypto now | `/check` |
-| choose which assets CaSa watches for you | `/smart_alert` |
-| get a reminder before an important date | `/event` |
-| set a plan for an asset (buy price, target, stop) | `/plan_alert` |
-| record a buy or a sale | `/record` |
-
-Below every alert you find buttons for the next step – for example to record a buy or to ask the AI.
+Try it out: Installed in 2–5 minutes.
 
 ## What's New
 
