@@ -107,4 +107,3 @@ This application generates alerts based on technical indicators and market data 
 - [CoinGecko](https://www.coingecko.com) — cryptocurrency market data
 - [Yahoo Finance](https://finance.yahoo.com) — stock market data
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/) — writes the CaSa image to the microSD card (Option B)
-- [Rock Pi](https://rockpi.org/) and [Armbian OS](https://www.armbian.com/) — other single-board computer and Linux, with the manual installation (Option A)
