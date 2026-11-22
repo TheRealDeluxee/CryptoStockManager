@@ -69,7 +69,7 @@ EUR prices from {source}; compare levels only with this source.
 - Signals today: {signals}
 
 B. News and dates
-Web search (if unavailable, say so): news of the last 14 days, the long-term trend of the last 3 to 5 years, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI); the market move is in A, do not search for it, confirmed dates of the next 4 weeks; older figures only dated.
+Web search (if unavailable, say so): news of the last 14 days, the long-term trend of the last 3 to 5 years, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move is in A, do not search for it, confirmed dates of the next 4 weeks; older figures only dated.
 {research}
 
 C. Rules
@@ -97,6 +97,7 @@ OLD_AI_PROMPT_HASHES = {
     '23fd733dc117326f996240c100c1daa195578fc51c9a6d78af3e89d2ddc22566',   # 0.1.11 - 0.1.13
     'f5a04a2a6faee6424640a369d5ec237520e5912ab8f9a7422817f3e9381108ba',   # 0.1.14 test version without market/sectors
     '36c770a8e45c04fb3da2637fe05e84723c587569beb6fd109c55f627b4864bbf',   # 0.1.14 test version without market move in A
+    'd76ce2738e4efd0483413d47a90109132f62f6a89c5286dbbf0b9f25a96766b5',   # 0.1.14 (without similar past events)
 }
 # Backtest findings for the AI (54 own assets, up to 14 years, 20 days after a signal vs. an average day)
 AI_EVIDENCE = {
@@ -118,12 +119,12 @@ AI_API_TASKS = {
                  "repeat them; name at most one price level, the one that would change the decision.\n"
                  "You have a web search tool and must use it before answering (at least one search; never write "
                  "that no news check was done): the news of the last 14 days, the long-term trend of the last "
-                 "3 to 5 years, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI); the market move is in A, do not search for it; none of this is in my data.\n"
+                 "3 to 5 years, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move is in A, do not search for it; none of this is in my data.\n"
                  "(1) The decision (Buy or Wait without a position, Hold, Add or Reduce with one, see Position "
                  "in A) and the long-term trend (e.g. 'long-term uptrend since 2021, today a pull-back "
                  "within it' or 'a break of it') and, from Market move in A, whether the market moves the same way. (2) The main "
                  "reason from the news, the business or its customer industries (with date and source), or that "
-                 "there is no relevant news. (3) What would change the decision (one price level "
+                 "there is no relevant news; if there was a similar event before, how the price reacted then. (3) What would change the decision (one price level "
                  "or one event) and your confidence (high/medium/low)."),
     'plan': ("\n\nE. Answer for this request (replaces D): a trading plan for my program. It watches three prices "
              "and sends me these messages by itself: 'Buy zone' (price at or below buy-zone: watch, it may still "
@@ -133,7 +134,8 @@ AI_API_TASKS = {
              "Reply with at most three short lines in plain words, one per message above that matters here, "
              "each 'message -> my action' (e.g. 'Turn up -> buy the first third'). No table, no sources list. "
              "Before answering use your web search tool (at least one search) for the news of the last 14 days, "
-             "and the industries that drive the company's demand (the market move is in A), so that the plan and "
+             "the industries that drive the company's demand and similar earlier events and the price reaction "
+             "after them (the market move is in A), so that the plan and "
              "the 'Not if' part of the note take them into account (e.g. 'Not if: AI stocks keep falling').\n"
              "Then exactly this block:\n"
              "```planalert\n"

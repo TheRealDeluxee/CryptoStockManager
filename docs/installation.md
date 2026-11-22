@@ -9,7 +9,7 @@
 ### Windows: the setup wizard
 
 1. **Create your Telegram bot**: in Telegram, send `/newbot` to [@BotFather](https://t.me/BotFather) and copy the token
-2. **Download [`install_casa.bat`](https://github.com/TheRealDeluxee/CryptoStockManager/releases/latest)** (in the release under *Source code (zip)*) and **double-click** it. If Windows warns "Windows protected your PC": *More info* → *Run anyway*
+2. **Download [`install_casa.bat`](https://github.com/TheRealDeluxee/CryptoStockManager/raw/main/install_casa.bat)** (right-click the link → *Save link as*; or on the GitHub start page *Code* → *Download ZIP*, unpack it and use the file in it), put it into an empty folder and **double-click** it. The wizard always installs the newest CaSa version. If Windows warns "Windows protected your PC": *More info* → *Run anyway*
 3. **Answer the questions** in the window
 4. **Your assets**: enter them in `assets.ini` (see [assets.ini](configuration.md#assetsini))
 5. **Start CaSa**: double-click `start_casa.bat` in your CaSa folder. Your bot sends "CaSa started" within a minute; closing the window stops CaSa. CaSa never starts by itself (not after the setup, not with Windows, not as a service)
