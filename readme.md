@@ -54,7 +54,7 @@ CaSa gives signals, not investment advice. You decide.
 <p><br>
   <a href="docs/installation.md"><img src="https://img.shields.io/badge/%E2%AC%87%20Install%20now-Windows%20%C2%B7%20Linux-1e8449?style=for-the-badge" alt="Install now – Windows · Linux" height="40"></a>
 </p>
-Try it out: Installed in 2–5 minutes.
+Try it out: installed in 2–5 minutes, once Telegram is installed and your bot is created (with @BotFather).
 
 ## What's New
 
