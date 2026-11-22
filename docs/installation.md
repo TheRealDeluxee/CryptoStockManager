@@ -52,17 +52,18 @@ You need: a Raspberry Pi 4 or 5, a microSD card (16 GB or more), a power supply,
 
 ### Step 1: Write the image
 
-1. Install and start the **Raspberry Pi Imager** on your PC: [raspberrypi.com/software](https://www.raspberrypi.com/software/)
-2. **Device**: your Raspberry Pi (4 or 5)
-3. **Operating system**: scroll down to **Use custom** and choose `casa.img.xz`
-4. **Storage**: your SD card
-5. **Next** → **Edit settings**:
+1. **Download the CaSa image** [`casa-raspberry-pi.img.xz`](https://github.com/TheRealDeluxee/CryptoStockManager/releases/download/pi-image/casa-raspberry-pi.img.xz) (about 700 MB, also on the [release page of the image](https://github.com/TheRealDeluxee/CryptoStockManager/releases/tag/pi-image) under *Assets*). Do not unpack it – the Imager reads the `.xz` file directly
+2. Install and start the **Raspberry Pi Imager** on your PC: [raspberrypi.com/software](https://www.raspberrypi.com/software/)
+3. **Device**: your Raspberry Pi (4 or 5)
+4. **Operating system**: scroll down to **Use custom** and choose `casa-raspberry-pi.img.xz`
+5. **Storage**: your SD card
+6. **Next** → **Edit settings**:
    - Tab *General*: user name **`casa-user`** and a password (note it down); Wi-Fi name and password (not needed with a LAN cable). Hostname (`casa-pi`), time zone (Europe/Berlin) and keyboard (German) are already set in the image
    - Tab *Services*: **Enable SSH** → *Use password authentication*
-6. **Save** → **Yes** → **Yes**: the card is written (all data on it is deleted)
-7. Put the card into the Pi, connect power (and LAN), wait 2–3 minutes
+7. **Save** → **Yes** → **Yes**: the card is written (all data on it is deleted)
+8. Put the card into the Pi, connect power (and LAN), wait 2–3 minutes
 
-Without the settings in step 5 the Pi asks on its own screen at the first start for the keyboard, a user name and a password (screen and keyboard needed).
+Without the settings in step 6 the Pi asks on its own screen at the first start for the keyboard, a user name and a password (screen and keyboard needed).
 
 ### Step 2: Log in once – the wizard starts by itself
 
