@@ -2,6 +2,8 @@
 /.pytest_cache
 /.vscode
 /config.ini
+/config.ini.bak
+/start_casa.bat
 /logfile.txt
 /logfile.old.txt
 /plots

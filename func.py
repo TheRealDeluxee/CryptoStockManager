@@ -509,11 +509,11 @@ def chart_pattern(df, recent=60):
     direction = 'fall' if f['top'] else 'rise'
     if f['status'] == 'breakout':
         sentence = (f"{f['name']} ({meaning}). On {dates.iloc[f['at']]:%d/%m} the price broke "
-                    f"{'down' if f['top'] else 'up'} → {'sell' if f['top'] else 'buy'} signal. "
+                    f"{'down' if f['top'] else 'up'}. "
                     f"It may {direction} to about {format_euro(target)}. "
                     f"The signal is wrong if the price goes {'above' if f['top'] else 'below'} {format_euro(f['stop'])}.")
     else:
-        sentence = (f"{f['name']} forming ({meaning}). {'Sell' if f['top'] else 'Buy'} only if the price closes "
+        sentence = (f"{f['name']} forming ({meaning}). If the price closes "
                     f"{'below' if f['top'] else 'above'} {format_euro(neck_now)}, it may {direction} to about {format_euro(target)}.")
 
     ago = lambda i: n - 1 - i
@@ -1213,7 +1213,13 @@ def risk_reward(price, sr_zones):
     else:
         short = ('Less room up than down.' if up < down else
                  'Twice as much room up as down.' if up >= 2 * down else 'More room up than down.')
-    return {'mark': 'ℹ️', 'short': short, 'text': text, 'lines': lines}
+    # Position between S1 (0 %) and R1 (100 %) seen from above: the share of the room up to R1 within the whole
+    # range S1..R1 (e.g. R1 +6.9 %, S1 -5.4 % -> 56 % of the range is room up)
+    room = up / (up + down) * 100 if up is not None and down is not None and up + down > 0 else None
+    return {'mark': 'ℹ️', 'short': short, 'text': text, 'lines': lines, 'room': room,
+            'ratio': up / down if up is not None and down else None, 'up': up, 'down': down,
+            'resistance': resistance['center'] if resistance else None,
+            'support': support['center'] if support else None}
 
 
 def score_rank(full, window=100):
@@ -1257,6 +1263,18 @@ def score_only(df):
     return score + signals['ROC5']
 
 
+PERCENTILE_STEPS = 8          # characters per bar (one character = 12.5 %)
+PERCENTILE_EMPTY = '░'
+# Block characters instead of coloured emoji squares: in the monospace block of Telegram emoji are drawn
+# smaller or wider than letters, block characters have exactly the width of a letter (aligned bars).
+
+
+def percentile_bar(percent, label='>{:.0f}%'):
+    """Bar for 'higher than on x % of the last 100 values', e.g. '███░░░░░ >40%'; label: text after the bar."""
+    filled = min(PERCENTILE_STEPS, max(0, round(percent / 100 * PERCENTILE_STEPS)))
+    return f"{'█' * filled}{PERCENTILE_EMPTY * (PERCENTILE_STEPS - filled)} {label.format(percent)}"
+
+
 def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     """Shared figures for alarms and /check; this function sends nothing.
     rank: score 1-10 from score_rank(); unit: 'days' (daily analysis) or 'hours' (hourly analysis);
@@ -1270,19 +1288,24 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     part_trend = score - part_rsi - (part_short - signals['ROC5'])
     score += signals['ROC5']
 
+    def row(name, shown, higher=None, label='>{:.0f}%'):
+        # one line of the figure list: name, real value, bar with the position within the last 100 values
+        bar = percentile_bar(higher, label) if higher is not None else f"{PERCENTILE_EMPTY * PERCENTILE_STEPS} neutral"
+        return f"{name:<8}{shown:>10} {bar}"   # fixed width: values are aligned
+
     def line(column):
-        # real value first, in brackets its position within the last 100 values (as "376.25 €  (+6.4 %)")
+        # real value first, then a bar with its position within the last 100 values
         quantile = quantiles[column]
         current = df[column].iloc[-1] if column in df else float('nan')
         if not math.isfinite(quantile) or not math.isfinite(current):
-            return f"{column:<6}{'no data':>13}  (rated neutral)"
+            return row(column, 'no data')
         shown = (f"{current:.1f}" if column == 'RSI14' else format_euro(current) if column == 'SMA7' else
                  human_format(current, None) if column == 'VMA7' else f"{current:+.1f} %")
-        # "(>73% of days)" = higher than on 73 % of the last 100 values. For the score the RSI rank is
+        # ">73%" = higher than on 73 % of the last 100 values. For the score the RSI rank is
         # inverted (high RSI = overbought); here the real position is shown, as for all other lines.
         # No +/- signal marks: the traffic light at the top already shows the effect on the score.
         higher = 100 - quantile if column == 'RSI14' else quantile
-        return f"{column:<6}{shown:>13}  (>{higher:.0f}% of {unit})"   # fixed width: values are aligned
+        return row(column, shown, higher)
 
     def block(lines, label):
         # Telegram HTML: header bold, values in monospace (the assessment sentence is in the summary above)
@@ -1295,15 +1318,18 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     price = float(df['Price'].iloc[-1])
     sma200 = df['SMA200'].iloc[-1] if 'SMA200' in df else float('nan')
     period = '200-day' if unit == 'days' else '200-hour'
+    # One line: how far the price is above/below the SMA200 in %, with a bar like the indicators:
+    # this distance is higher than on x % of the last 100 values (price / SMA200 of each of these days)
     if not math.isfinite(sma200):
         long_mark, long_text = '🟡', 'Unknown (less than 200 values).'
-        long_lines = [f"{'Price':<6}{format_euro(price):>13}", f"{'SMA200':<6}{'not available':>13}"]
+        long_line = row('vsSMA200', 'no data')
     else:
         long_mark, long_text = (('🟢', f"Above the {period} average: uptrend.") if price > sma200 else
                                 ('🔴', f"Below the {period} average: downtrend."))
-        # the percentage describes the price (how far above/below the average it is), so it stands there
-        long_lines = [f"{'Price':<6}{format_euro(price):>13}  ({(price / sma200 - 1) * 100:+.1f} % vs SMA200)",
-                      f"{'SMA200':<6}{format_euro(float(sma200)):>13}"]
+        distance = (df['Price'] / df['SMA200']).iloc[-101:]
+        previous = distance.iloc[:-1].dropna()
+        higher = float((previous < distance.iloc[-1]).mean() * 100) if len(previous) else None
+        long_line = row('vsSMA200', f"{(price / sma200 - 1) * 100:+.1f} %", higher)
     # Room to resistance vs. distance to support: is an entry still worth it?
     rr = risk_reward(price, sr_zones) if sr_zones is not None else None
 
@@ -1312,34 +1338,44 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     relative = (f" (low compared with the last 100 {unit})" if signals['RSI14'] >= 2 else
                 f" (high compared with the last 100 {unit})" if signals['RSI14'] <= -2 else '')
     if rsi_now >= 70:
-        rsi_mark, rsi_text = '🔴', f"RSI {rsi_now:.0f}: overbought – risk of a pullback{relative}."
+        rsi_mark, rsi_text = '🔴', f"Overbought – risk of a pullback{relative}."
     elif rsi_now <= 30:
-        rsi_mark, rsi_text = '🟢', f"RSI {rsi_now:.0f}: oversold – rebound possible{relative}."
+        rsi_mark, rsi_text = '🟢', f"Oversold – rebound possible{relative}."
     else:
-        rsi_mark, rsi_text = '🟡', f"RSI {rsi_now:.0f}: neutral{relative}."
+        rsi_mark, rsi_text = '🟡', f"Neutral{relative}."
 
-    # Pattern only as a short status here (🟢 buy signal, 🔴 sell signal, 🟡 not yet / none);
-    # the full description follows in the Pattern-Analysis block.
+    # Pattern only as a short status here, as information without buy/sell signal (ℹ️ name and state, 🟡 none);
+    # the full description follows in the Pattern block.
     pattern_text = pattern['sentence'] if pattern else 'No chart pattern detected.'
     if not pattern:
         pattern_mark, pattern_short = '🟡', 'None detected.'
     elif pattern['status'] != 'breakout':
-        pattern_mark, pattern_short = '🟡', 'Not a signal yet.'
+        pattern_mark, pattern_short = 'ℹ️', f"{pattern['name']} forming."
     else:
-        pattern_mark, pattern_short = ('🔴', 'Sell signal.') if pattern['top'] else ('🟢', 'Buy signal.')
-    # One entry per block: (traffic light, name, short sentence at the top, block content below)
-    sections = [(long_mark, 'Long-term-Analysis', long_text, block(long_lines, 'Long-term-Analysis'))]
+        pattern_mark, pattern_short = 'ℹ️', f"{pattern['name']}: price broke {'down' if pattern['top'] else 'up'}."
+    # The figures as one numbered list without headers; the summary at the top names their numbers.
+    # Each entry: (traffic light, name, short sentence at the top, its lines in the list)
+    groups = [(long_mark, 'Long-term', long_text, [long_line])]
     if rr:
-        sections.append((rr['mark'], 'Risk/Reward-Analysis', rr['short'], block(rr['lines'], 'Risk/Reward-Analysis')))
-    sections += [
-        (rsi_mark, 'RSI-Analysis', rsi_text, block([line('RSI14')], 'RSI-Analysis')),
-        (mark(part_trend), 'Trend-Analysis', text3.split(': ', 1)[-1],
-         block([line('SMA7'), line('VMA7')], 'Trend-Analysis')),
-        (mark(part_short), 'Short-term-Analysis', text2.split(': ', 1)[-1],
-         block([line('ROC5'), line('VROC5')], 'Short-term-Analysis')),
-        (pattern_mark, 'Pattern-Analysis', pattern_short,
-         f"<b>Pattern-Analysis</b>\n{html.escape(pattern_text)}" if pattern else ''),
+        # R1/S1: ratio room up : room down, the bar = share of the room up to R1 within the range S1 (0 %) .. R1 (100 %)
+        rr_short = rr['short']
+        rr_line = (row('R1/S1', f"{rr['ratio']:.1f} : 1", rr['room'], '{:.0f}%↑') if rr['room'] is not None
+                   else row('R1/S1', 'no R1' if rr['resistance'] is None else 'no S1'))
+        groups.append((rr['mark'], 'Risk/Reward', rr_short, [rr_line]))
+    groups += [
+        (rsi_mark, 'RSI', rsi_text, [line('RSI14')]),
+        (mark(part_trend), 'Trend', text3.split(': ', 1)[-1], [line('SMA7'), line('VMA7')]),
+        (mark(part_short), 'Short-term', text2.split(': ', 1)[-1], [line('ROC5'), line('VROC5')]),
     ]
+    numbered, sections = [], []
+    for light, name, sentence, rows in groups:
+        numbers = list(range(len(numbered) + 1, len(numbered) + len(rows) + 1))
+        numbered += [f"{number} {text}" for number, text in zip(numbers, rows)]
+        sections.append((light, f"{name} ({', '.join(map(str, numbers))})", sentence, ''))
+    # One entry per summary line: (traffic light, name with the numbers of its figures, short sentence, block below)
+    sections[0] = sections[0][:3] + (f"<pre>{html.escape(chr(10).join(numbered))}</pre>",)
+    sections.append((pattern_mark, 'Pattern', pattern_short,
+                     f"<b>Pattern</b>\n{html.escape(pattern_text)}" if pattern else ''))
     if rank is None:
         head = f"<b>Score: {score}</b>"
     elif rank == 1:
@@ -1389,6 +1425,18 @@ ALERTS = {
 ALERT_KINDS = ('alarm', 'info', 'off')
 
 
+def backtest_note(key, asset_type):
+    """Short backtest line for an alarm or info, e.g. 'Backtest: price rose in 57 % of cases (after 20 days).'
+    From the probability in ALERTS for stocks or crypto; '' if the signal has no backtest."""
+    odds = ALERTS[key][5]
+    found = re.search(rf"{'crypto' if asset_type == 'crypto' else 'stocks'} (\d+) %", odds)
+    if not found:
+        return ''
+    what = ('price rose' if odds.startswith('rises') else 'price fell' if odds.startswith('falls')
+            else 'price moved in the breakout direction')
+    return f"Backtest: {what} in {found.group(1)} % of cases (after 20 days)."
+
+
 def alert_active(settings, key, asset_type=None):
     """'alarm', 'info' or None (off). settings: {key: (kind for stocks, kind for crypto)};
     a missing entry uses the default. Without a known asset type the stock setting is used, else crypto."""
@@ -1434,16 +1482,19 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
 
     def create_info(code, title, value, note):
         # Info: a notable event (no buy/sell wording, never important, not counted in the alarm journal)
-        message = (f"<b>{html.escape(symbol)} — ℹ️ Info: {html.escape(title)}</b>\n"
-                   f"Trigger: {html.escape(title)} ({data_type})\n\n" + details['message']
+        # header: the asset, below it one line with what triggered the info (no second "Trigger:" line)
+        message = (f"<b>{html.escape(symbol)}</b>\n"
+                   f"ℹ️ Info: {html.escape(title)} ({data_type})\n\n" + details['message']
                    + f"\n\n<i>{html.escape(note)}</i>")
         if watch_list:
             message += "\n<i>Watched asset – not in your portfolio.</i>"
         alarms[code] = {"value": value, "priority": 0, "msg": message, "kind": "info"}
 
     def emit(key, code, buy_sell, title, value, note, important=True):
-        # Alarm or info, as chosen in config.ini [alerts] (or nothing when switched off for this asset type)
+        # Alarm or info, as chosen in config.ini [alerts] (or nothing when switched off for this asset type).
+        # note None: one short line with the backtest result of this signal for stocks or crypto
         kind = alert_active(alert_settings, key, asset_type)
+        note = note or backtest_note(key, asset_type)
         if kind == 'alarm':
             create_alarm(code, buy_sell, title, value, important)
             alarms[code]["msg"] += f"\n\n<i>{html.escape(note)}</i>"
@@ -1467,26 +1518,24 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
     # Positive-5: only on the first value above the threshold, not on every following value
     if uptrend and roc_now > seven_day_price_change and not roc_before > seven_day_price_change:
         emit('positive5', "121", "Buy", "Positive-5", value_ts,
-             "Backtest: rises after 20 days: stocks 54 % (normal 52 %), crypto 54 % (normal 49 %).")
+             None)
 
     # Score>8: first daily value above 8 (crypto: +7.6 % vs. an average day after 20 days; stocks: no advantage)
     if daily and uptrend and score > 8 and score_before() <= 8:
         emit('score8', "141", "Buy", "Score>8", value_ts,
-             "Backtest: rises after 20 days: stocks 55 % (normal 52 %, no average gain), crypto 56 % (normal 49 %, +7.6 %).")
+             None)
 
     # Oversold: score falls to -8 or lower for the first time. Stocks often recover a little after a strong
     # sell-off (backtest 47 stocks: +1.3 % vs. an average day after 20 days, 58 % hits, all periods positive).
     # Crypto tends to keep falling (-5.5 %), therefore the default is stocks only. No SMA200 filter.
     if daily and score <= -8 and score_before() > -8:
         emit('oversold', "151", "Buy", "Oversold (strong sell-off, possible rebound)", value_ts,
-             "Oversold: after a strong sell-off stocks often recover a little. Backtest: right in about 58 % "
-             "of cases, about +1.3 % more than on an average day after 20 days. Not a confirmed bottom – "
-             "the price may keep falling.", important=False)
+             None, important=False)
 
     # Trend turns down: only for assets in your portfolio; the most stable signal since 2020
     if daily and not watch_list and yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0:
         emit('cross_ema_sell', "201", "Sell", "Cross-EMA", value_ts,
-             "Backtest: falls after 20 days: stocks 45 % (normal 48 %, but -0.9 % on average), crypto 55 % (normal 51 %).")
+             None)
 
     # Loss limit: the total P&L of an own position (value vs. FIFO buy price) falls below your limit
     # (config.ini [alertsconfig] total_loss_limit) - on the day it crosses the limit, again after a recovery above it
@@ -1498,24 +1547,20 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
 
     if daily and yesterday_EMA_diff_pct < 0 and current_EMA_diff_pct > 0:
         emit('cross_ema_buy', "301", "Buy", "Trend turns up (Cross-EMA)", value_ts,
-             "The 12-day average crossed the 26-day average upwards. Backtest: rises after 20 days: "
-             "stocks 57 %, crypto 53 % (normal 52 %, 49 %).", important=False)
+             None, important=False)
 
     if roc_now < -seven_day_price_change and not roc_before < -seven_day_price_change:
         emit('negative5', "321", "Sell", f"Sharp drop ({roc_now:+.1f} % in 5 days)", value_ts,
-             "Backtest: afterwards clearly more volatile. Stocks often recovered a little (+1.2 % vs. an "
-             "average day after 20 days), crypto kept falling more often (-1.8 %).", important=False)
+             None, important=False)
 
     if daily and len(df) >= 100:
         price, before = df['Price'].iloc[-1], df['Price'].iloc[:-1]
         if price >= before.max() and not before.iloc[-1] >= before.iloc[:-1].max():
             emit('high100', "361", "Buy", "New 100-day high", value_ts,
-                 "Highest price of the last 100 days. Backtest: crypto rose further afterwards (+9.1 % vs. an "
-                 "average day after 20 days, 7 of 7), stocks ±0 %.", important=False)
+                 None, important=False)
         if price <= before.min() and not before.iloc[-1] <= before.iloc[:-1].min():
             emit('low100', "362", "Sell", "New 100-day low", value_ts,
-                 "Lowest price of the last 100 days. Backtest: stocks recovered a little afterwards (+0.8 % vs. "
-                 "an average day after 20 days), crypto fell further (-1.0 %).", important=False)
+                 None, important=False)
 
     # Chart pattern: fresh breakout through the neckline (today or the value before); value = date of the
     # breakout, so the same breakout is reported only once.
@@ -1524,8 +1569,7 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
         direction = 'down' if pattern['top'] else 'up'
         emit('pattern', "332" if pattern['top'] else "331", "Sell" if pattern['top'] else "Buy",
              f"{pattern['name']} breakout {direction}", breakout_ts,
-             "Clear chart pattern breakout (at least half an average daily range beyond the neckline). Backtest: "
-             "stocks ±0 %, crypto +4.7 % vs. an average day after 20 days.", important=False)
+             None, important=False)
 
     return alarms, tech_indicators, score
 

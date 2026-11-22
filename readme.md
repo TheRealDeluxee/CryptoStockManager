@@ -48,7 +48,7 @@ CaSa gives signals, not investment advice. You decide.
 3. **Start the Pi and log in once** from your PC – a short setup asks for your bot.
 4. **Done.** CaSa runs by itself from now on, also after a power cut.
 
-The step-by-step guide: [Option A: CaSa Image for the Raspberry Pi](docs/installation.md#option-a-casa-image-for-the-raspberry-pi-recommended).
+The step-by-step guide (about 20 minutes): [Option B: CaSa Image for the Raspberry Pi](docs/installation.md#option-b-casa-image-for-the-raspberry-pi-about-20-minutes).
 
 ### Important Telegram commands
 
@@ -79,7 +79,7 @@ Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 | Page | Content |
 |---|---|
 | [Features](docs/features.md) | Everything CaSa can do: analysis, alarms, charts and messages, portfolio, planning and research |
-| [Installation](docs/installation.md) | Option A: CaSa image for the Raspberry Pi (hardware, step by step, daily use, build the image) · Option B: Quick Start on your own computer |
+| [Installation](docs/installation.md) | Option A: manual installation (2–5 minutes on Windows), to try CaSa out or integrate it into an existing system · Option B: CaSa image for the Raspberry Pi (about 20 minutes; hardware, step by step, daily use) |
 | [Telegram commands](docs/commands.md) | Every command with its options |
 | [Understanding alerts and charts](docs/alerts.md) | When CaSa sends what, score 1–10, traffic lights, figure blocks, chart, alarms and infos with their backtest results |
 | [Configuration](docs/configuration.md) | `config.ini`, `assets.ini`, `events.ini`, `planalert.ini`, `transactions.csv`, AI prompt, alarm journal, `logfile.txt` |

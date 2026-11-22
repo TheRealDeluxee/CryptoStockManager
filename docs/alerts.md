@@ -19,7 +19,7 @@ Started after 12:30, the daily analysis runs at once. With `test_mode = 1` all a
 CaSa sends two kinds of messages, and you choose for every signal – separately for stocks and crypto – whether it comes as an alarm, as an info or not at all: in `config.ini` `[alerts]` (required, created automatically) or in Telegram with `/smart_alert_config`.
 
 - **🔔 Alarm**: header "Potential buy" / "Potential sell", can be marked as important, recorded in the alarm journal (monthly report)
-- **ℹ️ Info**: header "Info: …", never marked as important, not part of the alarm journal
+- **ℹ️ Info**: the asset in bold, below it "ℹ️ Info: …" with the trigger, never marked as important, not part of the alarm journal
 
 | Signal | Switch | Default stocks; crypto | Meaning |
 |---|---|---|---|
@@ -62,9 +62,13 @@ Below every alarm and info a **🤖 AI prompt** button creates the `/ai_prompt` 
 
 ![Alarm message in Telegram: score 1–10 with traffic-light lines and figure blocks](telegram_message.png)
 
-- **Score 1–10**: today's rating compared with the last 100 days of the same asset (10 = among the strongest 10 %), followed by one traffic-light line per analysis (🟢 good, 🔴 bad, 🟡 neutral or not yet clear) in the same order as the blocks below: **Long-term-Analysis** (price vs. 200-day average), **Risk/Reward-Analysis** (ℹ️ information only: room to resistance R1 and distance to support S1 for stop and target; in the backtest a "good" ratio did not lead to better results), **RSI-Analysis** (real RSI value: below 30 oversold, above 70 overbought), **Trend-Analysis**, **Short-term-Analysis** and **Pattern-Analysis**. Each block below shows the figures behind its line. Internally CaSa still calculates a score from -18 to +18 (used for the Score>8 alarm and the AI prompt).
-- **Pattern-Analysis**: in the confirmation only a short status (buy signal, sell signal, not a signal yet, none detected); below it as its own block the detected chart pattern in one sentence (forming or breakout, price that triggers the signal, target, invalidation level); drawn in pink in the chart
-- **RSI14**, **SMA7**, **VMA7**, **ROC5**, **VROC5** in the blocks: the real value first (RSI, 7-day average in €, average volume, 5-day change in %), in brackets how it compares with the last 100 values (e.g. `(>88% of days)` = higher than on 88 % of the last 100 days). Values in the top or bottom 30 % raise or lower the score; the traffic light at the top shows the result.
+- **Last line** of an alarm or info: how often the signal was right in the backtest for this asset type, e.g. `Backtest: price rose in 57 % of cases (after 20 days).` The details (compared with an average day) are in the tables above
+- **Score 1–10**: today's rating compared with the last 100 days of the same asset (10 = among the strongest 10 %), followed by one traffic-light line per analysis (🟢 good, 🔴 bad, 🟡 neutral or not yet clear) with the numbers of its figures in brackets, e.g. **Trend (3, 4)**: **Long-term** (price vs. 200-day average), **Risk/Reward** (ℹ️ information only: room to resistance R1 and distance to support S1 for stop and target; in the backtest a "good" ratio did not lead to better results), **RSI** (real RSI value: below 30 oversold, above 70 overbought), **Trend**, **Short-term** and **Pattern**. Each block below shows the figures behind its line. Internally CaSa still calculates a score from -18 to +18 (used for the Score>8 alarm and the AI prompt).
+- **Pattern**: in the summary only a short information without buy or sell signal (e.g. ℹ️ Head and Shoulders forming, ℹ️ Double Bottom: price broke up, 🟡 none detected); below it as its own block the detected chart pattern in one sentence (forming or breakout, the price that would complete it, target, invalidation level); drawn in pink in the chart
+- **Figures** below the summary: one compact numbered list without headers (1 vsSMA200, 2 R1/S1, 3 RSI14, 4 SMA7, 5 VMA7, 6 ROC5, 7 VROC5; without support/resistance zones R1/S1 is left out and the numbers move up), then the Pattern block
+- **R1/S1** (Risk/Reward): the ratio of the room up to the nearest resistance R1 and the room down to the nearest support S1 (e.g. `1.3 : 1`); the bar shows the room up as share of the whole range S1 (0 %) to R1 (100 %), e.g. R1 +6.9 % and S1 -5.4 % → `56%↑`. The prices of R1 and S1 are drawn in the chart
+- **vsSMA200** (1, Long-term): how far the price is above or below the 200-day average in %, with the same bar: this distance compared with the last 100 days (e.g. `>10%` = the distance was lower on only 10 % of the days)
+- **RSI14**, **SMA7**, **VMA7**, **ROC5**, **VROC5** (2–6): the real value first (RSI, 7-day average in €, average volume, 5-day change in %), then a bar with its position within the last 100 values (e.g. `███████░ >88%` = higher than on 88 % of the last 100 days). Values in the top or bottom 30 % raise or lower the score; the traffic light at the top shows the result.
 - **Amount >1 year**: holdings older than one year
 
 *Fake-out*: the price moves, but volume does not support the move.

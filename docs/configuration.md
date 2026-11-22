@@ -23,29 +23,21 @@ infos_for = all                 # infos (not alarms) for: all = every asset in t
 api_key =
 
 [alerts]
-# Which signals CaSa sends, separately for stocks and crypto:
-#   name = <stocks>; <crypto>      each one of: alarm, info, off
-#   alarm = message "Potential buy/sell", can be marked important, counted in the alarm journal
-#   info  = message "Info: ...", never important, not counted in the alarm journal
-#   off   = no message
-# The comment behind each line: what the signal means and how often the price moved in the expected
-# direction within 20 days in the backtest (54 assets, up to 14 years); "normal" = the same on an
-# average day. Also changeable in Telegram with /smart_alert_config.
+# name = <stocks>; <crypto>, each alarm, info or off (explained in the README; also /smart_alert_config)
 #                stocks crypto
-positive5      = alarm; alarm # price +10 % in 5 days (uptrend) | rises: stocks 54 % (normal 52 %), crypto 54 % (normal 49 %)
-score8         = info;  alarm # score above 8 for the first time (uptrend) | rises: stocks 55 % (normal 52 %, no average gain), crypto 56 % (normal 49 %)
-oversold       = alarm; off   # score -8 or lower: strong sell-off | rises: stocks 58 % (normal 52 %), crypto 48 % (normal 49 %)
-cross_ema_sell = alarm; alarm # trend turns down (only own positions) | falls: stocks 45 % (normal 48 %, but -0.9 % on average), crypto 55 % (normal 51 %)
-loss_limit     = alarm; alarm # total P&L of an own position falls below total_loss_limit in [alertsconfig] | risk alarm for your own limit, no backtest
-cross_ema_buy  = info;  info  # trend turns up | rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)
-negative5      = info;  info  # price -10 % in 5 days | rises: stocks 53 % (normal 52 %), crypto 48 % (normal 49 %)
-high100        = info;  alarm # new highest price of 100 days | rises: stocks 55 % (normal 52 %), crypto 60 % (normal 49 %)
-low100         = info;  info  # new lowest price of 100 days | rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)
-pattern        = info;  info  # chart pattern breaks out | in breakout direction: stocks 51 % (normal 51 %), crypto 56 % (normal 50 %)
+positive5      = alarm; alarm
+score8         = info;  alarm
+oversold       = alarm; off
+cross_ema_sell = alarm; alarm
+loss_limit     = alarm; alarm
+cross_ema_buy  = info;  info
+negative5      = info;  info
+high100        = info;  alarm
+low100         = info;  info
+pattern        = info;  info
 
 [anthropic]
 # optional: key for the Claude API (https://console.anthropic.com), empty = Claude API not used
-# the API costs money per request (billed by Anthropic per token)
 api_key =
 model = claude-opus-5-5
 ```
@@ -54,7 +46,20 @@ model = claude-opus-5-5
 
 **Fewer infos:** `infos_for = portfolio` sends infos (ℹ️) only for assets you hold; for watched assets ("Watched asset – not in your portfolio") only the alarms come. `infos_for = all` (default) sends infos for every asset in the analysis. CaSa adds the line at the start if it is missing. Also switchable in Telegram: the last button of `/smart_alert_config` (ℹ️ Infos for: all assets / only assets you hold), used from the next analysis on.
 
-**Alarms and infos:** the `[alerts]` section is required. Each line is `name = <stocks>; <crypto>`, each one of `alarm`, `info` or `off`; the comment behind it says what the signal means and how often the price moved in the expected direction within 20 days in the backtest, for stocks and crypto, compared with an average day ("normal"). If the section or a line is missing, CaSa adds it at the start with the defaults; lines in the earlier format (one value: all, stock, crypto, off) are converted without changing their effect. `/smart_alert_config` in Telegram shows two buttons per signal (📈 stocks, 🪙 crypto); each tap switches alarm → info → off and rewrites only that line, with its comment. The change applies from the next analysis on, without `/restart`.
+**Alarms and infos:** the `[alerts]` section is required. Each line is `name = <stocks>; <crypto>`, each one of `alarm` (message "Potential buy/sell", can be marked important, counted in the alarm journal), `info` (message "Info: …", never important, not in the journal) or `off` (no message); how often each signal was right in the backtest: [Understanding alerts and charts](alerts.md). The explanation and the comments behind the lines of earlier versions are removed at the start (the values stay). If the section or a line is missing, CaSa adds it at the start with the defaults; lines in the earlier format (one value: all, stock, crypto, off) are converted without changing their effect. `/smart_alert_config` in Telegram shows two buttons per signal (📈 stocks, 🪙 crypto); each tap switches alarm → info → off and rewrites only that line; it also shows what each signal means. The change applies from the next analysis on, without `/restart`.
+
+| Name | Meaning |
+|---|---|
+| `positive5` | price +10 % in 5 days (uptrend) |
+| `score8` | score above 8 for the first time (uptrend) |
+| `oversold` | score -8 or lower: strong sell-off |
+| `cross_ema_sell` | trend turns down (only own positions) |
+| `loss_limit` | total P&L of an own position falls below total_loss_limit in [alertsconfig] |
+| `cross_ema_buy` | trend turns up |
+| `negative5` | price -10 % in 5 days |
+| `high100` | new highest price of 100 days |
+| `low100` | new lowest price of 100 days |
+| `pattern` | chart pattern breaks out |
 
 **CoinGecko key (optional):** if `api_key` is set, CaSa uses it; otherwise the free public access. With a key, the limit (30 requests per minute, 10,000 per month) applies per key instead of per internet connection – useful for more cryptos or several CaSa instances on one network.
 
@@ -145,20 +150,18 @@ crypto;bitcoin;Bitcoin;buy;500.0;0.01;01/01/2024
 stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
 ```
 
-## AI prompt (config.ini `[ai_prompt]`)
+## ai_prompt.txt (created automatically)
 
-Template for the `/ai_prompt` prompt (also the data for `/ai_api_decision3s` and `/ai_api_plan`, which add their own answer format at the end). It is the last section of `config.ini`, added automatically at the start, and can be edited freely:
+Template for the `/ai_prompt` prompt (also the data for `/ai_api_decision3s` and `/ai_api_plan`, which add their own answer format at the end). CaSa creates the file at the start if it is missing; it can be edited freely:
 
-```ini
-[ai_prompt]
-template =
-  Assess {name} ({symbol}, {type}) for a three-month horizon ...
+```
+Assess {name} ({symbol}, {type}) for a three-month horizon ...
 
-  A. My program's data (daily values, {date})
-  ...
+A. My program's data (daily values, {date})
+...
 ```
 
-Every line of the text starts with two spaces; empty lines are allowed. Lines starting with `#` or `;` are treated as comments. Up to 0.1.12 the template was the file `ai_prompt.txt`: at the start CaSa moves its text into `config.ini` (your own changes stay) and keeps the old file as `ai_prompt.old.txt`. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program. Since 0.1.11 also `{signals}` (alarms and infos the analysis would send today for this asset) and `{evidence}` (the backtest findings for stocks or crypto, e.g. that stocks recovered slightly after strong sell-offs while crypto tended to keep falling). The leading market is chosen by the company's home country (Nvidia on Xetra: S&P 500), not by the exchange. An unchanged template from an earlier version is replaced by the current one automatically; your own changes are never overwritten.
+In 0.1.13 the template was the section `[ai_prompt]` in `config.ini`: at the start CaSa moves its text into `ai_prompt.txt` (your own changes stay) and removes the section from `config.ini`. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program. Since 0.1.11 also `{signals}` (alarms and infos the analysis would send today for this asset) and `{evidence}` (the backtest findings for stocks or crypto, e.g. that stocks recovered slightly after strong sell-offs while crypto tended to keep falling). The leading market is chosen by the company's home country (Nvidia on Xetra: S&P 500), not by the exchange. An unchanged template from an earlier version is replaced by the current one automatically; your own changes are never overwritten.
 
 ## alarm_journal.csv (created automatically)
 

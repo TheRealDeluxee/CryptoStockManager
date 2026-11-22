@@ -1,0 +1,2 @@
+# Windows batch files need CRLF line endings (also in the download from GitHub)
+*.bat -text

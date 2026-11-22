@@ -877,6 +877,11 @@ alert_active = func.alert_active
 
 ALERTS_SECTION_HEADER = [
     '[alerts]',
+    '# name = <stocks>; <crypto>, each alarm, info or off (explained in the README; also /smart_alert_config)',
+    '#                stocks crypto',
+]
+# The long explanation up to 0.1.13: replaced by the short line above at the start
+_OLD_ALERTS_EXPLANATION = [
     '# Which signals CaSa sends, separately for stocks and crypto:',
     '#   name = <stocks>; <crypto>      each one of: alarm, info, off',
     '#   alarm = message "Potential buy/sell", can be marked important, counted in the alarm journal',
@@ -885,17 +890,19 @@ ALERTS_SECTION_HEADER = [
     '# The comment behind each line: what the signal means and how often the price moved in the expected',
     '# direction within 20 days in the backtest (54 assets, up to 14 years); "normal" = the same on an',
     '# average day. Also changeable in Telegram with /smart_alert_config.',
-    '#                stocks crypto',
 ]
+# the same with "/journal" (before /journal became a button)
+_OLDER_ALERTS_EXPLANATION = [line.replace('counted in the alarm journal', 'counted in /journal')
+                             .replace('not counted in the alarm journal', 'not counted in /journal')
+                             for line in _OLD_ALERTS_EXPLANATION]
 # Before 0.1.11 final: one value per line (all, stock, crypto, off) and a fixed kind per signal
 _OLD_KIND = {'positive5': 'alarm', 'score8': 'alarm', 'oversold': 'alarm', 'cross_ema_sell': 'alarm'}
 
 
 def alert_line(key, kinds):
-    """One line of the [alerts] section: kinds for stocks and crypto, comment with meaning and probability."""
-    _codes, _label, _stock, _crypto, desc, odds = ALERTS[key]
+    """One line of the [alerts] section: kinds for stocks and crypto (meaning and backtest: README)."""
     stock, crypto = kinds
-    return f"{key:<15}= {stock + ';':<6} {crypto:<6}# {desc} | {odds}"
+    return f"{key:<15}= {stock + ';':<6} {crypto}"
 
 
 def parse_alert_value(key, text):
@@ -948,9 +955,15 @@ def ensure_alert_section(path='config.ini'):
         else:
             kinds[key] = (ALERTS[key][2], ALERTS[key][3])
             changes.append(f"{key} added")
+    # comments behind the lines (up to 0.1.13: meaning and backtest) are removed, the values stay
+    commented = [key for key in ALERTS if key in found and '#' in found[key][1]]
+    for key in commented:
+        lines[found[key][0]] = alert_line(key, kinds[key])
+    if commented:
+        changes.append('comments behind the lines in [alerts] removed')
     if not changes:
-        return []
-    if start is None:
+        pass
+    elif start is None:
         while lines and not lines[-1].strip():
             lines.pop()
         lines += [''] + ALERTS_SECTION_HEADER + [alert_line(key, kinds[key]) for key in ALERTS]
@@ -964,7 +977,15 @@ def ensure_alert_section(path='config.ini'):
         while insert > start + 1 and not lines[insert - 1].strip():
             insert -= 1
         lines[insert:insert] = [alert_line(key, kinds[key]) for key in ALERTS if key not in found]
-    _write_lines(path, lines)
+    # the long explanation up to 0.1.13 -> one short line (only when it is unchanged)
+    header = next((i for i, line in enumerate(lines) if line.strip().lower() == '[alerts]'), None)
+    for old in (_OLD_ALERTS_EXPLANATION, _OLDER_ALERTS_EXPLANATION):
+        if header is not None and [line.rstrip() for line in lines[header + 1:header + 1 + len(old)]] == old:
+            lines[header + 1:header + 1 + len(old)] = ALERTS_SECTION_HEADER[1:-1]
+            changes.append('explanation in [alerts] shortened')
+            break
+    if changes:
+        _write_lines(path, lines)
     return changes
 
 
@@ -974,40 +995,45 @@ LOSS_LIMIT_LINE = ('total_loss_limit = -5           # loss limit alarm: total P&
 
 ANTHROPIC_SECTION = ['[anthropic]',
                      '# optional: key for the Claude API (https://console.anthropic.com), empty = Claude API not used',
-                     '# the API costs money per request (billed by Anthropic per token)',
                      'api_key =',
                      'model = claude-opus-5-5']
 
 
-AI_PROMPT_HEADER = ['[ai_prompt]',
-                    '# Template for /ai_prompt and the AI buttons. CaSa fills in the placeholders in {curly brackets}.',
-                    '# Every line of the text starts with two spaces, empty lines are allowed.',
-                    '# Lines starting with # or ; are comments, also inside the text.',
-                    'template =']
+AI_PROMPT_FILE = 'ai_prompt.txt'
 
 
-def read_ai_prompt(path='config.ini'):
-    """AI prompt template from config.ini [ai_prompt] template, None if there is none."""
-    config = configparser.ConfigParser(interpolation=None)   # no inline comments: ";" belongs to the text
-    config.read(path, encoding='utf-8-sig')
-    text = config.get('ai_prompt', 'template', fallback='').strip()
-    return text or None
+def read_ai_prompt(path=AI_PROMPT_FILE):
+    """AI prompt template from ai_prompt.txt, None if there is none (or it is empty)."""
+    try:
+        with open(path, encoding='utf-8-sig') as file:
+            return file.read().strip() or None
+    except FileNotFoundError:
+        return None
 
 
-def write_ai_prompt(text, path='config.ini'):
-    """Write the template as section [ai_prompt] at the end of config.ini (replaces an existing one).
-    Line by line: the other sections, the keys and all comments stay as they are."""
+def write_ai_prompt(text, path=AI_PROMPT_FILE):
+    """Write the template to ai_prompt.txt (replaces the file)."""
+    _write_lines(path, text.strip().splitlines())
+
+
+def take_ai_prompt_from_config(path='config.ini'):
+    """0.1.13 had the template in config.ini [ai_prompt]: returns its text and removes the section
+    (line by line, all other lines stay). None if there is no such section."""
     with open(path, encoding='utf-8-sig') as file:
         lines = file.read().splitlines()
     start = next((i for i, line in enumerate(lines) if line.strip().lower() == '[ai_prompt]'), None)
-    if start is not None:
-        # end: the next section header at the start of a line (the text lines are indented)
-        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('[')), len(lines))
-        del lines[start:end]
+    if start is None:
+        return None
+    config = configparser.ConfigParser(interpolation=None)   # no inline comments: ";" belongs to the text
+    config.read(path, encoding='utf-8-sig')
+    text = config.get('ai_prompt', 'template', fallback='').strip()
+    # end: the next section header at the start of a line (the text lines are indented)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('[')), len(lines))
+    del lines[start:end]
     while lines and not lines[-1].strip():
         lines.pop()
-    lines += [''] + AI_PROMPT_HEADER + [f'  {line}' if line.strip() else '' for line in text.strip().splitlines()]
     _write_lines(path, lines)
+    return text
 
 
 INFOS_FOR_LINE = ('infos_for = all                 # infos (not alarms) for: all = every asset in the analysis, '
@@ -1089,6 +1115,10 @@ def update_config(path='config.ini'):
             lines.pop()
         lines += [''] + ANTHROPIC_SECTION
         changes.append('empty section [anthropic] added (optional Claude API key)')
+    old_comment = '# the API costs money per request (billed by Anthropic per token)'   # up to 0.1.13
+    if old_comment in [line.strip() for line in lines]:
+        lines = [line for line in lines if line.strip() != old_comment]
+        changes.append('comment about the API costs removed from [anthropic]')
     if changes:
         _write_lines(path, lines)
     changes += ensure_alert_section(path)

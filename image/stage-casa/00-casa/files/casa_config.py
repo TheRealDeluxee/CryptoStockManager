@@ -4,7 +4,7 @@
 
 The keys come via stdin (never as arguments: not visible in the process list). A new config.ini gets all
 settings with comments; in an existing one only these values change, comments and other lines stay.
-CaSa adds the remaining sections ([alerts], [ai_prompt]) itself at the start.
+CaSa adds the remaining section [alerts] and the file ai_prompt.txt itself at the start.
 """
 import os
 import sys
@@ -27,7 +27,6 @@ api_key =
 
 [anthropic]
 # optional: key for the Claude API (https://console.anthropic.com), empty = Claude API not used
-# the API costs money per request (billed by Anthropic per token)
 api_key =
 model = claude-sonnet-5-5
 """

@@ -43,9 +43,8 @@ NOON_ANALYSIS = "12:30"
 EVENING_SUMMARY = "18:30"
 EVENT_REMINDER = "08:00"   # reminder for events from events.ini (with daily analysis)
 
-# Template for /ai_prompt and the AI buttons. It is in config.ini [ai_prompt] (added at the start, can be
-# edited there; up to 0.1.12 the file ai_prompt.txt). The program fills in the placeholders in {curly brackets}.
-AI_PROMPT_FILE = "ai_prompt.txt"   # old place: moved into config.ini at the start
+# Template for /ai_prompt and the AI buttons. It is the file ai_prompt.txt (created at the start, can be edited;
+# in 0.1.13 config.ini [ai_prompt]). The program fills in the placeholders in {curly brackets}.
 AI_PROMPT_TEMPLATE = """Assess {name} ({symbol}, {type}) for a three-month horizon (no day trading) using my technical data and current news. {task}
 
 A. My program's data (daily values, {date})
@@ -179,22 +178,40 @@ def can_update_itself():
             and bool(os.environ.get('INVOCATION_ID')))   # set by systemd for a service
 
 
-def update_ai_prompt(path='config.ini'):
-    """AI prompt template in config.ini [ai_prompt]: an existing ai_prompt.txt is moved there (your text stays,
-    the old file is kept as ai_prompt.old.txt); missing = the current template; an unchanged earlier default
-    template is replaced by the current one. Returns the template."""
+def system_name():
+    """Computer CaSa runs on: (network name, operating system), e.g. ('casa-pi', 'Debian GNU/Linux 13 (trixie)')
+    or ('MY-PC', 'Windows 11')."""
+    host = socket.gethostname() or 'unknown'
+    system = f"{platform.system()} {platform.release()}".strip()
+    if platform.system() == 'Linux':
+        try:   # name and version of the distribution, e.g. Debian GNU/Linux 13 (trixie)
+            with open('/etc/os-release', encoding='utf-8') as file:
+                values = dict(line.strip().split('=', 1) for line in file if '=' in line)
+            system = values.get('PRETTY_NAME', '').strip('"') or system
+        except OSError:
+            pass
+    elif platform.system() == 'Darwin':
+        system = f"macOS {platform.mac_ver()[0]}".strip()
+    return host, system or 'unknown system'
+
+
+def update_ai_prompt(config_path='config.ini', path=cl.AI_PROMPT_FILE):
+    """AI prompt template in ai_prompt.txt: the section [ai_prompt] of 0.1.13 in config.ini is moved there
+    (your text stays); missing = the current template; an unchanged earlier default template is replaced by
+    the current one. Returns the template."""
     text = cl.read_ai_prompt(path)
-    if text is None and os.path.exists(AI_PROMPT_FILE):
-        with open(AI_PROMPT_FILE, encoding='utf-8-sig') as file:
-            text = file.read().strip() or None
-        if text:
+    moved = cl.take_ai_prompt_from_config(config_path) if os.path.exists(config_path) else None
+    if moved is not None:
+        if text is None and moved:
+            text = moved
             cl.write_ai_prompt(text, path)
-        os.replace(AI_PROMPT_FILE, 'ai_prompt.old.txt')
-        func.log_print('ai_prompt.txt moved into config.ini [ai_prompt] (old file kept as ai_prompt.old.txt)')
+            func.log_print('AI prompt moved from config.ini [ai_prompt] to ai_prompt.txt')
+        else:
+            func.log_print('config.ini [ai_prompt] removed (the AI prompt is ai_prompt.txt)')
     if text is not None and hashlib.sha256(text.strip().encode('utf-8')).hexdigest() not in OLD_AI_PROMPT_HASHES:
         return text   # current template or your own version: keep it
     if text is not None:
-        func.log_print('config.ini [ai_prompt]: unchanged earlier template replaced by the current one')
+        func.log_print('ai_prompt.txt: unchanged earlier template replaced by the current one')
     cl.write_ai_prompt(AI_PROMPT_TEMPLATE, path)
     return AI_PROMPT_TEMPLATE.strip()
 
@@ -209,7 +226,7 @@ class CryptoStockManager:
         # Bring config.ini up to date first (old section name, new settings), then read it
         for change in cl.update_config(config_file_path):
             func.log_print(f"config.ini: {change}")
-        update_ai_prompt(config_file_path)   # AI prompt template in config.ini (up to 0.1.12 ai_prompt.txt)
+        update_ai_prompt(config_file_path)   # AI prompt template ai_prompt.txt (0.1.13: config.ini [ai_prompt])
         for change in cl.convert_value_alerts():   # price alerts up to 0.1.11 -> plans
             func.log_print(change)
         config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
@@ -607,7 +624,7 @@ class CryptoStockManager:
                             buttons=rows or None)
 
     def _ai_question(self, symbol, asset_type):
-        """Fill the prompt template (config.ini [ai_prompt]) with the daily analysis. Returns (name, symbol, prompt text)."""
+        """Fill the prompt template (ai_prompt.txt) with the daily analysis. Returns (name, symbol, prompt text)."""
         name, symbol, item, df, full, sr_zones, details = self._daily_analysis(symbol, asset_type)
         question = update_ai_prompt()
 
@@ -709,7 +726,7 @@ class CryptoStockManager:
         except Exception as error:   # extra information: an error must not stop /ai
             signals = f'not verifiable ({str(error)[:60]})'
         # Short forms for the prompt: it has to fit into one Telegram message (4096 characters)
-        rsi_label = details['texts']['rsi'].split(': ', 1)[-1].rstrip('.')   # "neutral", "overbought – ..."
+        rsi_label = details['texts']['rsi'].rstrip('.').lower()   # "neutral", "overbought – ..."
         pattern_short = re.sub(r' \([^)]*\)', '', details['texts']['pattern'], count=1)   # without the explanation
 
         # Market phase: the asset itself and its leading market (Bitcoin or stock index)
@@ -903,7 +920,7 @@ class CryptoStockManager:
         weekly, missing = cl.weekly_pnl(rows, self.daily_prices, weeks, today=today)
         image_name = 'pnl_chart_' + uuid.uuid4().hex
         func.create_pnl_chart(weekly, os.path.join(self.output_dir, image_name + '.png'),
-                              title=f'P&L · last {weeks} weeks')
+                              title=f'Trading result · last {weeks} weeks')
         message = ('Profit/loss per week: realised from your sales (transactions.csv, FIFO) in full colour, '
                    'for the current week also the unrealised change of your open positions in light colour.')
         if missing:
@@ -1070,7 +1087,7 @@ class CryptoStockManager:
             self._alert_with_analysis(symbol, asset_type, name, '📅 Quarterly results tomorrow', trigger)
 
     def startup_message(self):
-        """Short start message: version, assets in the alarm analysis, next analysis."""
+        """Short start message: version, assets in the alarm analysis, the computer CaSa runs on."""
         crypto, stock = len(self.crypto_items_hd), len(self.stock_items_hd)
         # Recommended maximum for the free APIs: CoinGecko 8 (with own key 12), Yahoo 30
         max_crypto = MAX_CRYPTO_WITH_KEY if func.coingecko_api_key else MAX_CRYPTO
@@ -1083,16 +1100,8 @@ class CryptoStockManager:
             lines.append(f"⚠ More stocks than recommended: max. {MAX_STOCKS}")
         if self.test_mode == 1:
             lines.append("Test mode: all analyses run once immediately")
-        else:
-            now = time.strftime('%H:%M')
-            if now < MORNING_ANALYSIS:
-                daily = MORNING_ANALYSIS
-            elif now < NOON_ANALYSIS:
-                daily = NOON_ANALYSIS
-            else:
-                daily = f"now, then tomorrow {MORNING_ANALYSIS}"   # after 12:30 it runs immediately at start
-            summary = EVENING_SUMMARY if now < EVENING_SUMMARY else f"tomorrow {EVENING_SUMMARY}"
-            lines.append(f"Next daily analysis: {daily} · summary: {summary}")
+        host, system = system_name()
+        lines += [f"🖥 {html.escape(host)}", f"💿 {html.escape(system)}"]
         try:   # no "next event" line (list with /event), but a faulty events.ini is reported at the start
             cl.read_events()
         except (OSError, ValueError, configparser.Error) as error:
