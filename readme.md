@@ -76,7 +76,7 @@ Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 | [Installation](docs/installation.md) | Option A: manual installation (2–5 minutes on Windows), to try CaSa out or run it on a computer you already have · Option B: CaSa image for the Raspberry Pi (about 20 minutes; hardware, step by step, daily use) |
 | [Telegram commands](docs/commands.md) | Every command with its options |
 | [Understanding alerts and charts](docs/alerts.md) | When CaSa sends what, score 1–10, traffic lights, figure list, chart, alarms and infos with their backtest results, evening summary and trading result |
-| [Configuration](docs/configuration.md) | `config.ini`, `assets.ini`, `events.ini`, `planalert.ini`, `transactions.csv`, AI prompt, alarm journal, `logfile.txt` |
+| [Configuration](docs/configuration.md) | `config.ini`, `assets.ini`, `events.ini`, `planalert.ini`, `transactions.csv`, `ai_prompt.txt`, `alarm_journal.csv`, `logfile.txt` |
 | [Project structure](docs/project-structure.md) | The program files and folders and what each one does |
 | [Roadmap](docs/roadmap.md) | What is planned next, what is done and what is not planned |
 
