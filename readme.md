@@ -9,7 +9,7 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 - [Why CaSa?](#why-casa)
 - [In a Nutshell](#in-a-nutshell) – what CaSa does, setup in four steps, important Telegram commands
 - [What's New](#whats-new)
-- [Manual](#manual) – features, installation, commands, alerts and charts, configuration, project structure, roadmap
+- [Learn More](#learn-more) – features, installation, commands, alerts and charts, configuration, project structure, roadmap
 - [Known Limitations](#known-limitations)
 - [License, Disclaimer and Links](#license)
 
@@ -74,7 +74,7 @@ Below every alert you find buttons for the next step – for example to record a
 
 Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 
-## Manual
+## Learn More
 
 | Page | Content |
 |---|---|
