@@ -2,6 +2,20 @@
 
 [← back to the README](../readme.md)
 
+## When CaSa sends what
+
+| Time | What happens |
+|---|---|
+| every hour | Crypto: 100-hour analysis (alarms and infos) and plan alerts (buy zone, target) |
+| 08:00 | Reminder for tomorrow's dates (`events.ini`) and quarterly results, with chart |
+| 09:30 and 12:30 | Daily analysis of all assets with `1` (stocks Monday to Friday) |
+| 18:30 | Evening summary: ranking, daily P&L and the 13-week P&L chart |
+| 19:00 | Check for a new CaSa version |
+
+Started after 12:30, the daily analysis runs at once. With `test_mode = 1` all analyses run once at the start.
+
+## Alarms and infos
+
 CaSa sends two kinds of messages, and you choose for every signal – separately for stocks and crypto – whether it comes as an alarm, as an info or not at all: in `config.ini` `[alerts]` (required, created automatically) or in Telegram with `/smart_alert_config`.
 
 - **🔔 Alarm**: header "Potential buy" / "Potential sell", can be marked as important, recorded in the alarm journal (monthly report)

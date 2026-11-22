@@ -1,8 +1,6 @@
-# Telegram Commands and Daily Schedule
+# Telegram Commands
 
 [← back to the README](../readme.md)
-
-## Telegram Commands
 
 | Command | Function |
 |---|---|
@@ -29,14 +27,3 @@
 | `/help` | Overview of all commands |
 
 Only messages from the chat id in `config.ini` are accepted.
-
-## Daily Schedule
-| Time | What happens |
-|---|---|
-| every hour | 100-hour analysis of all crypto assets with `1` |
-| 08:00 | Reminder for tomorrow's dates from `events.ini` and tomorrow's quarterly results (stocks with `1`), each plus daily analysis of the asset |
-| every hour | Plan alerts from `planalert.ini`: buy zone and target (stocks Monday to Friday, 08:00–22:00), stop with the daily closes |
-| 09:30 and 12:30 | 100-day analysis of all assets with `1` (stocks Monday to Friday, 08:00–22:00) |
-| 18:30 | Daily ranking (crypto and stocks) |
-
-If the program is started after 12:30, the daily analysis runs immediately; missed date reminders are sent at the start. With `test_mode = 1` there is no schedule – all analyses run once at the start (date reminders still work).

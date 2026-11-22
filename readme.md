@@ -11,8 +11,7 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 - [Details for Experts](#details-for-experts) – for the curious and experts:
   - [Features](#features)
   - [What's New](#whats-new)
-  - [Installation](#installation) – Option A: CaSa image for the Raspberry Pi (recommended), Option B: Quick Start on your own computer
-  - [Documentation](#documentation) – commands, alerts and charts, configuration
+  - [Documentation](#documentation) – installation, commands, alerts and charts, configuration
   - [Project Structure](#project-structure)
   - [Known Limitations](#known-limitations)
   - [Roadmap](#roadmap)
@@ -129,28 +128,13 @@ Below every alert you find buttons for the next step – for example to record a
 
 Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 
-## Installation
-
-Two ways to run CaSa – choose one:
-
-| | **Option A: CaSa Image** (recommended) | **Option B: Quick Start** |
-|---|---|---|
-| Runs on | Raspberry Pi | your own computer (Windows, macOS, Linux) |
-| Good for | everyday use, day and night | trying CaSa out, development |
-| Setup | write the image, answer a few questions | install Python, write the config files |
-| Runs | by itself, also after a power cut | only while the computer and CaSa are running |
-| Updates | one tap in Telegram | by hand |
-
-- **[Option A: CaSa Image for the Raspberry Pi →](docs/installation.md#option-a-casa-image-for-the-raspberry-pi-recommended)** (recommended)
-- **[Option B: Quick Start on your own computer →](docs/installation.md#option-b-quick-start-on-your-own-computer)**
-
 ## Documentation
 
 | Page | Content |
 |---|---|
 | [Installation](docs/installation.md) | Option A: CaSa image for the Raspberry Pi (hardware, step by step, daily use, build the image) · Option B: Quick Start on your own computer |
-| [Telegram commands and daily schedule](docs/commands.md) | Every command with its options, when CaSa analyses and sends what |
-| [Understanding alerts and charts](docs/alerts.md) | Score 1–10, traffic lights, figure blocks, chart, alarms and infos with their backtest results |
+| [Telegram commands](docs/commands.md) | Every command with its options |
+| [Understanding alerts and charts](docs/alerts.md) | When CaSa sends what, score 1–10, traffic lights, figure blocks, chart, alarms and infos with their backtest results |
 | [Configuration](docs/configuration.md) | `config.ini`, `assets.ini`, `events.ini`, `planalert.ini`, `transactions.csv`, AI prompt, alarm journal, `logfile.txt` |
 | [Changelog](CHANGELOG.md) | All changes of every version |
 
