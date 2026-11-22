@@ -9,9 +9,9 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 ## Contents
 
 - [Why CaSa?](#why-casa)
+- [How does CaSa work?](#how-does-casa-work)
 - [What does CaSa do?](#what-does-casa-do)
-- [What do you need?](#what-do-you-need)
-- [What's New?](#whats-new)
+- [Latest Version](#latest-version)
 - [Learn More](#learn-more)
   - [Features](docs/features.md)
   - [Installation](docs/installation.md)
@@ -34,18 +34,28 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 
 ![CaSa alert in Telegram on iPhone and Apple Watch](docs/telegram_phone_watch.png)
 
+## How does CaSa work?
+
+Most price apps only ring when a price crosses a line you drew. CaSa looks at the whole picture first – and tells you how far to trust it.
+
+- **It checks before it rings.** Several times a day CaSa reads trend, momentum and volume, and compares each stock with its market. A drop together with the whole market is not the same as a drop on its own – CaSa tells you which one it is.
+- **It shows its own track record.** Every alarm is tested against past prices: *"Backtest: price rose in 57 % of cases (after 20 days)"*. You see how often a signal was right before you act on it.
+- **It waits for the turn.** After a sell-off CaSa does not shout "buy" at a low nobody can know; it tells you when the trend starts to turn up.
+- **It explains instead of impressing.** A score from 1 to 10, traffic lights and short sentences – no wall of numbers.
+- **It belongs to you.** It runs at home on a PC or a Raspberry Pi that uses about as much power as a phone charger, with free data from Yahoo Finance and CoinGecko. No cloud, no account, no subscription.
+
 ## What does CaSa do?
 
-- **Watches your stocks and cryptos** day and night – you don't have to look at prices all day.
-- **Messages you in Telegram** when something important happens, with a chart and a simple score from 1 to 10.
-- **Explains in plain words** what is going on – no expert knowledge needed.
-- **Knows your portfolio**: what you bought, what you sold, and your profit or loss every evening.
-- **Follows your own plan**: set a buy price, a target and a stop for an asset – CaSa tells you when it is reached.
-- **Optional AI**: one tap creates a prompt for ChatGPT or Claude – or, with a Claude API key, asks Claude directly for a second opinion.
+- **Keeps watch while you live your life.** Stocks and cryptos, day and night – your phone or watch only buzzes when it matters.
+- **Sends one clear message per signal.** A chart, a score and the reason in a few lines, with buttons to ask the AI about it.
+- **Keeps your books.** Record a buy or a sale with a tap; every evening you get your profit or loss and a short summary of the day.
+- **Holds you to your plan.** Set a buy-zone, a sell-zone and a stop – CaSa speaks up when the price gets there, so you don't decide in a panic.
+- **Remembers your dates.** Quarterly results and your own reminders arrive in the same chat.
+- **Gets a second opinion, if you want.** One tap creates a prompt for ChatGPT or Claude; with a Claude API key, Claude checks the news and answers right in the chat.
 
 CaSa gives signals, not investment advice. You decide.
 
-## What do you need?
+**You need:**
 
 - A **Windows or Linux computer**, or for day and night a **Raspberry Pi** 4 or 5 (a small, cheap computer), and internet
 - **Telegram** on your phone
@@ -55,7 +65,7 @@ CaSa gives signals, not investment advice. You decide.
 </p>
 Try it out: installed in 2–5 minutes, once Telegram is installed and your bot is created (with @BotFather).
 
-## What's New?
+## Latest Version
 
 **Version 0.1.14** – all changes in [CHANGELOG.md](CHANGELOG.md)
 
