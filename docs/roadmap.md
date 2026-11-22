@@ -5,7 +5,7 @@
 ## Usability
 - [ ] **One-line summary** at the top of every message, e.g. "🟢 Uptrend, strong buying interest – buy signal". The details follow below for anyone who wants them.
 - [x] **Easier score**: The −18…+18 score was hard to read. Now a score 1–10 with the assessments as traffic-light confirmation (🟢 🔴 🟡).
-- [x] **Simpler score blocks**: one compact numbered list with bars (position within the last 100 days) and plain names in the summary (200-day trend, 7-day trend, 5-day momentum).
+- [x] **Simpler score blocks**: one compact numbered list with bars (position within the last 100 days) and plain names in the summary (200d trend, 7d trend, 5d mom.).
 - [ ] **`/explain` command**: Explains terms like RSI, SMA200 or neckline in two sentences.
 
 ## Setup
@@ -22,7 +22,9 @@
 
 ## Indicators & charts
 - [ ] **ATR-based stop-loss suggestion**, e.g. "Stop around 142 € (2× ATR)". Adapts the stop to how much the asset usually moves.
-- [ ] **Relative strength vs. index**: Strong stocks in strong markets, e.g. "Nvidia +12 % vs. Nasdaq in 3 months". One of the most robust rules in technical analysis.
+- [x] **Relative strength vs. index**: every stock message has a line "Market" (leading index and sector ETF today) and the figure vsIndex (5 days vs. the index, bar = position within the last 100 days); the same values go to the AI.
+- [ ] **Market overview in the evening summary**: the main indices (DAX, EURO STOXX 50, S&P 500, Nasdaq-100, Nikkei 225, MSCI World) with 1 and 7 days, plus 1–2 theme ETFs (e.g. AI, data centres).
+- [ ] **Own benchmark per asset**: an optional field in assets.ini, e.g. `TT = Trane Technologies; stock; 1; USD; SMH`, to compare with a theme (AI chips) instead of the broad sector; European sector ETFs for European stocks.
 - [ ] **R2/S2 zones**: A second resistance and support zone, plus an alarm when the price breaks through a zone.
 - [ ] **More chart patterns**: Triangles, wedges and flags in addition to the existing patterns.
 - [ ] **Pattern detection with a trained model**: A small model trained on the PC with historical charts recognises patterns instead of the fixed rules of today (double top/bottom, head and shoulders); it runs on the Raspberry Pi without an AI accelerator. Only used if it beats the current rules in the backtest.

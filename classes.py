@@ -2,6 +2,7 @@ import configparser
 import csv
 import math
 import os
+import re
 import tempfile
 import uuid
 
@@ -198,9 +199,11 @@ class CryptoStock:
         self.state.sr_zones = func.support_resistance(df)  # before cutting: needs the long history
         self.state.pattern = func.chart_pattern(df)
         self.state.score_rank = func.score_rank(df)   # 1-10 vs. the last 100 values, before cutting
+        # stocks, daily: today's move compared with the leading index and the sector ETF
+        market = func.market_context(self.type, self.symbol, df) if data_type == '100d' else None
         df = func.cut_to_window(df)
         self.state = func.calc_state_fuctions(self.state, df)
-        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type, self.state.pattern, self.state.score_rank, self.state.sr_zones, self.type, yesterday_profit_pct=self.state.yesterday_profit_pct)
+        alarms, self.state.tech_indicators, self.state.score = func.alarm(df,self.search,self.state.watch_list, self.state.current_profit_pct, self.state.amount_older_than_one_year, self.state.amount_older_than_one_year_pct, data_type, self.state.pattern, self.state.score_rank, self.state.sr_zones, self.type, yesterday_profit_pct=self.state.yesterday_profit_pct, market=market)
         alarms_filter = func.filter(alarms, self.state)
 
         # Return the cut data so that chart and summary use the same 100 values.
@@ -213,7 +216,7 @@ class CryptoStock:
         for info in alarms_filter.values():
             image_name = "alarm_" + uuid.uuid4().hex
             func.plot_and_save(df, image_name, data_type, self.state.zero_line, self.state.sr_zones, self.state.pattern)
-            # one tap below the alarm/info: AI prompt, with a Claude API key also AI decision (API) and AI plan (API)
+            # one tap below the alarm/info: 🤖 Prompt, with a Claude API key also 🤖 Guide (API) and 🤖 Plan (API)
             button = func.ai_buttons(self.type, self.symbol)
             func.pushover_image(image_name, info['msg'], info['priority'], delete_after_send=True, html_format=True,
                                 buttons=button)
@@ -235,7 +238,10 @@ class CryptoStock:
 
 
 # Shared file checks: the same rules apply when entering and when loading.
-CSV_HEADER = ["type", "symbol", "name", "action", "amount", "qty", "date"]
+# transactions.csv: amount_eur = what you paid or received in EUR (since 0.1.14; before: amount).
+# In the program the column is called "amount".
+CSV_HEADER = ["type", "symbol", "name", "action", "amount_eur", "qty", "date"]
+OLD_CSV_HEADER = ["type", "symbol", "name", "action", "amount", "qty", "date"]
 
 
 def valid_numbers(amount, qty):
@@ -247,9 +253,10 @@ def valid_numbers(amount, qty):
 
 
 def read_assets(path="assets.ini", alarm_only=False):
-    """Format per line: symbol = Name; crypto|stock; 1
-    The 1 at the end means: evaluated in the automatic alarm analysis.
-    Without 1 (or with 0) only available for /check and /ai.
+    """Format per line: symbol = Name; crypto|stock; 1; currency
+    The 1 means: evaluated in the automatic alarm analysis. Without 1 (or with 0) only available for
+    /check and /ai. The currency at the end (e.g. USD) is optional and only for your overview: CaSa takes
+    the currency from Yahoo and converts every price to EUR.
     alarm_only=True returns only the assets with 1."""
     config = configparser.ConfigParser(interpolation=None)
     if not config.read(path, encoding="utf-8-sig"):
@@ -266,6 +273,9 @@ def read_assets(path="assets.ini", alarm_only=False):
             alarm = parts[2] if len(parts) > 2 else ''
             if alarm not in ('', '0', '1'):
                 raise ValueError(f"Invalid alarm flag for {symbol}: '{alarm}' (allowed: 1, 0 or empty)")
+            currency = parts[3] if len(parts) > 3 else ''
+            if currency and not (len(currency) == 3 and currency.isalpha()):
+                raise ValueError(f"Invalid currency for {symbol}: '{currency}' (three letters such as USD, or empty)")
             if alarm_only and alarm != '1':
                 continue
             entries[(asset_type, symbol)] = parts[0] or symbol
@@ -416,27 +426,30 @@ def delete_event(key, path="events.ini"):
 
 # ── Plan alerts (planalert.ini, before 0.1.12 valuealert.ini) ──────────────
 PLAN_FILE = 'planalert.ini'
-PLAN_HEADER = """# CaSa plan alerts: simple trading plans with messages, one plan per asset
+PLAN_HEADER = """# CaSa trading plans: one plan per asset. CaSa watches the price and sends a message with chart.
 #
-# [SYMBOL]            symbol as in assets.ini (e.g. TSFA.F or bitcoin)
-# support   = 312.15  buy zone: the price falls to the support or up to max_entry % above it
-# max_entry = 2       buy only up to 2 % above the support (0 = only at or below the support)
-# target    = 358.93  take partial profits at or above this price
-# stop      = 312.15  the plan fails at a daily close below this price
-# note      = ...     your plan in words (tranche size, conditions, news); shown in every message
-# start     = DD/MM/YYYY  set by CaSa: daily closes from this day on count for the stop
-# status    = ...     set by CaSa: waiting, buy_zone, target or ended (with date and reason)
-# Optional: support or target (at least one of them), stop. Prices in EUR, from the same source as the analysis.
+# Example (prices in EUR):
+# [NVDA]               symbol as in assets.ini
+# buy-zone  = 100.00   I want to buy at 100 € or lower
+# sell-zone = 120.00   at 120 € or higher I take partial profits
+# stop-plan = 95.00    a daily close below 95 € ends the plan (may be the same as buy-zone)
+# note      = Size: a third | Buy when: volume above average | Not if: bad results
+#                      your own conditions in words, shown at the end of every message
+# start, status        set by CaSa, do not change
 #
-# Whether you hold the asset (transactions.csv) decides the message:
-#   buy zone: not held = "Buy zone: check the conditions in your note", held = "Add-on zone (retest)"
-#   target:   held = "Take partial profits" (not held: no message)
-#   stop:     not held = "Setup cancelled", held = "Exit: sell, do not average down"; the plan ends
-# Buy zone and target are checked every hour (stocks Monday to Friday 08:00-22:00), each message once until
-# the price leaves the zone again, at most once per day and plan. The stop is checked with the daily closing prices.
-# Plans can also be shown, added and deleted in Telegram with /plan_alert."""
-PLAN_KEYS = ('support', 'max_entry', 'target', 'stop', 'note', 'start', 'status')
-PLAN_STATUS = ('waiting', 'buy_zone', 'target', 'ended')
+# Fill in buy-zone or sell-zone, best all three: CaSa checks only the numbers, never the note.
+#
+# Messages:
+#   price at or below buy-zone   -> "Buy zone": now watch, not yet buy (you hold it already: "Add-on zone")
+#   after the buy-zone: daily close above it again and the 12-day average rising -> "Turn up"
+#   price at or above sell-zone  -> "Take partial profits" (only when you hold it)
+#   daily close below stop-plan  -> "Setup cancelled" (not held) or "Exit" (held); the plan ends
+# Buy-zone and sell-zone: checked every hour (stocks Monday to Friday 08:00-22:00), at most one message a day.
+# Stop-plan: checked with the daily closing prices since the start of the plan.
+# In Telegram: /plan_alert shows, adds and deletes plans."""
+PLAN_KEYS = ('buy-zone', 'sell-zone', 'stop-plan', 'note', 'start', 'status')
+OLD_PLAN_KEYS = ('support', 'max_entry', 'target', 'stop')   # up to 0.1.13: converted at the start
+PLAN_STATUS = ('waiting', 'buy_zone', 'turn_up', 'target', 'ended')
 
 
 def parse_price(text):
@@ -478,13 +491,13 @@ def _asset_type(symbol, assets, path):
 def check_plan(support, max_entry, target, stop):
     """Plausibility of the four plan numbers (None = not used). ValueError with the reason."""
     if support is None and target is None:
-        raise ValueError('A plan needs a support or a target.')
+        raise ValueError('A plan needs a buy-zone or a sell-zone.')
     if support is not None and target is not None and target <= support * (1 + max_entry / 100):
-        raise ValueError('The target must be above the buy zone (support + max_entry %).')
+        raise ValueError('The sell-zone must be above the buy-zone.')
     if stop is not None and target is not None and stop >= target:
-        raise ValueError('The stop must be below the target.')
+        raise ValueError('The stop-plan must be below the sell-zone.')
     if stop is not None and support is not None and stop > support * (1 + max_entry / 100):
-        raise ValueError('The stop must not be above the buy zone.')
+        raise ValueError('The stop-plan must not be above the buy-zone.')
 
 
 def read_plans(path=PLAN_FILE, assets_path="assets.ini"):
@@ -500,12 +513,18 @@ def read_plans(path=PLAN_FILE, assets_path="assets.ini"):
         values = config[section]
         try:
             asset_type = _asset_type(symbol, assets, path)
-            unknown = [key for key in values if key not in PLAN_KEYS]
+            unknown = [key for key in values if key not in PLAN_KEYS + OLD_PLAN_KEYS]
             if unknown:
                 raise ValueError(f"unknown setting {', '.join(unknown)}")
             number = lambda key: parse_price(values[key]) if values.get(key, '').strip() else None
-            support, target, stop = number('support'), number('target'), number('stop')
-            max_entry = parse_percent(values.get('max_entry', '').strip() or '0')
+            # in the program: support = buy-zone (buy at or below it), target = sell-zone, stop = stop-plan
+            support, target, stop = number('buy-zone'), number('sell-zone'), number('stop-plan')
+            if any(key in values for key in OLD_PLAN_KEYS):   # 0.1.13: support + max_entry % = buy-zone
+                old_support = number('support')
+                old_max = parse_percent(values.get('max_entry', '').strip() or '0')
+                support = support or (old_support * (1 + old_max / 100) if old_support else None)
+                target, stop = target or number('target'), stop or number('stop')
+            max_entry = 0.0
             check_plan(support, max_entry, target, stop)
             start = values.get('start', '').strip()
             start = datetime.strptime(start, '%d/%m/%Y').date() if start else None
@@ -527,19 +546,22 @@ def plan_zone_top(plan):
     return None if plan['support'] is None else plan['support'] * (1 + plan['max_entry'] / 100)
 
 
+def plan_zone_text(plan):
+    """'at or below 320.82 €': the buy-zone of a plan."""
+    return f"at or below {func.format_euro(plan_zone_top(plan))}"
+
+
 def plan_text(plan):
-    """One line with the plan numbers, e.g. 'Buy zone 312.15–318.39 € · target 358.93 € · stop 312.15 €'."""
+    """One line with the plan numbers, e.g. 'buy-zone ≤ 100.00 € · sell-zone ≥ 120.00 € · stop-plan < 95.00 €
+    (daily close)'."""
     parts = []
     if plan['support'] is not None:
-        top = plan_zone_top(plan)
-        parts.append(f"buy zone {func.format_euro(plan['support'])}"
-                     + (f"–{func.format_euro(top)}" if top > plan['support'] else ''))
+        parts.append(f"buy-zone ≤ {func.format_euro(plan_zone_top(plan))}")
     if plan['target'] is not None:
-        parts.append(f"target {func.format_euro(plan['target'])}")
+        parts.append(f"sell-zone ≥ {func.format_euro(plan['target'])}")
     if plan['stop'] is not None:
-        parts.append(f"stop {func.format_euro(plan['stop'])} (daily close)")
-    text = ' · '.join(parts)
-    return text[:1].upper() + text[1:]
+        parts.append(f"stop-plan < {func.format_euro(plan['stop'])} (daily close)")
+    return ' · '.join(parts)
 
 
 def _plan_sections(lines):
@@ -555,11 +577,12 @@ def _plan_number(number):
 
 
 def plan_lines(shown_symbol, support, max_entry, target, stop, note, start, status='waiting'):
+    """Lines of one plan in planalert.ini; support + max_entry % is written as buy-zone (its upper end)."""
+    buy_zone = None if support is None else support * (1 + (max_entry or 0) / 100)
     return [f"[{shown_symbol}]",
-            f"support   = {_plan_number(support)}",
-            f"max_entry = {max_entry:g}",
-            f"target    = {_plan_number(target)}",
-            f"stop      = {_plan_number(stop)}",
+            f"buy-zone  = {_plan_number(buy_zone)}",
+            f"sell-zone = {_plan_number(target)}",
+            f"stop-plan = {_plan_number(stop)}",
             f"note      = {' '.join(note.split())}",
             f"start     = {start:%d/%m/%Y}",
             f"status    = {status}"]
@@ -712,13 +735,47 @@ def set_alarm(symbol, asset_type, active, path="assets.ini"):
             os.remove(temp_path)
 
 
+def transaction_file_rows(rows):
+    """Rows of the program ("amount") as rows of transactions.csv ("amount_eur")."""
+    return [{('amount_eur' if key == 'amount' else key): value for key, value in row.items()
+             if (key if key != 'amount' else 'amount_eur') in CSV_HEADER} for row in rows]
+
+
+def update_transactions_header(path="transactions.csv"):
+    """Header of 0.1.13 and before (amount) -> amount_eur, so that the file says that the amounts are in EUR.
+    Only the first line changes. Returns True when it was changed."""
+    try:
+        with open(path, encoding='utf-8-sig', newline='') as file:
+            text = file.read()
+    except FileNotFoundError:
+        return False
+    first, _, rest = text.partition('\n')
+    if first.rstrip('\r') != ';'.join(OLD_CSV_HEADER):
+        return False
+    newline = '\r\n' if first.endswith('\r') else '\n'
+    _write_text(path, ';'.join(CSV_HEADER) + newline + rest)
+    return True
+
+
+def _write_text(path, text):
+    # Write a complete new file first, then replace it: a crash never leaves a half-written file
+    directory = os.path.dirname(os.path.abspath(path))
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=directory, suffix='.tmp', delete=False,
+                                     newline='') as file:
+        file.write(text)
+    os.replace(file.name, path)
+
+
 def read_transactions(path="transactions.csv"):
     try:
         with open(path, newline="", encoding="utf-8-sig") as file:
             reader = csv.DictReader(file, delimiter=';')
-            if reader.fieldnames != CSV_HEADER:
+            if reader.fieldnames not in (CSV_HEADER, OLD_CSV_HEADER):
                 raise ValueError("transactions.csv has a wrong or missing header.")
             rows = list(reader)
+        for row in rows:   # the column amount_eur is "amount" in the program
+            if 'amount_eur' in row:
+                row['amount'] = row.pop('amount_eur')
     except FileNotFoundError:
         return []
     for line, row in enumerate(rows, 2):
@@ -759,10 +816,8 @@ def held_assets(rows):
 
 def daily_prices(df):
     """Closing price per calendar day from an analysis DataFrame (Date, Price); time zone and time of day removed."""
-    dates = pd.to_datetime(df['Date'])
-    if dates.dt.tz is not None:
-        dates = dates.dt.tz_convert(None)
-    series = pd.Series(df['Price'].to_numpy(float), index=dates.dt.normalize())
+    # local calendar day of the exchange (tz_convert to UTC would date a Xetra close on the day before)
+    series = pd.Series(df['Price'].to_numpy(float), index=func.local_days(df['Date']))
     return series.groupby(level=0).last()   # CoinGecko: midnight value and the current value on the same day
 
 
@@ -1036,6 +1091,44 @@ def take_ai_prompt_from_config(path='config.ini'):
     return text
 
 
+# ── Times of the day (config.ini [schedule]) ───────────────────────────────
+SCHEDULE_DEFAULTS = {'daily_analysis': '09:30, 17:45, 22:30', 'evening_summary': '19:00',
+                     'event_reminder': '08:00', 'update_check': '19:30'}
+SCHEDULE_SECTION = [
+    '[schedule]',
+    '# times of the day (24 h, time of this computer); after a change: /restart',
+    'daily_analysis  = 09:30, 17:45, 22:30   # daily analysis: stocks Monday to Friday, crypto every day',
+    'evening_summary = 19:00                 # ranking, daily P&L and trading result',
+    "event_reminder  = 08:00                 # tomorrow's dates (events.ini) and quarterly results",
+    'update_check    = 19:30                 # new CaSa version on GitHub',
+]
+
+
+def _clock(text, key):
+    """'9:30' / '09:30' -> '09:30' (format of the schedule package); ValueError for anything else."""
+    match = re.fullmatch(r'(\d{1,2}):(\d{2})', text.strip())
+    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
+        raise ValueError(f"config.ini [schedule] {key}: '{text.strip()}' is not a time like 09:30")
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+
+def read_schedule(path='config.ini'):
+    """Times from config.ini [schedule] (missing keys: the defaults). daily_analysis is a sorted list,
+    the others one time each. ValueError for a wrong time."""
+    config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
+    config.read(path, encoding='utf-8-sig')
+    times = {}
+    for key, default in SCHEDULE_DEFAULTS.items():
+        value = config.get('schedule', key, fallback=default).strip() or default
+        if key == 'daily_analysis':
+            times[key] = sorted({_clock(part, key) for part in value.split(',') if part.strip()})
+            if not times[key]:
+                raise ValueError("config.ini [schedule] daily_analysis: at least one time is needed")
+        else:
+            times[key] = _clock(value, key)
+    return times
+
+
 INFOS_FOR_LINE = ('infos_for = all                 # infos (not alarms) for: all = every asset in the analysis, '
                   'portfolio = only assets you hold (fewer messages)')
 INFOS_FOR = ('all', 'portfolio')
@@ -1115,6 +1208,11 @@ def update_config(path='config.ini'):
             lines.pop()
         lines += [''] + ANTHROPIC_SECTION
         changes.append('empty section [anthropic] added (optional Claude API key)')
+    if 'schedule' not in headers:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += [''] + SCHEDULE_SECTION
+        changes.append('section [schedule] added (times of the analyses, changeable)')
     # [version] (version number up to 0.0.x, today in main.py): the whole section is removed
     start = next((i for i, line in enumerate(lines) if line.strip().lower() == '[version]'), None)
     if start is not None:
@@ -1296,3 +1394,52 @@ def apply_transactions(asset, rows):
         else:
             asset.sell(amount, qty, row['date'])
     return asset
+
+
+def update_plan_header(path=PLAN_FILE):
+    """Replace the explanation at the top of planalert.ini (comment lines before the first plan) with the
+    current PLAN_HEADER; the plans stay as they are. Returns True when something changed."""
+    try:
+        with open(path, encoding='utf-8-sig') as file:
+            lines = file.read().splitlines()
+    except FileNotFoundError:
+        return False
+    first = next((i for i, line in enumerate(lines) if line.strip().startswith('[')), len(lines))
+    if not all(not line.strip() or line.lstrip().startswith(('#', ';')) for line in lines[:first]):
+        return False   # something else than comments before the first plan: leave the file alone
+    header = PLAN_HEADER.splitlines()
+    if lines[:len(header)] == header:
+        return False
+    _write_lines(path, header + [''] + lines[first:])
+    return True
+
+
+def update_plan_keys(path=PLAN_FILE):
+    """planalert.ini of 0.1.13 and before (support, max_entry, target, stop) -> buy-zone, sell-zone,
+    stop-plan. support + max_entry % becomes buy-zone (its upper end: the same messages as before);
+    note, start and status stay. Returns the number of converted plans."""
+    try:
+        with open(path, encoding='utf-8-sig') as file:
+            lines = file.read().splitlines()
+    except FileNotFoundError:
+        return 0
+    converted = 0
+    for symbol, (start, end) in sorted(_plan_sections(lines).items(), key=lambda item: -item[1][0]):
+        values = {line.split('=', 1)[0].strip().lower(): line.split('=', 1)[1].strip()
+                  for line in lines[start + 1:end] if '=' in line and not line.lstrip().startswith(('#', ';'))}
+        if not any(key in values for key in OLD_PLAN_KEYS):
+            continue
+        number = lambda key: parse_price(values[key]) if values.get(key, '') else None
+        first = datetime.strptime(values['start'], '%d/%m/%Y').date() if values.get('start') else datetime.now().date()
+        new = plan_lines(lines[start].strip()[1:-1], number('support'), parse_percent(values.get('max_entry') or '0'),
+                         number('target'), number('stop'), values.get('note', ''), first,
+                         values.get('status') or 'waiting')
+        if not values.get('start'):
+            new = [line for line in new if not line.startswith('start')]
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+        lines[start:end] = new
+        converted += 1
+    if converted:
+        _write_lines(path, lines)
+    return converted

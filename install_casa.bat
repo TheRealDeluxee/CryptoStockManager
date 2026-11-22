@@ -102,16 +102,16 @@ api_key =
 model = claude-sonnet-5-5
 """
 
-ASSETS_EXAMPLE = """# CaSa assets. Format: symbol = Name; crypto|stock; 1
-# 1 at the end = part of the automatic alarm analysis, without 1 = only for /check
-# Crypto: CoinGecko IDs (e.g. bitcoin), stocks: Yahoo Finance symbols, preferably in EUR (e.g. RHM.DE)
+ASSETS_EXAMPLE = """# CaSa assets. Format: symbol = Name; crypto|stock; 1; currency
+# 1 = watch with alarms, also when you don't hold it; 0 or empty = only for /check; currency only for your overview
+# Crypto: CoinGecko IDs (e.g. bitcoin), stocks: Yahoo Finance symbols at the home exchange (e.g. RHM.DE, NVDA)
 
 [crypto]
 bitcoin        = Bitcoin; crypto; 1
 ethereum       = Ethereum; crypto; 1
 
 [stocks]
-RHM.DE         = Rheinmetall; stock; 1
+RHM.DE         = Rheinmetall; stock; 1; EUR
 """
 
 START_BAT = """@echo off

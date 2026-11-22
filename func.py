@@ -109,6 +109,10 @@ def get_stock(symbol, period):
     factor = df['Price'] / df['Close']
     df['PriceHigh'] = df['High'] * factor
     df['PriceLow'] = df['Low'] * factor
+    # Price in the currency of the exchange (e.g. USD for NVDA): shown in brackets next to the EUR values
+    currency = stock.get_history_metadata().get('currency') or 'EUR'
+    df['PriceNative'] = df['Close'] / 100 if currency in ('GBp', 'GBX') else df['Close']
+    native_currency = 'GBP' if currency in ('GBp', 'GBX') else currency
 
     df_inverted = df.reset_index(drop=True)
     df_inverted = df_inverted.rename(columns={'index': 'Date'})
@@ -116,6 +120,7 @@ def get_stock(symbol, period):
     columns_to_drop = ['Close', 'Adj Close', 'Open', 'High', 'Low', 'Dividends', 'Stock Splits', 'Capital Gains']
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
     
+    df_dropped.attrs['currency'] = native_currency   # for the values in brackets in the chart (native_text)
     return df_dropped
 
 
@@ -145,6 +150,16 @@ def _fill_today(stock, symbol, df):
 _fx_cache = {}   # (currency, period) -> (time, daily rates): one request per currency and hour, not per stock
 
 
+def local_days(index):
+    """Calendar day of each time stamp in the time zone of its exchange (Yahoo: Xetra 00:00+01:00, NYSE
+    00:00-05:00, Tokyo 00:00+09:00). Converting to UTC first would move European and Asian days to the
+    day before."""
+    stamps = pd.DatetimeIndex(pd.to_datetime(index))
+    if stamps.tz is not None:
+        stamps = stamps.tz_localize(None)   # keeps the local date and time, only drops the zone
+    return stamps.normalize()
+
+
 def _fx_rates(currency, period):
     """Daily exchange rates currency -> EUR as DataFrame (Date, Rate), kept for one hour."""
     cached = _fx_cache.get((currency, period))
@@ -153,10 +168,27 @@ def _fx_rates(currency, period):
     fx = yf.Ticker(f"{currency}EUR=X").history(period=period, interval='1d', timeout=20)
     if fx.empty:
         raise ValueError(f"No exchange rate available for {currency}/EUR.")
-    rates = pd.DataFrame({'Date': pd.to_datetime(fx.index, utc=True).normalize(), 'Rate': fx['Close'].to_numpy()})
+    rates = pd.DataFrame({'Date': local_days(fx.index), 'Rate': fx['Close'].to_numpy()})
     rates = rates.dropna().sort_values('Date').drop_duplicates('Date', keep='last')
     _fx_cache[(currency, period)] = (time.time(), rates)
     return rates
+
+
+CURRENCY_SIGNS = {'USD': '$', 'GBP': '£', 'JPY': '¥', 'CAD': 'C$', 'HKD': 'HK$'}
+
+
+def native_text(df, eur_value):
+    """'318.40 $' for a EUR value of a stock that is traded in another currency (latest exchange rate of the
+    data); '' for EUR, crypto or when the currency is not known."""
+    currency = df.attrs.get('currency', 'EUR')
+    if currency == 'EUR' or 'PriceNative' not in df or not df['PriceNative'].iloc[-1]:
+        return ''
+    rate = df['Price'].iloc[-1] / df['PriceNative'].iloc[-1]   # EUR per unit of the currency
+    if not rate or not np.isfinite(rate):
+        return ''
+    value = eur_value / rate
+    sign = CURRENCY_SIGNS.get(currency, currency)
+    return f"{value:,.2f} {sign}" if value < 10000 else f"{value:,.0f} {sign}"
 
 
 def stock_prices_in_eur(stock, df, period):
@@ -174,13 +206,17 @@ def stock_prices_in_eur(stock, df, period):
     if len(currency) != 3 or not currency.isalpha():
         raise ValueError(f"Unsupported price currency: {currency}")
     rates = _fx_rates(currency.upper(), period)
-    # Use the latest available daily exchange rate for each price day.
-    dates = pd.to_datetime(df.index, utc=True).normalize()
-    joined = pd.merge_asof(pd.DataFrame({'Date': dates}).sort_values('Date'), rates,
-                           on='Date', direction='backward', tolerance=pd.Timedelta(days=7))
+    # Exchange rate of the same calendar day (local day of the exchange), otherwise the latest one before.
+    days = pd.DataFrame({'Date': local_days(df.index), 'Row': range(len(df))}).sort_values('Date', kind='stable')
+    joined = pd.merge_asof(days, rates, on='Date', direction='backward', tolerance=pd.Timedelta(days=7))
+    # first day of the period without an earlier rate (e.g. a holiday of the currency market):
+    # the nearest rate, at most 7 days away
+    nearest = pd.merge_asof(days, rates, on='Date', direction='nearest', tolerance=pd.Timedelta(days=7))
+    joined['Rate'] = joined['Rate'].fillna(nearest['Rate'])
     if joined['Rate'].isna().any() or (joined['Rate'] <= 0).any():
         raise ValueError(f"Incomplete exchange rates for {currency}/EUR.")
-    return prices * joined['Rate'].to_numpy()
+    rate = joined.sort_values('Row')['Rate'].to_numpy()   # back in the order of the price rows
+    return prices * rate
 
 
 def get_crypto(symbol, params_historical):
@@ -596,25 +632,129 @@ MARKET_BY_COUNTRY = {
 }
 
 
+_info_cache = {}      # symbol -> (time, Yahoo info): country, sector and industry, kept for one day
+_closes_cache = {}    # ticker -> (time, daily closes): indices and sector ETFs, kept for one hour
+
+
+def yahoo_info(symbol):
+    """Yahoo company information (country, sector, industry), kept for one day; {} when not available."""
+    cached = _info_cache.get(symbol)
+    if cached and time.time() - cached[0] < 86400:
+        return cached[1]
+    try:
+        info = yf.Ticker(symbol).info or {}
+    except Exception:
+        info = {}
+    _info_cache[symbol] = (time.time(), info)
+    return info
+
+
+def index_closes(ticker):
+    """Daily closes of an index or ETF (2 years, its own currency, local calendar days), kept for one hour."""
+    cached = _closes_cache.get(ticker)
+    if cached and time.time() - cached[0] < 3600:
+        return cached[1]
+    hist = yf.Ticker(ticker).history(period='2y', interval='1d', timeout=20)
+    closes = None if hist.empty else pd.Series(hist['Close'].to_numpy(float), index=local_days(hist.index))
+    _closes_cache[ticker] = (time.time(), closes)
+    return closes
+
+
+# Sector of the company (Yahoo "sector"/"industry") -> US sector ETF: how the industry moves
+SECTOR_ETFS = {
+    'Technology': ('XLK', 'Technology'), 'Industrials': ('XLI', 'Industrials'), 'Healthcare': ('XLV', 'Health care'),
+    'Financial Services': ('XLF', 'Financials'), 'Consumer Cyclical': ('XLY', 'Consumer cyclical'),
+    'Consumer Defensive': ('XLP', 'Consumer staples'), 'Energy': ('XLE', 'Energy'), 'Utilities': ('XLU', 'Utilities'),
+    'Basic Materials': ('XLB', 'Materials'), 'Real Estate': ('XLRE', 'Real estate'),
+    'Communication Services': ('XLC', 'Communication'),
+}
+INDUSTRY_ETFS = {'Semiconductors': ('SOXX', 'Semiconductors'),
+                 'Semiconductor Equipment & Materials': ('SOXX', 'Semiconductors')}
+
+
+def market_index(symbol):
+    """(ticker, name) of the leading index of a stock: the company's home country (Nvidia -> S&P 500),
+    if unknown the index of the exchange."""
+    country = yahoo_info(symbol).get('country')
+    if country in MARKET_BY_COUNTRY:
+        return MARKET_BY_COUNTRY[country]
+    suffix = symbol.upper().rsplit('.', 1)[-1] if '.' in symbol else ''
+    # all German exchanges (Xetra, Frankfurt, Stuttgart, Munich, Duesseldorf, Berlin, Hamburg, Hanover): DAX
+    german = {exchange: ('^GDAXI', 'DAX') for exchange in ('DE', 'F', 'SG', 'MU', 'DU', 'BE', 'HM', 'HA')}
+    others = {'MI': ('FTSEMIB.MI', 'FTSE MIB'), 'L': ('^FTSE', 'FTSE 100'), 'AS': ('^AEX', 'AEX'),
+              'PA': ('^FCHI', 'CAC 40'), 'SW': ('^SSMI', 'SMI'), 'MC': ('^IBEX', 'IBEX 35'),
+              'ST': ('^OMX', 'OMX Stockholm 30'), 'OL': ('OBX.OL', 'OBX'), 'T': ('^N225', 'Nikkei 225'),
+              'HK': ('^HSI', 'Hang Seng'), 'TW': ('^TWII', 'TAIEX'), 'TO': ('^GSPTSE', 'S&P/TSX'),
+              'CN': ('^GSPTSE', 'S&P/TSX')}
+    return {**german, **others}.get(suffix, ('^GSPC', 'S&P 500'))
+
+
+def market_context(asset_type, symbol, full):
+    """Today's move of a stock compared with its leading index and its sector ETF (from the same calendar
+    days, the stock in the currency of its exchange). None for crypto or without data.
+    Returns a dict: index, index_1d, index_5d, sector, sector_1d, sector_5d, asset_1d, asset_5d,
+    relative_5d (percentage points vs. the index), higher (relative strength higher than on x % of the last
+    100 days), verdict ('in line with the market', 'weaker than the market', 'stronger than the market')."""
+    if asset_type != 'stock' or full is None or len(full) < 30:
+        return None
+    try:
+        column = 'PriceNative' if 'PriceNative' in full else 'Price'
+        asset = pd.Series(full[column].to_numpy(float), index=local_days(full['Date'])).groupby(level=0).last()
+        ticker, name = market_index(symbol)
+        index = index_closes(ticker)
+        if index is None:
+            return None
+        both = pd.concat([asset, index], axis=1, join='inner').dropna()
+        if len(both) < 30:
+            return None
+        a, i = both.iloc[:, 0], both.iloc[:, 1]
+        change = lambda series, days: (series.iloc[-1] / series.iloc[-1 - days] - 1) * 100
+        ratio = (a / i).tail(101)
+        result = {'index': name, 'index_1d': change(i, 1), 'index_5d': change(i, 5),
+                  'asset_1d': change(a, 1), 'asset_5d': change(a, 5),
+                  'relative_5d': change(a, 5) - change(i, 5),
+                  'higher': float((ratio.iloc[:-1] < ratio.iloc[-1]).mean() * 100),
+                  'sector': None, 'sector_1d': None, 'sector_5d': None}
+        info = yahoo_info(symbol)
+        etf = INDUSTRY_ETFS.get(info.get('industry')) or SECTOR_ETFS.get(info.get('sector'))
+        if etf:
+            sector = index_closes(etf[0])
+            if sector is not None:
+                common = pd.concat([a, sector], axis=1, join='inner').dropna().iloc[:, 1]
+                if len(common) > 6:
+                    result.update(sector=f"{etf[1]} ({etf[0]})", sector_1d=change(common, 1),
+                                  sector_5d=change(common, 5))
+        gap = result['asset_1d'] - result['index_1d']
+        result['verdict'] = ('in line with the market' if abs(gap) <= 1.0 else
+                             'weaker than the market' if gap < 0 else 'stronger than the market')
+        return result
+    except Exception as error:   # extra information: never stops the analysis
+        log_print(f"Market comparison for {symbol} not available: {error}", 'WARN')
+        return None
+
+
+def market_text(market, name='the stock'):
+    """One line for the AI prompt: index, sector and the stock, 1 and 5 days, verdict."""
+    if not market:
+        return 'not available'
+    parts = [f"{market['index']} 1 day {market['index_1d']:+.1f} %, 5 days {market['index_5d']:+.1f} %"]
+    if market['sector']:
+        parts.append(f"sector {market['sector']} 1 day {market['sector_1d']:+.1f} %, 5 days {market['sector_5d']:+.1f} %")
+    parts.append(f"{name} 1 day {market['asset_1d']:+.1f} %, 5 days {market['asset_5d']:+.1f} %")
+    return ('; '.join(parts) + f" – today {market['verdict']}; relative strength vs. the index higher than on "
+            f"{market['higher']:.0f} % of the last 100 days")
+
+
 def market_prices(asset_type, symbol):
     """Leading market for the market phase: Bitcoin for crypto; for stocks the index of the company's home
     country (Nvidia listed in Frankfurt -> S&P 500), if unknown the index of the exchange."""
     if asset_type == 'crypto':
         df = get_crypto('bitcoin', {'vs_currency': 'eur', 'days': '260'})
         return 'Bitcoin (crypto leader)', None if df is None else df['Price']
-    try:
-        country = (yf.Ticker(symbol).info or {}).get('country')
-    except Exception:
-        country = None
-    if country in MARKET_BY_COUNTRY:
-        ticker, name = MARKET_BY_COUNTRY[country]
-    else:
-        suffix = symbol.upper().rsplit('.', 1)[-1] if '.' in symbol else ''
-        # all German exchanges (Xetra, Frankfurt, Stuttgart, Munich, Duesseldorf, Berlin, Hamburg, Hanover): DAX
-        german = {exchange: ('^GDAXI', 'DAX') for exchange in ('DE', 'F', 'SG', 'MU', 'DU', 'BE', 'HM', 'HA')}
-        ticker, name = {**german, 'MI': ('FTSEMIB.MI', 'FTSE MIB')}.get(suffix, ('^GSPC', 'S&P 500'))
-    hist = yf.Ticker(ticker).history(period='2y', interval='1d', timeout=20)   # index in its own currency
-    return name, None if hist.empty else hist['Close'].tail(250)
+    ticker, name = market_index(symbol)
+    closes = index_closes(ticker)
+    return name, None if closes is None else closes.tail(250)
+
 
 def calc_state_fuctions(state,df):
     # update balances and indicators into grouped state
@@ -886,7 +1026,12 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None, pattern=
 
         # Support/resistance: short band (about 1 cm) at the left edge, number (R1/S1) as a tag
         # outside the chart next to the percentage axis, details in the legend at the top right.
-        handles = []
+        # Current price: the values in the legend (first line "A"), on the axis only a short black tag "A",
+        # so that the chart keeps its width
+        price_now = df['Price'].iloc[-1]
+        native_now = native_text(df, price_now)   # e.g. "318.40 $" for a US stock
+        handles = [mpatches.Patch(color='black', label=f"A {format_euro(price_now)} "
+                                  f"({native_now + ' · ' if native_now else ''}{df['Percentage Deviation'].iloc[-1]:+.1f} %)")]
         tag_prices = []   # prices of the R1/S1 tags: axis labels next to them are hidden
         ax_width_cm = ax1.get_position().width * fig.get_figwidth() * 2.54
         stub = min(1.0 / ax_width_cm, 0.2)   # 1 cm as share of the chart width
@@ -898,7 +1043,8 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None, pattern=
                 color = '#c0392b' if name == 'R1' else '#1e8449'
                 alpha = 0.22 if zone['touches'] >= 2 else 0.12   # weak zone (1 touch) lighter
                 pct = (zone['center'] / df['Price'].iloc[-1] - 1) * 100
-                text = f"{name} {human_format_euro(zone['center'], None)} ({pct:+.1f} %)"
+                native = native_text(df, zone['center'])
+                text = f"{name} {human_format_euro(zone['center'], None)} ({native + ' · ' if native else ''}{pct:+.1f} %)"
                 if zone['touches']:
                     text += f" · {zone['touches']}×"
                 else:
@@ -963,7 +1109,7 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None, pattern=
             # Legend above the chart: covers neither price nor volume profile.
             # One column when the pattern is added, otherwise R1/S1 next to each other.
             ax1.legend(handles=handles, loc='lower right', bbox_to_anchor=(1, 1),
-                       ncol=1 if pattern is not None else len(handles),
+                       ncol=2 if len(handles) > 2 else len(handles),   # two blocks side by side: less height above the chart
                        fontsize=7, frameon=False, handlelength=1, borderaxespad=0.2)
 
         min_remap = linear_remap(
@@ -997,10 +1143,10 @@ def plot_and_save(df, symbol, data_type, zero_line=None, sr_zones=None, pattern=
 
         ax2.plot(x, df['Percentage Deviation'], color='k', linewidth=1.0, label='Deviation (%)')
 
-        # Current price as a tag on the percentage axis (like TradingView): "765.50 € (-26.0 %)"
+        # Current price as a short tag "A" on the percentage axis (like TradingView), values in the legend
         current_pct = df['Percentage Deviation'].iloc[-1]
         ax2.axhline(current_pct, color='black', linewidth=0.7, linestyle=(0, (2, 2)), alpha=0.6, zorder=1)
-        ax2.text(-0.01, current_pct, f"{format_euro(df['Price'].iloc[-1])} ({current_pct:+.1f} %)",
+        ax2.text(-0.01, current_pct, 'A',   # A = actual price; its values are in the legend
                  transform=mtransforms.blended_transform_factory(ax2.transAxes, ax2.transData),
                  ha='right', va='center', fontsize=7.5, color='white', fontweight='bold', zorder=10, clip_on=False,
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='black', edgecolor='none'))
@@ -1274,7 +1420,7 @@ def percentile_bar(percent, label='>{:.0f}%'):
     return f"{'█' * filled}{PERCENTILE_EMPTY * (PERCENTILE_STEPS - filled)} {label.format(percent)}"
 
 
-def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
+def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None, market=None):
     """Shared figures for alarms and /check; this function sends nothing.
     rank: score 1-10 from score_rank(); unit: 'days' (daily analysis) or 'hours' (hourly analysis);
     sr_zones: (resistance, support) from support_resistance() for the risk/reward line."""
@@ -1355,8 +1501,8 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
         pattern_mark, pattern_short = 'ℹ️', f"{pattern['name']}: price broke {'down' if pattern['top'] else 'up'}."
     # The figures as one numbered list without headers; the summary at the top names their numbers.
     # Each entry: (traffic light, name, short sentence at the top, its lines in the list)
-    step = 'day' if unit == 'days' else 'hour'   # names with the period, e.g. 200-day trend (hourly: 200-hour)
-    groups = [(long_mark, f'200-{step} trend', long_text, [long_line])]
+    step = 'd' if unit == 'days' else 'h'   # names with the period, e.g. 200d trend (hourly: 200h trend)
+    groups = [(long_mark, f'200{step} trend', long_text, [long_line])]
     if rr:
         # R1/S1: ratio room up : room down, the bar = share of the room up to R1 within the range S1 (0 %) .. R1 (100 %)
         rr_short = rr['short']
@@ -1365,9 +1511,14 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
         groups.append((rr['mark'], 'Risk/Reward', rr_short, [rr_line]))
     groups += [
         (rsi_mark, 'RSI', rsi_text, [line('RSI14')]),
-        (mark(part_trend), f'7-{step} trend', text3.split(': ', 1)[-1], [line('SMA7'), line('VMA7')]),
-        (mark(part_short), f'5-{step} momentum', text2.split(': ', 1)[-1], [line('ROC5'), line('VROC5')]),
+        (mark(part_trend), f'7{step} trend', text3.split(': ', 1)[-1], [line('SMA7'), line('VMA7')]),
+        (mark(part_short), f'5{step} mom.', text2.split(': ', 1)[-1], [line('ROC5'), line('VROC5')]),
     ]
+    if market and unit == 'days':
+        # Market (information only): today's move of the index and the sector; figure: 5 days vs. the index
+        sector = f", {market['sector'].split(' (')[0]} {market['sector_1d']:+.1f} %" if market['sector'] else ''
+        text = f"{market['index']} {market['index_1d']:+.1f} %{sector}; today {market['verdict']}."
+        groups.append(('ℹ️', 'Market', text, [row('vsIndex', f"{market['relative_5d']:+.1f}%", market['higher'])]))
     numbered, sections = [], []
     for light, name, sentence, rows in groups:
         numbers = list(range(len(numbered) + 1, len(numbered) + len(rows) + 1))
@@ -1376,7 +1527,7 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     # One entry per summary line: (traffic light, name with the numbers of its figures, short sentence, block below)
     sections[0] = sections[0][:3] + (f"<pre>{html.escape(chr(10).join(numbered))}</pre>",)
     sections.append((pattern_mark, 'Pattern', pattern_short,
-                     f"<b>Pattern</b>\n{html.escape(pattern_text)}" if pattern else ''))
+                     f"<b>Pattern:</b> {html.escape(pattern_text)}" if pattern else ''))
     if rank is None:
         head = f"<b>Score: {score}</b>"
     elif rank == 1:
@@ -1405,8 +1556,9 @@ ALERTS = {
                        'rises: stocks 54 % (normal 52 %), crypto 54 % (normal 49 %)'),
     'score8':         (('141',), 'Score>8', 'info', 'alarm', 'score above 8 for the first time (uptrend)',
                        'rises: stocks 55 % (normal 52 %, no average gain), crypto 56 % (normal 49 %)'),
-    'oversold':       (('151',), 'Oversold', 'alarm', 'off', 'score -8 or lower: strong sell-off',
-                       'rises: stocks 58 % (normal 52 %), crypto 48 % (normal 49 %)'),
+    'oversold':       (('151',), 'Oversold', 'alarm', 'off',
+                       'after a strong sell-off (score -8 or lower) the 12-day average turns up',
+                       'turn rule since 0.1.14, not backtested yet'),
     'cross_ema_sell': (('201',), 'Cross-EMA Sell', 'alarm', 'alarm', 'trend turns down (only own positions)',
                        'falls: stocks 45 % (normal 48 %, but -0.9 % on average), crypto 55 % (normal 51 %)'),
     'loss_limit':     (('211',), 'Loss limit', 'alarm', 'alarm',
@@ -1416,14 +1568,18 @@ ALERTS = {
                        'rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)'),
     'negative5':      (('321',), 'Negative-5', 'info', 'info', 'price -10 % in 5 days',
                        'rises: stocks 53 % (normal 52 %), crypto 48 % (normal 49 %)'),
-    'high100':        (('361',), '100-day high', 'info', 'alarm', 'new highest price of 100 days',
-                       'rises: stocks 55 % (normal 52 %), crypto 60 % (normal 49 %)'),
-    'low100':         (('362',), '100-day low', 'info', 'info', 'new lowest price of 100 days',
-                       'rises: stocks 57 % (normal 52 %), crypto 53 % (normal 49 %)'),
+    'high100':        (('361',), '100-day high', 'info', 'alarm',
+                       'after a new 100-day high the 12-day average turns down',
+                       'turn rule since 0.1.14, not backtested yet'),
+    'low100':         (('362',), '100-day low', 'info', 'info',
+                       'after a new 100-day low the 12-day average turns up',
+                       'turn rule since 0.1.14, not backtested yet'),
     'pattern':        (('331', '332'), 'Pattern breakout', 'info', 'info', 'chart pattern breaks out',
                        'in breakout direction: stocks 51 % (normal 51 %), crypto 56 % (normal 50 %)'),
 }
 ALERT_KINDS = ('alarm', 'info', 'off')
+TURN_DAYS = 10   # Oversold / 100-day low / 100-day high: the extreme within the last 10 days, then the turn
+TURN_NOTE = 'New rule since 0.1.14 (message at the turn): not backtested yet.'
 
 
 def backtest_note(key, asset_type):
@@ -1450,13 +1606,13 @@ alert_settings = {}   # set by main.py from config.ini
 
 
 def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year, amount_older_than_one_year_pct, data_type, pattern=None, rank=None, sr_zones=None, asset_type=None,
-          yesterday_profit_pct=None):
+          yesterday_profit_pct=None, market=None):
 
     alarms = {}
     tech_indicators = None  
     score = 0
 
-    details = analysis_details(df, pattern, rank, 'days' if data_type == '100d' else 'hours', sr_zones)
+    details = analysis_details(df, pattern, rank, 'days' if data_type == '100d' else 'hours', sr_zones, market)
     score = details['score']
     tech_indicators = details['quantiles']
     current_EMA_diff_pct = (df['Fast EMA'].iloc[-1] - df['Slow EMA'].iloc[-1]) / df['Slow EMA'].iloc[-1] * 100
@@ -1468,8 +1624,9 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
         # Telegram HTML (bold/italic/monospace), therefore escape texts with html.escape
         message = (
             # "Potential": a signal, not a recommendation (most alarms are right in about 60 % of cases)
-            f"<b>{html.escape(symbol)} — Potential {buy_sell.lower()}</b>\n"
-            f"Trigger: {html.escape(indicator)} ({data_type})\n\n"
+            # header: the asset, below it one line with the kind of alarm and what triggered it
+            f"<b>{html.escape(symbol)}</b>\n"
+            f"Potential {buy_sell.lower()}: {html.escape(indicator)} ({data_type})\n\n"
             + details['message']
         )
         if watch_list:
@@ -1526,12 +1683,21 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
         emit('score8', "141", "Buy", "Score>8", value_ts,
              None)
 
-    # Oversold: score falls to -8 or lower for the first time. Stocks often recover a little after a strong
-    # sell-off (backtest 47 stocks: +1.3 % vs. an average day after 20 days, 58 % hits, all periods positive).
-    # Crypto tends to keep falling (-5.5 %), therefore the default is stocks only. No SMA200 filter.
-    if daily and score <= -8 and score_before() > -8:
-        emit('oversold', "151", "Buy", "Oversold (strong sell-off, possible rebound)", value_ts,
-             None, important=False)
+    # Turning points (since 0.1.14): Oversold, 100-day low and 100-day high are reported only when the price
+    # turns, like the dots of the 100-day low/high of the fast EMA in the chart: the 12-day average (Fast EMA)
+    # turns today (up after a low, down after a high) and the extreme was within the last TURN_DAYS days.
+    # Before 0.1.14 the message came on the day of the extreme, while the price could still keep falling/rising.
+    ema = df['Fast EMA'] if 'Fast EMA' in df else None
+    turned_up = ema is not None and len(ema) >= 3 and ema.iloc[-1] > ema.iloc[-2] <= ema.iloc[-3]
+    turned_down = ema is not None and len(ema) >= 3 and ema.iloc[-1] < ema.iloc[-2] >= ema.iloc[-3]
+
+    # Oversold: after a strong sell-off (score -8 or lower within the last days) the average turns up.
+    # Crypto tended to keep falling after sell-offs, therefore the default is stocks only. No SMA200 filter.
+    if daily and turned_up and len(df) > TURN_DAYS + 30:
+        worst = min(score_only(df.iloc[:len(df) - back]) for back in range(1, TURN_DAYS + 1))
+        if worst <= -8:
+            emit('oversold', "151", "Buy", "Oversold, turning up (strong sell-off, the average turns up)",
+                 value_ts, TURN_NOTE, important=False)
 
     # Trend turns down: only for assets in your portfolio; the most stable signal since 2020
     if daily and not watch_list and yesterday_EMA_diff_pct > 0 and current_EMA_diff_pct < 0:
@@ -1555,13 +1721,14 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
              None, important=False)
 
     if daily and len(df) >= 100:
-        price, before = df['Price'].iloc[-1], df['Price'].iloc[:-1]
-        if price >= before.max() and not before.iloc[-1] >= before.iloc[:-1].max():
-            emit('high100', "361", "Buy", "New 100-day high", value_ts,
-                 None, important=False)
-        if price <= before.min() and not before.iloc[-1] <= before.iloc[:-1].min():
-            emit('low100', "362", "Sell", "New 100-day low", value_ts,
-                 None, important=False)
+        prices = df['Price']
+        recent = range(len(prices) - 1 - TURN_DAYS, len(prices) - 1)   # the last days before today
+        if turned_down and int(np.argmax(prices.to_numpy())) in recent:
+            emit('high100', "361", "Sell", "100-day high, turning down (the average turns down)", value_ts,
+                 TURN_NOTE, important=False)
+        if turned_up and int(np.argmin(prices.to_numpy())) in recent:
+            emit('low100', "362", "Buy", "100-day low, turning up (the average turns up)", value_ts,
+                 TURN_NOTE, important=False)
 
     # Chart pattern: fresh breakout through the neckline (today or the value before); value = date of the
     # breakout, so the same breakout is reported only once.
@@ -2102,6 +2269,8 @@ def claude_usage_text(usage):
     parts = [f"{usage['tokens_in']:,} tokens in", f"{usage['tokens_out']:,} out"]
     if usage['searches']:
         parts.append(f"{usage['searches']} web search{'es' if usage['searches'] != 1 else ''}")
+    else:   # visible when Claude answered without looking at the news
+        parts.append('no web search')
     if usage['cost'] is None:
         parts.append('cost not known for this model')
     else:
@@ -2116,12 +2285,12 @@ def claude_usage_text(usage):
 
 
 def ai_buttons(asset_type, symbol):
-    """Buttons below alarms, infos and /check: 🤖 AI prompt (as /ai_prompt); with a Claude API key also
-    🤖 AI decision (API) and 🤖 AI plan (API) (as /ai_api_decision3s and /ai_api_plan)."""
+    """Buttons below alarms, infos and /check: 🤖 Prompt (as /ai_prompt); with a Claude API key also
+    🤖 Guide (API) and 🤖 Plan (API) (as /ai_api_decision3s and /ai_api_plan)."""
     asset = f"{asset_type}|{symbol.lower()}"
-    row = [('🤖 AI prompt', f"aibtn|{asset}")]
+    row = [('🤖 Prompt', f"aibtn|{asset}")]
     if claude_available():
-        row += [('🤖 AI decision (API)', f"aidbtn|{asset}"), ('🤖 AI plan (API)', f"aipbtn|{asset}")]
+        row += [('🤖 Guide (API)', f"aidbtn|{asset}"), ('🤖 Plan (API)', f"aipbtn|{asset}")]
     return [row]
 
 
@@ -2130,11 +2299,11 @@ def claude_available():
     return bool(anthropic_api_key)
 
 
-def claude(prompt, system=None, max_tokens=16000, effort='medium', web_search=False, with_usage=False):
+def claude(prompt, system=None, max_tokens=16000, effort='medium', web_search=False, with_usage=False, max_searches=5):
     """Sends a prompt to the Claude API and returns the answer as text.
     Only works with a key in config.ini [anthropic] api_key, otherwise RuntimeError.
     effort: low, medium, high (more effort = better answer, but slower and more expensive).
-    web_search=True: Claude may search the web (at most 5 searches, each search costs extra).
+    web_search=True: Claude may search the web (at most max_searches searches, each search costs extra).
     with_usage=True: returns (text, usage) with tokens, web searches, list price in USD, seconds and model(s).
     Refusal fallbacks are on (not for Haiku): if the model refuses, the API retries once with a fallback model.
     Errors: PermissionError (key wrong or not allowed), RuntimeError (everything else)."""
@@ -2152,7 +2321,7 @@ def claude(prompt, system=None, max_tokens=16000, effort='medium', web_search=Fa
         request.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
     if web_search:   # Haiku: older search tool without dynamic filtering
         version = 'web_search_20250305' if 'haiku' in anthropic_model else 'web_search_20260209'
-        request['tools'] = [{"type": version, "name": "web_search", "max_uses": 5}]
+        request['tools'] = [{"type": version, "name": "web_search", "max_uses": max_searches}]
     if system:
         request['system'] = system
     start = time.time()
@@ -2163,7 +2332,13 @@ def claude(prompt, system=None, max_tokens=16000, effort='medium', web_search=Fa
             # streaming: no timeout on long answers; only the finished message is used
             with client.beta.messages.stream(**request) as stream:
                 response = stream.get_final_message()
-            texts += [block.text for block in response.content if block.type == 'text']
+            # Only the answer after the last web search counts: text before a search (or between searches)
+            # is Claude's working note, e.g. "r is a string; parse." from the search filter.
+            for block in response.content:
+                if block.type == 'text':
+                    texts.append(block.text)
+                elif 'tool' in block.type:   # server_tool_use, web_search_tool_result ...: start again after it
+                    texts = []
             usage = response.usage
             tokens_in, tokens_out = tokens_in + usage.input_tokens, tokens_out + usage.output_tokens
             found = getattr(getattr(usage, 'server_tool_use', None), 'web_search_requests', 0) or 0

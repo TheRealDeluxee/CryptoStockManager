@@ -9,8 +9,9 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 ## Contents
 
 - [Why CaSa?](#why-casa)
-- [In a Nutshell](#in-a-nutshell)
-- [What's New](#whats-new)
+- [What does CaSa do?](#what-does-casa-do)
+- [What do you need?](#what-do-you-need)
+- [What's New?](#whats-new)
 - [Learn More](#learn-more)
   - [Features](docs/features.md)
   - [Installation](docs/installation.md)
@@ -33,9 +34,7 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 
 ![CaSa alert in Telegram on iPhone and Apple Watch](docs/telegram_phone_watch.png)
 
-## In a Nutshell
-
-### What CaSa does
+## What does CaSa do?
 
 - **Watches your stocks and cryptos** day and night – you don't have to look at prices all day.
 - **Messages you in Telegram** when something important happens, with a chart and a simple score from 1 to 10.
@@ -46,7 +45,7 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 
 CaSa gives signals, not investment advice. You decide.
 
-### What you need
+## What do you need?
 
 - A **Windows or Linux computer**, or for day and night a **Raspberry Pi** 4 or 5 (a small, cheap computer), and internet
 - **Telegram** on your phone
@@ -56,7 +55,7 @@ CaSa gives signals, not investment advice. You decide.
 </p>
 Try it out: installed in 2–5 minutes, once Telegram is installed and your bot is created (with @BotFather).
 
-## What's New
+## What's New?
 
 **Version 0.1.13** – all changes in [CHANGELOG.md](CHANGELOG.md)
 

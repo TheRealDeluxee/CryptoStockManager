@@ -110,6 +110,6 @@ Open `assets.ini` on the drive (an example with Bitcoin, Ethereum and Rheinmetal
 | Update to the newest CaSa release | `/update` in Telegram, or the button **⬆ Update now** of the daily message (see below), or `casa-update` on the Pi (a certain version, also back: `casa-update v0.1.12`) |
 | Keyboard, drive password, keys | `casa-setup` |
 
-**Updates:** CaSa checks for a new release every day at 19:00, or at once with `/update`. If there is one, tap **⬆ Update now**: CaSa updates itself in about a minute, your files stay, and the bot confirms with "✅ Update complete". If something goes wrong, the old version keeps running. This works with the CaSa image; elsewhere the message shows how to update by hand.
+**Updates:** CaSa checks for a new release every day at 19:30, or at once with `/update`. If there is one, tap **⬆ Update now**: CaSa updates itself in about a minute, your files stay, and the bot confirms with "✅ Update complete". If something goes wrong, the old version keeps running. This works with the CaSa image; elsewhere the message shows how to update by hand.
 
 CaSa runs as the service `casa`: it starts at every boot and again 30 seconds after an error. `casa-update` gets the newest release from GitHub, updates the Python packages and restarts CaSa; your files (`config.ini`, `assets.ini`, `transactions.csv` …) stay.

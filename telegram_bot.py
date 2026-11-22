@@ -35,7 +35,7 @@ logging.basicConfig(
 )
 
 _TRANSACTIONS_PATH = "transactions.csv"
-CSV_HEADER = ["type", "symbol", "name", "action", "amount", "qty", "date"]
+CSV_HEADER = cl.CSV_HEADER   # amount_eur
 
 
 def _load_config() -> Dict[str, str]:
@@ -102,7 +102,7 @@ def _write_transactions(rows):
             temp_path = file.name
             writer = csv.DictWriter(file, fieldnames=CSV_HEADER, delimiter=';')
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows(cl.transaction_file_rows(rows))   # "amount" -> column amount_eur
             file.flush()
             os.fsync(file.fileno())
         os.replace(temp_path, _TRANSACTIONS_PATH)
@@ -281,8 +281,8 @@ def _cmdq(app: Application) -> Queue:
 HELP_TEXT = (
         "<b>Analysis</b>\n"
         "/check – daily analysis of one asset (choose via buttons)\n"
-        "🤖 AI prompt, AI decision (API), AI plan (API) – buttons below every alarm, info and /check "
-        "(AI decision and AI plan with a Claude API key)\n"
+        "🤖 Prompt, Guide (API), Plan (API) – AI buttons below every alarm, info and /check "
+        "(Guide and Plan with a Claude API key)\n"
         "/analyse – start daily, hourly or summary now\n"
         "\n"
         "<b>Alarms and dates</b>\n"
@@ -299,7 +299,7 @@ HELP_TEXT = (
         "\n"
         "<b>System</b>\n"
         "/status – analyses, next runs, problems\n"
-        "/update – look for a new CaSa version now (otherwise daily at 19:00) and install it\n"
+        "/update – look for a new CaSa version now (otherwise daily at 19:30) and install it\n"
         "/restart – restart the program\n"
         "\n"
         "<b>Examples</b> (symbol or name from assets.ini)\n"
@@ -383,10 +383,10 @@ async def _reply_asset_buttons(update, cmd, question):
 
 _BUTTON_REPLIES = {'check': 'Daily analysis for {name} queued (without alarm).',
                    'ai': 'Creating AI prompt for {name} …',
-                   'ai_decision': 'Asking Claude for a decision on {name} … (about 1 minute)',
-                   'ai_plan': 'Asking Claude for a trading plan for {name} … (about 1 minute)'}
-_AI_QUESTIONS = {'ai': 'AI prompt for which asset?', 'ai_decision': 'Claude decision for which asset?',
-                 'ai_plan': 'Claude trading plan for which asset?'}
+                   'ai_decision': '🤖 Guide for {name}: Claude checks news, market and trend … (about 1 minute)',
+                   'ai_plan': '🤖 Plan for {name}: Claude checks news, market and trend … (about 1 minute)'}
+_AI_QUESTIONS = {'ai': 'AI prompt for which asset?', 'ai_decision': 'Guide for which asset?',
+                 'ai_plan': 'Plan for which asset?'}
 
 
 def _claude_key_set():
@@ -422,7 +422,7 @@ _AI_BUTTONS = {'aibtn': 'ai', 'aidbtn': 'ai_decision', 'aipbtn': 'ai_plan'}
 
 
 async def _cb_ai_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # "🤖 AI prompt", "🤖 AI decision (API)", "🤖 AI plan (API)" below an alarm or info: the alarm message itself stays unchanged
+    # "🤖 Prompt", "🤖 Guide (API)", "🤖 Plan (API)" below an alarm or info: the alarm message itself stays unchanged
     query = update.callback_query
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
@@ -711,10 +711,11 @@ async def _cb_event_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(f'Event deleted: {name}')
 
 
-PLAN_FORMAT = ('Format: /plan_alert <symbol or name> <support> <max_entry %> <target> <stop> <note>\n'
-               '- for a value you do not use, e.g. no stop: ... 312.15 2 358.93 - note\n'
-               'Example: /plan_alert TSMC 312.15 2 358.93 312.15 1/4 of the position after a rebound')
-_PLAN_STATUS_TEXT = {'waiting': '⏳ waiting', 'buy_zone': '🟢 in the buy zone', 'target': '💰 at the target',
+PLAN_FORMAT = ('Format: /plan_alert <symbol or name> <buy-zone> <sell-zone> <stop-plan> <note>\n'
+               '- for a value you do not use, e.g. no stop-plan: ... 312.15 358.93 - note\n'
+               'Example: /plan_alert TSMC 312.15 358.93 305 1/4 of the position after a rebound')
+_PLAN_STATUS_TEXT = {'waiting': '⏳ waiting', 'buy_zone': '🟢 in the buy-zone', 'turn_up': '🔼 turned up after the buy-zone',
+                     'target': '💰 at the sell-zone',
                      'ended': '⛔ ended'}
 
 
@@ -727,7 +728,7 @@ def _plan_line(plan):
 
 
 async def _cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /plan_alert: show plans (with 🗑 to delete); /plan_alert <asset> <support> <max %> <target> <stop> <note>: save one
+    # /plan_alert: show plans (with 🗑 to delete); /plan_alert <asset> <buy-zone> <sell-zone> <stop-plan> <note>: save one
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
@@ -744,12 +745,12 @@ async def _cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                             reply_markup=InlineKeyboardMarkup([row]))
             return
         asset_type, symbol, _, rest = _find_asset(list(args), allow_rest=True)
-        if len(rest) < 4:
+        if len(rest) < 3:
             await update.message.reply_text(PLAN_FORMAT)
             return
         value = lambda text: None if text.strip() in ('-', '') else cl.parse_price(text)
-        support, max_entry, target, stop = value(rest[0]), cl.parse_percent(rest[1]), value(rest[2]), value(rest[3])
-        name, _, replaced = cl.add_plan(symbol, support, max_entry, target, stop, ' '.join(rest[4:]))
+        support, target, stop = value(rest[0]), value(rest[1]), value(rest[2])
+        name, _, replaced = cl.add_plan(symbol, support, 0, target, stop, ' '.join(rest[3:]))
     except (OSError, ValueError, configparser.Error) as error:
         await _reply_long(update, f'Error: {error}\nNot saved.\n\n{PLAN_FORMAT}')
         return
@@ -761,7 +762,7 @@ async def _cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text += f"\nCurrent price {func.format_euro(now)}."
     except Exception:
         pass
-    text += '\nBuy zone and target are checked every hour (stocks Mon–Fri 08:00–22:00), the stop with the daily close.'
+    text += '\nBuy-zone and sell-zone are checked every hour (stocks Mon–Fri 08:00–22:00), the stop-plan with the daily close.'
     _cmdq(app).put({'cmd': 'plan_alerts'})   # zone or target may already be reached: check right away
     await update.message.reply_text(text)
 
@@ -781,13 +782,14 @@ async def _cb_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await query.message.reply_text(f'Updating to {version} … (1–3 minutes)')
 
 
-# ── Guided plan: asset -> support -> max_entry -> target -> stop -> note -> save (state in context.user_data) ──
+# ── Guided plan: asset -> buy-zone -> sell-zone -> stop-plan -> note -> save (state in context.user_data) ──
+# (in the program: support = buy-zone, target = sell-zone, stop = stop-plan)
 _PLAN_CANCEL = [InlineKeyboardButton('✖ Cancel', callback_data='plg|cancel')]
 _PLAN_QUESTIONS = {
-    'support': 'Support: the price in € where the buy zone starts (e.g. 312.15)? Send it as a message, '
-               'or Skip for a plan with a target only.',
-    'target': 'Target: price in € for partial profits? Send it as a message, or Skip.',
-    'stop': 'Stop: the plan fails at a daily close below this price in €? Send it as a message, or Skip.',
+    'support': 'Buy-zone: you want to buy at or below which price in € (e.g. 312.15)? Send it as a message, '
+               'or Skip for a plan with a sell-zone only.',
+    'target': 'Sell-zone: take partial profits at or above which price in €? Send it as a message, or Skip.',
+    'stop': 'Stop-plan: a daily close below which price in € ends the plan? Send it as a message, or Skip.',
     'note': 'Your note (tranche size, conditions, e.g. "1/4 after a rebound")? Send it as a message, or Skip.',
 }
 
@@ -800,12 +802,7 @@ def _plan_step_keyboard(step):
 async def _plan_ask(message, plan, step):
     """Next question of the guided plan."""
     plan['step'] = step
-    if step == 'max_entry':
-        buttons = [[InlineKeyboardButton(f'{value} %', callback_data=f'plg|max|{value}') for value in (0, 2, 3, 5)],
-                   _PLAN_CANCEL]
-        await message.reply_text(f"Buy zone: buy only up to how many % above the support {plan['support']:.2f} €?\n"
-                                  "Tap a button or send a number (0 to 50).", reply_markup=InlineKeyboardMarkup(buttons))
-    elif step == 'confirm':
+    if step == 'confirm':
         try:
             cl.check_plan(plan['support'], plan['max_entry'], plan['target'], plan['stop'])
         except ValueError as error:
@@ -826,7 +823,7 @@ async def _plan_ask(message, plan, step):
         await message.reply_text(_PLAN_QUESTIONS[step], reply_markup=_plan_step_keyboard(step))
 
 
-_PLAN_NEXT = {'support': 'max_entry', 'max_entry': 'target', 'target': 'stop', 'stop': 'note', 'note': 'confirm'}
+_PLAN_NEXT = {'support': 'target', 'target': 'stop', 'stop': 'note', 'note': 'confirm'}
 
 
 async def _cb_plan_guided(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -873,12 +870,7 @@ async def _cb_plan_guided(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif action == 'skip':
             await query.edit_message_reply_markup(reply_markup=None)
             step = parts[2]
-            # without support there is no buy zone: max_entry is not asked
-            await _plan_ask(query.message, plan, 'target' if step == 'support' else _PLAN_NEXT[step])
-        elif action == 'max':
-            await query.edit_message_reply_markup(reply_markup=None)
-            plan['max_entry'] = cl.parse_percent(parts[2])
-            await _plan_ask(query.message, plan, 'target')
+            await _plan_ask(query.message, plan, _PLAN_NEXT[step])
         elif action == 'save':
             name, _, replaced = cl.add_plan(plan['symbol'], plan['support'], plan['max_entry'], plan['target'],
                                             plan['stop'], plan['note'])
@@ -886,20 +878,18 @@ async def _cb_plan_guided(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             _cmdq(context.application).put({'cmd': 'plan_alerts'})   # zone or target may already be reached
             summary = cl.plan_text({key: plan[key] for key in ('support', 'max_entry', 'target', 'stop')})
             await query.edit_message_text(f"Plan {'replaced' if replaced else 'saved'}: {name}\n{summary}\n"
-                                          "Checked every hour (stocks Mon–Fri 08:00–22:00), the stop with the daily close.")
+                                          "Checked every hour (stocks Mon–Fri 08:00–22:00), the stop-plan with the daily close.")
     except (OSError, ValueError, configparser.Error) as error:
         await query.message.reply_text(f'Error: {error}')
 
 
 async def _on_plan_text(update, context, plan):
-    """Typed answers during the guided plan: prices, max_entry in %, note."""
+    """Typed answers during the guided plan: prices and note."""
     text = update.message.text.strip()
     step = plan['step']
     try:
         if step == 'note':
             plan['note'] = ' '.join(text.split())
-        elif step == 'max_entry':
-            plan['max_entry'] = cl.parse_percent(text)
         elif step in ('support', 'target', 'stop'):
             plan[step] = cl.parse_price(text)
         else:

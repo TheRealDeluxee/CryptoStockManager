@@ -30,3 +30,5 @@ Thumbs.db
 /image/stage-casa/00-casa/files/requirements.txt
 /image/stage-casa/00-casa/files/casa-image
 /update_done.txt
+/backup_symbols_*
+/backup/
