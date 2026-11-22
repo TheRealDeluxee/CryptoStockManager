@@ -1211,8 +1211,7 @@ def risk_reward(price, sr_zones):
     elif support is None:
         short = 'No support below.'
     else:
-        short = ('Less room up than down.' if up < down else
-                 'Twice as much room up as down.' if up >= 2 * down else 'More room up than down.')
+        short = ('Less room up.' if up < down else 'Twice the room up.' if up >= 2 * down else 'More room up.')
     # Position between S1 (0 %) and R1 (100 %) seen from above: the share of the room up to R1 within the whole
     # range S1..R1 (e.g. R1 +6.9 %, S1 -5.4 % -> 56 % of the range is room up)
     room = up / (up + down) * 100 if up is not None and down is not None and up + down > 0 else None
@@ -1263,7 +1262,7 @@ def score_only(df):
     return score + signals['ROC5']
 
 
-PERCENTILE_STEPS = 8          # characters per bar (one character = 12.5 %)
+PERCENTILE_STEPS = 6          # characters per bar (one character = about 17 %); short: one line on the phone
 PERCENTILE_EMPTY = '░'
 # Block characters instead of coloured emoji squares: in the monospace block of Telegram emoji are drawn
 # smaller or wider than letters, block characters have exactly the width of a letter (aligned bars).
@@ -1291,7 +1290,8 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     def row(name, shown, higher=None, label='>{:.0f}%'):
         # one line of the figure list: name, real value, bar with the position within the last 100 values
         bar = percentile_bar(higher, label) if higher is not None else f"{PERCENTILE_EMPTY * PERCENTILE_STEPS} neutral"
-        return f"{name:<8}{shown:>10} {bar}"   # fixed width: values are aligned
+        # fixed width, about 30 characters: values aligned, one line also on a phone (no line break)
+        return f"{name:<8}{shown:>8} {bar}"
 
     def line(column):
         # real value first, then a bar with its position within the last 100 values
@@ -1300,7 +1300,7 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
         if not math.isfinite(quantile) or not math.isfinite(current):
             return row(column, 'no data')
         shown = (f"{current:.1f}" if column == 'RSI14' else format_euro(current) if column == 'SMA7' else
-                 human_format(current, None) if column == 'VMA7' else f"{current:+.1f} %")
+                 human_format(current, None) if column == 'VMA7' else f"{current:+.1f}%")
         # ">73%" = higher than on 73 % of the last 100 values. For the score the RSI rank is
         # inverted (high RSI = overbought); here the real position is shown, as for all other lines.
         # No +/- signal marks: the traffic light at the top already shows the effect on the score.
@@ -1321,26 +1321,26 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     # One line: how far the price is above/below the SMA200 in %, with a bar like the indicators:
     # this distance is higher than on x % of the last 100 values (price / SMA200 of each of these days)
     if not math.isfinite(sma200):
-        long_mark, long_text = '🟡', 'Unknown (less than 200 values).'
+        long_mark, long_text = '🟡', 'Unknown (under 200 values).'
         long_line = row('vsSMA200', 'no data')
     else:
-        long_mark, long_text = (('🟢', f"Above the {period} average: uptrend.") if price > sma200 else
-                                ('🔴', f"Below the {period} average: downtrend."))
+        long_mark, long_text = (('🟢', "Uptrend (above average).") if price > sma200 else
+                                ('🔴', "Downtrend (below average)."))
         distance = (df['Price'] / df['SMA200']).iloc[-101:]
         previous = distance.iloc[:-1].dropna()
         higher = float((previous < distance.iloc[-1]).mean() * 100) if len(previous) else None
-        long_line = row('vsSMA200', f"{(price / sma200 - 1) * 100:+.1f} %", higher)
+        long_line = row('vsSMA200', f"{(price / sma200 - 1) * 100:+.1f}%", higher)
     # Room to resistance vs. distance to support: is an entry still worth it?
     rr = risk_reward(price, sr_zones) if sr_zones is not None else None
 
     # RSI from the real value (30/70 limits); the comparison with the last 100 values only in brackets
     rsi_now = float(df['RSI14'].iloc[-1])
-    relative = (f" (low compared with the last 100 {unit})" if signals['RSI14'] >= 2 else
-                f" (high compared with the last 100 {unit})" if signals['RSI14'] <= -2 else '')
+    relative = (f" (low vs. 100 {unit})" if signals['RSI14'] >= 2 else
+                f" (high vs. 100 {unit})" if signals['RSI14'] <= -2 else '')
     if rsi_now >= 70:
-        rsi_mark, rsi_text = '🔴', f"Overbought – risk of a pullback{relative}."
+        rsi_mark, rsi_text = '🔴', f"Overbought, pullback risk{relative}."
     elif rsi_now <= 30:
-        rsi_mark, rsi_text = '🟢', f"Oversold – rebound possible{relative}."
+        rsi_mark, rsi_text = '🟢', f"Oversold, rebound possible{relative}."
     else:
         rsi_mark, rsi_text = '🟡', f"Neutral{relative}."
 
@@ -1355,17 +1355,18 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
         pattern_mark, pattern_short = 'ℹ️', f"{pattern['name']}: price broke {'down' if pattern['top'] else 'up'}."
     # The figures as one numbered list without headers; the summary at the top names their numbers.
     # Each entry: (traffic light, name, short sentence at the top, its lines in the list)
-    groups = [(long_mark, 'Long-term', long_text, [long_line])]
+    step = 'day' if unit == 'days' else 'hour'   # names with the period, e.g. 200-day trend (hourly: 200-hour)
+    groups = [(long_mark, f'200-{step} trend', long_text, [long_line])]
     if rr:
         # R1/S1: ratio room up : room down, the bar = share of the room up to R1 within the range S1 (0 %) .. R1 (100 %)
         rr_short = rr['short']
-        rr_line = (row('R1/S1', f"{rr['ratio']:.1f} : 1", rr['room'], '{:.0f}%↑') if rr['room'] is not None
+        rr_line = (row('R1/S1', f"{rr['ratio']:.1f}:1", rr['room'], '{:.0f}%↑') if rr['room'] is not None
                    else row('R1/S1', 'no R1' if rr['resistance'] is None else 'no S1'))
         groups.append((rr['mark'], 'Risk/Reward', rr_short, [rr_line]))
     groups += [
         (rsi_mark, 'RSI', rsi_text, [line('RSI14')]),
-        (mark(part_trend), 'Trend', text3.split(': ', 1)[-1], [line('SMA7'), line('VMA7')]),
-        (mark(part_short), 'Short-term', text2.split(': ', 1)[-1], [line('ROC5'), line('VROC5')]),
+        (mark(part_trend), f'7-{step} trend', text3.split(': ', 1)[-1], [line('SMA7'), line('VMA7')]),
+        (mark(part_short), f'5-{step} momentum', text2.split(': ', 1)[-1], [line('ROC5'), line('VROC5')]),
     ]
     numbered, sections = [], []
     for light, name, sentence, rows in groups:
@@ -1379,9 +1380,9 @@ def analysis_details(df, pattern=None, rank=None, unit='days', sr_zones=None):
     if rank is None:
         head = f"<b>Score: {score}</b>"
     elif rank == 1:
-        head = f"<b>Score {rank}/10</b> – among the weakest 10 % of the last 100 {unit}"
+        head = f"<b>Score {rank}/10</b> – weakest 10 % of 100 {unit}"
     else:
-        head = f"<b>Score {rank}/10</b> – stronger than {(rank - 1) * 10} % of the last 100 {unit}"
+        head = f"<b>Score {rank}/10</b> – above {(rank - 1) * 10} % of 100 {unit}"
     summary = head + "\n" + "\n".join(f"{light} <b>{name}:</b> {html.escape(sentence)}"
                                       for light, name, sentence, _ in sections)
     # Figure blocks collapsed (Telegram "expandable blockquote", tap to open): the message stays short on the phone
@@ -1606,24 +1607,24 @@ def tech_analyse1(RSI14, score):
 def tech_analyse2(ROC5, VROC5, score):
     # Volume Support Matrix
     VOLUME_MATRIX = {
-        -3: "Very low volume supported", 
-        -2: "Low volume supported", 
-        -1: "Decreased volume supported",
-         0: "Average volume supported",
-         1: "Increased volume supported",
-         2: "High volume supported",
-         3: "Very high volume supported"
+        -3: "very low volume", 
+        -2: "low volume", 
+        -1: "lower volume",
+         0: "normal volume",
+         1: "higher volume",
+         2: "high volume",
+         3: "very high volume"
     }
     
     # Momentum Movement Matrix
     MOMENTUM_MATRIX = {
-        -3: "strong slowdown",
-        -2: "slowdown",
-        -1: "slight slowdown",
-         0: "steady movement",
-         1: "slight acceleration",
-         2: "acceleration",
-         3: "strong acceleration"
+        -3: "Strong slowdown",
+        -2: "Slowdown",
+        -1: "Slight slowdown",
+         0: "Steady",
+         1: "Slight acceleration",
+         2: "Acceleration",
+         3: "Strong acceleration"
     }
     
     # get values from the matrices (with fallback)
@@ -1646,30 +1647,30 @@ def tech_analyse2(ROC5, VROC5, score):
 
 
     
-    return f"Short-term-Analysis: {volume_text} {momentum_text}{fake_out}.", score
+    return f"Short-term-Analysis: {momentum_text}, {volume_text}{fake_out}.", score
 
     # Analysis 3: SMA7 and VMA7
 def tech_analyse3(SMA7, VMA7, score):
     # Volume Matrix
     VOLUME_MATRIX = {
-        -3: "Very low volume",
-        -2: "Low volume",
-        -1: "Decreased volume",
-         0: "Average volume",
-         1: "Increased volume",
-         2: "High volume",
-         3: "Very high volume"
+        -3: "very low volume",
+        -2: "low volume",
+        -1: "lower volume",
+         0: "normal volume",
+         1: "higher volume",
+         2: "high volume",
+         3: "very high volume"
     }
     
     # Trend Strength Matrix (based on absolute value)
     TREND_MATRIX = {
-        -3: "with strong negative trend",
-        -2: "with negative trend",
-        -1: "with slight negative trend",
-        0: "without trend",
-        1: "with slight trend",
-        2: "with trend",
-        3: "with strong trend"
+        -3: "Strong down",
+        -2: "Down",
+        -1: "Slightly down",
+        0: "No trend",
+        1: "Slightly up",
+        2: "Up",
+        3: "Strong up"
     }
     
     # get values from the matrices (with fallback)
@@ -1690,7 +1691,7 @@ def tech_analyse3(SMA7, VMA7, score):
     
     score = score + Tscore
 
-    return f"Trend-Analysis: {volume_text} {trend_text}{fake_out}.", score
+    return f"Trend-Analysis: {trend_text}, {volume_text}{fake_out}.", score
 
 
 def older_than_one_year(df):

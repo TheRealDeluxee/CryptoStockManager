@@ -1115,6 +1115,25 @@ def update_config(path='config.ini'):
             lines.pop()
         lines += [''] + ANTHROPIC_SECTION
         changes.append('empty section [anthropic] added (optional Claude API key)')
+    # [version] (version number up to 0.0.x, today in main.py): the whole section is removed
+    start = next((i for i, line in enumerate(lines) if line.strip().lower() == '[version]'), None)
+    if start is not None:
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith('[')), len(lines))
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1   # keep the empty line before the next section
+        del lines[start:end + (1 if end < len(lines) and not lines[end].strip() else 0)]
+        changes.append('old section [version] removed (the version is in main.py)')
+    # settings and a comment of very old versions that are no longer used
+    unused = [i for i, line in enumerate(lines)
+              if line.split('=', 1)[0].strip().lower() in ('one_day_price_change', 'one_day_profit_limit')
+              and '=' in line and not line.lstrip().startswith(('#', ';'))
+              or line.strip() == '# [symbol] = Investment , Quanity']
+    for i in reversed(unused):
+        del lines[i]
+    if unused:
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        changes.append('unused old lines removed (one_day_price_change, one_day_profit_limit)')
     old_comment = '# the API costs money per request (billed by Anthropic per token)'   # up to 0.1.13
     if old_comment in [line.strip() for line in lines]:
         lines = [line for line in lines if line.strip() != old_comment]

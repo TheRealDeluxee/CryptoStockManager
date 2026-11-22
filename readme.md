@@ -4,12 +4,16 @@
 
 CaSa watches your cryptocurrencies and stocks, analyses them with technical indicators and sends alerts, charts and daily summaries to **Telegram**. The same Telegram chat is used to control the program: run analyses on demand, record buys and sells, switch alarms on and off, plan important dates and create prompts for ChatGPT or Claude.
 
+<p align="center">
+  <a href="docs/installation.md"><img src="https://img.shields.io/badge/%E2%AC%87%20Install%20now-Windows%20%C2%B7%20Raspberry%20Pi-1e8449?style=for-the-badge" alt="Install now – Windows · Raspberry Pi" height="40"></a>
+</p>
+
 ## Contents
 
 - [Why CaSa?](#why-casa)
 - [In a Nutshell](#in-a-nutshell) – what CaSa does, setup in four steps, important Telegram commands
 - [What's New](#whats-new)
-- [Learn More](#learn-more) – features, installation, commands, alerts and charts, configuration, project structure, roadmap
+- [Learn More](#learn-more) – [features](docs/features.md), [installation](docs/installation.md), [commands](docs/commands.md), [alerts and charts](docs/alerts.md), [configuration](docs/configuration.md), [project structure](docs/project-structure.md), [roadmap](docs/roadmap.md)
 - [Known Limitations](#known-limitations)
 - [License, Disclaimer and Links](#license)
 

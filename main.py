@@ -921,8 +921,7 @@ class CryptoStockManager:
         image_name = 'pnl_chart_' + uuid.uuid4().hex
         func.create_pnl_chart(weekly, os.path.join(self.output_dir, image_name + '.png'),
                               title=f'Trading result · last {weeks} weeks')
-        message = ('Profit/loss per week: realised from your sales (transactions.csv, FIFO) in full colour, '
-                   'for the current week also the unrealised change of your open positions in light colour.')
+        message = f'Data as of: {self.last_daily_update}'   # the explanation is in the legend of the chart
         if missing:
             message += f"\nUnrealised without (no prices in the daily analysis): {', '.join(missing)}"
         func.pushover_image(image_name, message, delete_after_send=True)
