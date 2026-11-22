@@ -24,8 +24,6 @@
 - Daily P&L of your own positions (crypto and stocks together) after the summary: value, 1-day profit/loss in € and %, total profit/loss, total row
 - P&L chart of the last 13 weeks as weekly bars: the realised profit/loss of your sales in each week (from `transactions.csv`, FIFO) in full colour, one part per sale (white line between them; gains upwards, losses downwards); for the current week also the unrealised price change of your open positions in light colour, one part per open asset (gains upwards, losses downwards). Values only for the realised parts. At the top the realised total of the 13 weeks, below it in brackets the unrealised gains and losses of this week, e.g. (+400.00 | −700.00) €
 
-![Example summary](example_summary.png)
-
 **Portfolio**
 - Buys and sells in `transactions.csv` (FIFO bookkeeping)
 - Profit/loss per asset, background colour of the chart shows profit or loss
