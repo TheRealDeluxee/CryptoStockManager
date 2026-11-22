@@ -5,17 +5,19 @@
 ## Usability
 - [ ] **One-line summary** at the top of every message, e.g. "🟢 Uptrend, strong buying interest – buy signal". The details follow below for anyone who wants them.
 - [x] **Easier score**: The −18…+18 score was hard to read. Now a score 1–10 with the assessments as traffic-light confirmation (🟢 🔴 🟡).
-- [ ] **Simpler score blocks**: Indicator lines such as RSI14 or SMA7 explained in plain language for non-experts.
+- [x] **Simpler score blocks**: one compact numbered list with bars (position within the last 100 days) and plain names in the summary (200-day trend, 7-day trend, 5-day momentum).
 - [ ] **`/explain` command**: Explains terms like RSI, SMA200 or neckline in two sentences.
 
 ## Setup
-- [ ] **Docker image**: Simple deployment. Private files (config, portfolio) move to a separate data folder so they stay outside the image.
-- [ ] **Setup wizard in Telegram**: New users add assets and settings via chat instead of editing INI files.
-- [ ] **Disclaimer** in README and start message: CaSa provides technical signals only, no investment advice.
+- [x] **Raspberry Pi image**: write the image, answer a wizard at the first login; CaSa runs as a service.
+- [x] **Windows setup wizard** (`install_casa.bat`): installs Python and CaSa, asks for the keys.
+- [x] **Updates in Telegram**: `/update` and a daily check for a new release (CaSa image).
+- [x] **Disclaimer in the README**: CaSa provides technical signals only, no investment advice.
+- [ ] **Disclaimer in the start message** as well.
 
 ## Backtesting
 - [ ] **Backtest script in the repo**: The backtest currently lives in a temporary folder. In the repo, every rule change can be checked against historical data.
-- [ ] **Hit rate in alarm messages**, e.g. "This alarm was right in 61 % of cases (backtest)". Helps users judge how reliable a signal is.
+- [x] **Hit rate in alarm messages**: every alarm and info ends with e.g. "Backtest: price rose in 57 % of cases (after 20 days)". Helps users judge how reliable a signal is.
 - [ ] **Sideways market detection (ADX)**: Today only up- and downtrends are detected (SMA50/SMA200). ADX adds a sideways phase, in which many trend signals fail.
 
 ## Indicators & charts
@@ -23,10 +25,11 @@
 - [ ] **Relative strength vs. index**: Strong stocks in strong markets, e.g. "Nvidia +12 % vs. Nasdaq in 3 months". One of the most robust rules in technical analysis.
 - [ ] **R2/S2 zones**: A second resistance and support zone, plus an alarm when the price breaks through a zone.
 - [ ] **More chart patterns**: Triangles, wedges and flags in addition to the existing patterns.
+- [ ] **Pattern detection with a trained model**: A small model trained on the PC with historical charts recognises patterns instead of the fixed rules of today (double top/bottom, head and shoulders); it runs on the Raspberry Pi without an AI accelerator. Only used if it beats the current rules in the backtest.
 - [ ] **Fair Value Gaps**: Price gaps between candles that the price may return to. Popular but unproven, so they are tested in the backtest before any alarm is added.
 
 ## Alerts & events
-- [x] **Own price alarms**, e.g. `/price_alert NVD.DE below 130`. User-defined price levels, independent of the indicators.
+- [x] **Own price alarms**: user-defined price levels, independent of the indicators; since 0.1.12 part of the trading plans (`/price_alert` still works as old name of `/plan_alert`).
 - [x] **Simple trading plans** (`planalert.ini`, `/plan_alert`): buy zone, target and stop per asset.
 - [ ] **Plan conditions**: higher low, close above the first rebound high, above EMA12/SMA200; the AI prompt writes a ready plan line.
 - [ ] **Options expiry and market holidays**: The major expiry date (third Friday of March, June, September and December) is calculated automatically. Exchange holidays come from a fixed list.
@@ -45,7 +48,6 @@
 - [ ] **Read-only exchange API for crypto (ccxt)**: Loads holdings directly from the major exchanges. Read-only keys only, never with trading rights.
 - [x] **Total value and daily P&L** in the evening summary.
 - [ ] **Position size suggestion**: Based on ATR, e.g. max. 2 % of the portfolio at risk per position.
-- [ ] **Tax-free reminder**: A message on the day a crypto position has been held for more than one year (tax-free under German law).
 
 ## Reliability
 - [ ] **Keep known alarms after a full restart**: They are currently lost, so the same alarm can be sent twice.
