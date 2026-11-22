@@ -57,13 +57,14 @@ Try it out: installed in 2–5 minutes, once Telegram is installed and your bot 
 
 ## What's New?
 
-**Version 0.1.13** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.14** – all changes in [CHANGELOG.md](CHANGELOG.md)
 
-- CaSa image for the Raspberry Pi: write it with the Raspberry Pi Imager, log in once, a wizard asks for keyboard, network drive (optional) and keys; CaSa runs as service and starts by itself
-- Updates in Telegram: `/update` and a daily check with **⬆ Update now**, confirmed with "Update complete"
-- Plan and date alerts like the alarms with chart and buttons (Record buy/sell, Delete plan); `/plan_alert` with guided Add plan
-- 13-week P&L chart: realised gains and losses per sale, this week also unrealised per open asset
-- `infos_for`: infos only for assets you hold (also in `/smart_alert_config`)
+- Windows setup wizard `install_casa.bat`: a few questions, CaSa starts with `start_casa.bat`
+- Stocks at their home exchange (e.g. NVDA, TT) with real volume, converted to EUR; the home currency in the chart
+- Plans with buy-zone, sell-zone, stop-plan and the new message "Turn up" after the buy-zone
+- Market line in every stock message: index and sector today, in line with or weaker/stronger than the market
+- Guide (API) with the long-term trend, news and customer industries; record buttons below the answer
+- Compact messages with a numbered figure list and bars; analysis times changeable in `config.ini`
 
 Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 

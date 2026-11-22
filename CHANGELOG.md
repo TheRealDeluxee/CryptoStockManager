@@ -7,6 +7,36 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
+## [0.1.14] – 2026-11-22
+
+### Added
+- Windows setup wizard `install_casa.bat` (replaces `install_venv.bat`): installs Python if needed, downloads the newest release, installs the packages, asks for the Telegram bot (token checked, chat id found) and the API keys, writes `config.ini`, an example `assets.ini` and `start_casa.bat`. CaSa only starts by hand with `start_casa.bat`; started again the wizard changes the keys or updates CaSa, your files stay
+- Plans: message "🟢 Turn up" after the buy-zone – a daily close above the buy-zone again with a rising 12-day average (checked once a day); "Buy zone" now means "watch, the price may still fall"
+- Market comparison in every stock message (information only): line "Market" with the leading index of the home country and the US sector ETF today, and whether the stock moved in line with, weaker or stronger than the market; figure vsIndex (5 days vs. the index, bar = relative strength within 100 days). The same values go to the AI prompt ("Market move")
+- Chart: value in the currency of the home exchange next to the EUR values (e.g. "352.14 € (386.29 $ · -11.4 %)"); the current price as first line "A" of the legend, on the axis only a short "A" tag; legend in two columns
+- Guide (API): buttons 🟢 Record buy (and 🔴 Record sell when you hold the asset) below the answer
+- `config.ini` `[schedule]`: times of the daily analyses (default 09:30, 17:45, 22:30 – after the close in Asia, Europe and the USA), the evening summary (19:00), the date reminders (08:00) and the update check (19:30); added at the start
+- `assets.ini`: optional currency as fourth field, e.g. `TT = Trane Technologies; stock; 1; USD` (only for your overview)
+- Start message shows the computer and its operating system (e.g. "🖥 casa-pi", "💿 Debian GNU/Linux 13 (trixie)")
+- MIT `LICENSE` file; Raspberry Pi image as download in the release `pi-image`
+
+### Changed
+- Stocks can be watched at their home exchange (e.g. NVDA, TT, ASML.AS, BA.L) with real volume; prices are converted to EUR with the exchange rate of the same day (also GBp, JPY, HKD, CAD, NOK, SEK)
+- Plans: `buy-zone` (buy at or below), `sell-zone` (partial profits at or above) and `stop-plan` (a daily close below ends the plan) instead of support, max_entry, target and stop – converted at the start, the messages stay the same; clearer texts ("The price … is in your buy-zone"), your note at the end of the message, new explanation in `planalert.ini`; `/plan_alert` asks buy-zone, sell-zone, stop-plan, note
+- Oversold, 100-day low and 100-day high report only when the 12-day average turns (up after a low, down after a high) instead of on the day of the extreme; this turn rule is not backtested yet and the messages say so
+- Messages: a short backtest line ("Backtest: price rose in 57 % of cases (after 20 days)"); compact numbered figure list with bars (at most 30 characters per line for the phone) instead of headed blocks; summary lines "200d trend", "Risk/Reward", "RSI", "7d trend", "5d mom.", "Market", "Pattern" with the numbers of their figures; shorter texts (fake-out notes kept); pattern only as information; header in two lines (asset, then kind and trigger)
+- AI buttons: 🤖 Prompt, 🤖 Guide (API), 🤖 Plan (API). Guide: decision with the long-term trend of 3 to 5 years, the main reason from news, business or customer industries, what would change it – must use the web search (up to 12 searches), does not repeat CaSa's figures; only the final answer text is shown. Plan: fields buy-zone, sell-zone, stop-plan, note as "Size | Buy when | Not if", warning when a field stays empty. Unchanged older AI prompt templates are replaced
+- AI prompt template back in the file `ai_prompt.txt` (0.1.13: `config.ini` `[ai_prompt]`, moved at the start)
+- `config.ini`: shorter explanation in `[alerts]`, no comments behind the alert lines; the old `[version]` section and unused settings are removed at the start
+- `transactions.csv`: column `amount_eur` instead of `amount` (renamed at the start)
+- P&L chart title "Trading result · last 13 weeks", below it only "Data as of"
+- README and docs reworked (installation options, evening summary explained, Install now button)
+
+### Fixed
+- Daily prices of European and Asian exchanges were dated one day too early (stop check of plans, alarm journal, P&L history); the exchange rate now belongs to the same local day
+- Trading result: this week's unrealised change was missing after a start on the weekend (stock prices are now loaded)
+- Guide (API) sometimes answered without a news check and showed Claude's working notes
+
 ## [0.1.13] – 2026-11-22
 
 ### Added
