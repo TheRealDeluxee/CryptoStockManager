@@ -7,7 +7,7 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 - **MINOR** (0.**2**.0): new features; while the version starts with 0, this can also include changes to commands or files
 - **MAJOR** (**1**.0.0): first stable release, after that only for changes that require adjustments by the user
 
-## [Unreleased]
+## [0.1.13] – 2026-11-22
 
 ### Added
 - `infos_for` in `config.ini` `[alertsconfig]`: `all` (default, as before) or `portfolio` – infos only for assets you hold, no infos for watched assets (alarms are not affected). Added at the start if missing; also switchable with the last button of `/smart_alert_config`, used from the next analysis on without a restart

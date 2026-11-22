@@ -32,7 +32,7 @@ import telegram_bot
 
 # Program version (Semantic Versioning: MAJOR.MINOR.PATCH, see CHANGELOG.md).
 # Kept in the code instead of config.ini, because config.ini is private and not part of Git.
-VERSION = "0.1.12"
+VERSION = "0.1.13"
 GITHUB_URL = "https://github.com/TheRealDeluxee/CryptoStockManager"
 LOGO_FILE = "logo.png"   # shown in the start message (in Git as logo.png)
 # Recommended number of assets with 1 for the free APIs (see README "How many assets with 1?")

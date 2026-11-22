@@ -70,7 +70,15 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 
 ## What's New
 
-**Version 0.1.12** – all changes in [CHANGELOG.md](CHANGELOG.md)
+**Version 0.1.13** – all changes in [CHANGELOG.md](CHANGELOG.md)
+
+- CaSa image for the Raspberry Pi: write it with the Raspberry Pi Imager, log in once, a wizard asks for keyboard, network drive (optional) and keys; CaSa runs as service and starts by itself
+- Updates in Telegram: `/update` and a daily check with **⬆ Update now**, confirmed with "Update complete"
+- Plan and date alerts like the alarms with chart and buttons (Record buy/sell, Delete plan); `/plan_alert` with guided Add plan
+- 13-week P&L chart: realised gains and losses per sale, this week also unrealised per open asset
+- `infos_for`: infos only for assets you hold (also in `/smart_alert_config`)
+
+**Version 0.1.12**
 
 - Plan alerts: `planalert.ini` (replaces `valuealert.ini`, converted automatically) with one simple trading plan per asset – buy zone, target, stop; messages depend on whether you hold the asset; `/plan_alert`
 - Optional Claude API (`config.ini` `[anthropic]`): buttons 🤖 AI decision (API) and 🤖 AI plan (API) below alarms, infos and `/check`, with web search, cost per answer; the plan can be saved as plan alert with one tap
