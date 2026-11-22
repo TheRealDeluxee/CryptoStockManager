@@ -299,6 +299,7 @@ HELP_TEXT = (
         "\n"
         "<b>System</b>\n"
         "/status – analyses, next runs, problems\n"
+        "/update – look for a new CaSa version now (otherwise daily at 19:00) and install it\n"
         "/restart – restart the program\n"
         "\n"
         "<b>Examples</b> (symbol or name from assets.ini)\n"
@@ -316,6 +317,15 @@ HELP_TEXT = (
 
 async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+
+
+async def _cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # /update: look for a newer CaSa release on GitHub now; the answer with the button comes from the main program
+    app = context.application
+    if not _authorized(update, app.bot_data["chat_id"]):
+        return
+    _cmdq(app).put({'cmd': 'check_update'})
+    await update.message.reply_text('Looking for a new CaSa version on GitHub …')
 
 
 async def _cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -556,7 +566,8 @@ _ALERT_CONFIG_TEXT = (
     "ℹ️ <b>info</b>: \"Info: …\", never important, not in the alarm journal\n"
     "– <b>off</b>: no message\n\n"
     "Tap a button to switch: alarm → info → off. Saved in config.ini [alerts], "
-    "used from the next analysis on.")
+    "used from the next analysis on.\n"
+    "The last button: infos for all assets or only for the assets you hold (config.ini infos_for).")
 
 
 def _alert_config_keyboard():
@@ -567,6 +578,9 @@ def _alert_config_keyboard():
         stock, crypto = settings[key]
         rows.append([InlineKeyboardButton(f"📈 {label}: {_KIND_ICON[stock]} {stock}", callback_data=f"acfg|{key}|stock"),
                      InlineKeyboardButton(f"🪙 {_KIND_ICON[crypto]} {crypto}", callback_data=f"acfg|{key}|crypto")])
+    # infos for all assets or only for your portfolio (config.ini [alertsconfig] infos_for)
+    scope = 'all assets' if cl.read_infos_for() == 'all' else 'only assets you hold'
+    rows.append([InlineKeyboardButton(f"ℹ️ Infos for: {scope}", callback_data='acfg|infos_for|toggle')])
     return InlineKeyboardMarkup(rows)
 
 
@@ -609,6 +623,10 @@ async def _cb_alert_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     _, key, asset_type = query.data.split('|', 2)
     try:
+        if key == 'infos_for':   # all assets <-> only assets you hold
+            cl.set_infos_for('portfolio' if cl.read_infos_for() == 'all' else 'all')
+            await query.edit_message_reply_markup(reply_markup=_alert_config_keyboard())
+            return
         stock, crypto = cl.read_alert_settings()[key]
         current = stock if asset_type == 'stock' else crypto
         kinds = cl.ALERT_KINDS
@@ -717,15 +735,13 @@ async def _cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         if not args:
             plans = cl.read_plans()
-            lines = ['<b>Plan alerts</b>'] if plans else ['No plan alerts.']
+            lines = ['<b>Plan alerts</b>'] if plans else ['No plan alerts yet.']
             lines += [html.escape(_plan_line(plan)) for plan in plans]
-            lines.append('\n' + html.escape(PLAN_FORMAT))
+            row = [InlineKeyboardButton('➕ Add plan', callback_data='plg|add')]
             if plans:
-                lines.append('Delete: tap 🗑 below')
-            buttons = [[InlineKeyboardButton(f"🗑 {plan['name']}", callback_data=f"pldel|{plan['key']}")]
-                       for plan in plans if len(f"pldelok|{plan['key']}".encode()) <= 64]
+                row.append(InlineKeyboardButton('🗑 Delete plan', callback_data='plg|del'))
             await update.message.reply_text('\n'.join(lines)[:4000], parse_mode='HTML',
-                                            reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
+                                            reply_markup=InlineKeyboardMarkup([row]))
             return
         asset_type, symbol, _, rest = _find_asset(list(args), allow_rest=True)
         if len(rest) < 4:
@@ -750,8 +766,162 @@ async def _cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text)
 
 
+async def _cb_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # "⬆ Update now" / "Later" below the message about a new CaSa version
+    query = update.callback_query
+    await query.answer()
+    if not _authorized(update, context.application.bot_data['chat_id']):
+        return
+    action, _, version = query.data.partition('|')
+    await query.edit_message_reply_markup(reply_markup=None)   # no second tap
+    if action == 'updno':
+        await query.message.reply_text('Not updated. Later on the Pi: casa-update')
+        return
+    _cmdq(context.application).put({'cmd': 'update', 'version': version})
+    await query.message.reply_text(f'Updating to {version} … (1–3 minutes)')
+
+
+# ── Guided plan: asset -> support -> max_entry -> target -> stop -> note -> save (state in context.user_data) ──
+_PLAN_CANCEL = [InlineKeyboardButton('✖ Cancel', callback_data='plg|cancel')]
+_PLAN_QUESTIONS = {
+    'support': 'Support: the price in € where the buy zone starts (e.g. 312.15)? Send it as a message, '
+               'or Skip for a plan with a target only.',
+    'target': 'Target: price in € for partial profits? Send it as a message, or Skip.',
+    'stop': 'Stop: the plan fails at a daily close below this price in €? Send it as a message, or Skip.',
+    'note': 'Your note (tranche size, conditions, e.g. "1/4 after a rebound")? Send it as a message, or Skip.',
+}
+
+
+def _plan_step_keyboard(step):
+    skip = [InlineKeyboardButton('Skip', callback_data=f'plg|skip|{step}')]
+    return InlineKeyboardMarkup([skip, _PLAN_CANCEL])
+
+
+async def _plan_ask(message, plan, step):
+    """Next question of the guided plan."""
+    plan['step'] = step
+    if step == 'max_entry':
+        buttons = [[InlineKeyboardButton(f'{value} %', callback_data=f'plg|max|{value}') for value in (0, 2, 3, 5)],
+                   _PLAN_CANCEL]
+        await message.reply_text(f"Buy zone: buy only up to how many % above the support {plan['support']:.2f} €?\n"
+                                  "Tap a button or send a number (0 to 50).", reply_markup=InlineKeyboardMarkup(buttons))
+    elif step == 'confirm':
+        try:
+            cl.check_plan(plan['support'], plan['max_entry'], plan['target'], plan['stop'])
+        except ValueError as error:
+            plan.update(support=None, max_entry=0.0, target=None, stop=None)
+            await message.reply_text(f'{error}\nPlease enter the prices again.')
+            await _plan_ask(message, plan, 'support')
+            return
+        shown = {'support': plan['support'], 'max_entry': plan['max_entry'], 'target': plan['target'],
+                 'stop': plan['stop'], 'note': plan['note']}
+        text = f"Plan for {plan['name']}:\n{cl.plan_text(shown)}"
+        if plan['note']:
+            text += f"\nNote: {plan['note']}"
+        if plan.get('replaces'):
+            text += '\n\nThis replaces the current plan of this asset.'
+        await message.reply_text(text + '\n\nSave?', reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton('✔ Save', callback_data='plg|save')], _PLAN_CANCEL]))
+    else:
+        await message.reply_text(_PLAN_QUESTIONS[step], reply_markup=_plan_step_keyboard(step))
+
+
+_PLAN_NEXT = {'support': 'max_entry', 'max_entry': 'target', 'target': 'stop', 'stop': 'note', 'note': 'confirm'}
+
+
+async def _cb_plan_guided(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Buttons of /plan_alert: ➕ Add plan (guided), 🗑 Delete plan, and the steps of the guided input
+    query = update.callback_query
+    await query.answer()
+    if not _authorized(update, context.application.bot_data['chat_id']):
+        return
+    parts = query.data.split('|')
+    action = parts[1]
+    plan = context.user_data.get('plan')
+    try:
+        if action == 'add':
+            context.user_data.pop('trade', None)   # only one guided input at a time
+            await query.edit_message_text('New plan: for which asset?',
+                                          reply_markup=_asset_keyboard(cl.read_assets(), 'plg|asset', cancel=False))
+            await query.message.reply_text('Or cancel:', reply_markup=InlineKeyboardMarkup([_PLAN_CANCEL]))
+        elif action == 'del':
+            plans = cl.read_plans()
+            buttons = [[InlineKeyboardButton(f"🗑 {p['name']}", callback_data=f"pldel|{p['key']}")] for p in plans
+                       if len(f"pldelok|{p['key']}".encode()) <= 64]
+            await query.edit_message_text('Delete which plan?' if buttons else 'No plans to delete.',
+                                          reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
+        elif action == 'cancel':
+            context.user_data.pop('plan', None)
+            await query.edit_message_text('Cancelled. No plan saved.')
+        elif action == 'asset':
+            asset_type, symbol = parts[2], parts[3]
+            name = cl.read_assets().get((asset_type, symbol), symbol)
+            plan = {'type': asset_type, 'symbol': symbol, 'name': name, 'support': None, 'max_entry': 0.0,
+                    'target': None, 'stop': None, 'note': ''}
+            plan['replaces'] = any(p['symbol'] == symbol for p in cl.read_plans())
+            context.user_data['plan'] = plan
+            try:
+                now = await asyncio.to_thread(func.current_price, symbol.upper() if asset_type == 'stock' else symbol,
+                                              asset_type)
+                price = f"Current price: {func.format_euro(now)}"
+            except Exception:
+                price = 'Current price not available right now.'
+            await query.edit_message_text(f"New plan: {name}\n{price}")
+            await _plan_ask(query.message, plan, 'support')
+        elif not plan:
+            await query.edit_message_text('This input is no longer active. Start again with /plan_alert.')
+        elif action == 'skip':
+            await query.edit_message_reply_markup(reply_markup=None)
+            step = parts[2]
+            # without support there is no buy zone: max_entry is not asked
+            await _plan_ask(query.message, plan, 'target' if step == 'support' else _PLAN_NEXT[step])
+        elif action == 'max':
+            await query.edit_message_reply_markup(reply_markup=None)
+            plan['max_entry'] = cl.parse_percent(parts[2])
+            await _plan_ask(query.message, plan, 'target')
+        elif action == 'save':
+            name, _, replaced = cl.add_plan(plan['symbol'], plan['support'], plan['max_entry'], plan['target'],
+                                            plan['stop'], plan['note'])
+            context.user_data.pop('plan', None)
+            _cmdq(context.application).put({'cmd': 'plan_alerts'})   # zone or target may already be reached
+            summary = cl.plan_text({key: plan[key] for key in ('support', 'max_entry', 'target', 'stop')})
+            await query.edit_message_text(f"Plan {'replaced' if replaced else 'saved'}: {name}\n{summary}\n"
+                                          "Checked every hour (stocks Mon–Fri 08:00–22:00), the stop with the daily close.")
+    except (OSError, ValueError, configparser.Error) as error:
+        await query.message.reply_text(f'Error: {error}')
+
+
+async def _on_plan_text(update, context, plan):
+    """Typed answers during the guided plan: prices, max_entry in %, note."""
+    text = update.message.text.strip()
+    step = plan['step']
+    try:
+        if step == 'note':
+            plan['note'] = ' '.join(text.split())
+        elif step == 'max_entry':
+            plan['max_entry'] = cl.parse_percent(text)
+        elif step in ('support', 'target', 'stop'):
+            plan[step] = cl.parse_price(text)
+        else:
+            return
+    except ValueError as error:
+        await update.message.reply_text(f'{error}\nPlease try again.', reply_markup=_plan_step_keyboard(step))
+        return
+    await _plan_ask(update.message, plan, _PLAN_NEXT[step])
+
+
+async def _show(query, text, reply_markup=None):
+    """Answer to a button: a text message is changed; below a chart (photo) a new message follows and
+    the chart with its analysis stays."""
+    message = getattr(query, 'message', None)
+    if message is not None and getattr(message, 'photo', None):
+        await message.reply_text(text, reply_markup=reply_markup)
+    else:
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+
 async def _cb_plan_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # 🗑 in the /plan_alert list: first ask, then delete
+    # 🗑 in the /plan_alert list or below a plan alert: first ask, then delete
     query = update.callback_query
     await query.answer()
     if not _authorized(update, context.application.bot_data['chat_id']):
@@ -764,17 +934,17 @@ async def _cb_plan_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         plan = next((p for p in cl.read_plans() if p['key'].lower() == key.lower()), None)
         if action == 'pldel':
             if plan is None:
-                await query.edit_message_text('This plan no longer exists (already deleted).')
+                await _show(query, 'This plan no longer exists (already deleted).')
                 return
             keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Yes, delete', callback_data=f'pldelok|{key}'),
                                               InlineKeyboardButton('Cancel', callback_data='pldelno|')]])
-            await query.edit_message_text(f"Delete this plan?\n{_plan_line(plan)}", reply_markup=keyboard)
+            await _show(query, f"Delete this plan?\n{_plan_line(plan)}", reply_markup=keyboard)
             return
         cl.delete_plan(key)   # action == 'pldelok'
     except (OSError, ValueError, configparser.Error) as error:
-        await query.edit_message_text(f'Error: {error}\nNot deleted.')
+        await _show(query, f'Error: {error}\nNot deleted.')
         return
-    await query.edit_message_text(f"Plan deleted: {plan['name'] if plan else key}")
+    await _show(query, f"Plan deleted: {plan['name'] if plan else key}")
 
 
 async def _cmd_analyse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -870,13 +1040,37 @@ async def _cb_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await query.answer()
     if not _authorized(update, context.application.bot_data['chat_id']):
         return
-    action = query.data.split('|', 1)[1]
+    parts = query.data.split('|')
+    action = parts[1]
     if action not in _RECORD:
         await query.edit_message_text('Nothing recorded.')
+        return
+    if len(parts) == 4:
+        # below a plan alert: the asset is already known, the chart message stays
+        asset_type, symbol = parts[2], parts[3]
+        if action == 'sellall':
+            await _run_command(_cmd_sellall, update, context, [symbol])
+        else:
+            await _start_trade_for_asset(query.message, context, action, asset_type, symbol)
         return
     await query.edit_message_text({'buy': 'Record a buy', 'sell': 'Record a sell',
                                    'sellall': 'Sell the full position'}[action])
     await _run_command(_RECORD[action], update, context)
+
+
+async def _start_trade_for_asset(message, context, action, asset_type, symbol):
+    """Guided buy/sell with the asset already chosen (button below a plan alert): starts at the amount."""
+    try:
+        name = cl.read_assets().get((asset_type, symbol)) or _held_assets().get((asset_type, symbol), symbol)
+    except (OSError, UnicodeError, csv.Error, configparser.Error, ValueError):
+        name = symbol
+    context.user_data.pop('plan', None)
+    context.user_data['trade'] = {'action': action, 'step': 'amount', 'type': asset_type, 'name': name,
+                                  'symbol': symbol if asset_type == 'crypto' else symbol.upper()}
+    verb = 'paid' if action == 'buy' else 'received'
+    label = 'Record a buy' if action == 'buy' else 'Record a sell'
+    await message.reply_text(f"{label}: {name}\nAmount in € {verb} (e.g. 1200 or 1200,50)? Send it as a message.",
+                             reply_markup=InlineKeyboardMarkup([_CANCEL_ROW]))
 
 
 # ── Guided /buy and /sell: asset -> amount -> quantity -> date -> confirm (state in context.user_data) ──
@@ -915,6 +1109,7 @@ async def _start_guided_trade(message, context, action, note=''):
     if not entries:
         await message.reply_text('No holdings to sell.' if action == 'sell' else 'No assets in assets.ini.')
         return
+    context.user_data.pop('plan', None)   # only one guided input at a time
     context.user_data['trade'] = {'action': action, 'step': 'asset'}
     question = 'Which asset did you buy?' if action == 'buy' else 'Which asset did you sell?'
     await message.reply_text(note + question, reply_markup=_asset_keyboard(entries, 'tr|asset'))
@@ -996,7 +1191,12 @@ async def _cb_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Typed answers during the guided /buy or /sell (amount, quantity, other date); other texts are ignored
+    # Typed answers during the guided /buy or /sell (amount, quantity, other date) or the guided plan;
+    # other texts are ignored
+    plan = context.user_data.get('plan')
+    if plan and update.message is not None and _authorized(update, context.application.bot_data['chat_id']):
+        await _on_plan_text(update, context, plan)
+        return
     trade = context.user_data.get('trade')
     if not trade or trade.get('step') not in ('amount', 'qty', 'date') or update.message is None:
         return
@@ -1272,6 +1472,7 @@ async def _post_init(app: Application) -> None:
         BotCommand("record", "Record a buy, sell or sale of the full position"),
         BotCommand("history", "Transactions of one asset (choose via buttons)"),
         BotCommand("transactions", "Show all saved transactions"),
+        BotCommand("update", "Look for a new CaSa version and install it"),
         BotCommand("restart", "Restart the program"),
     ]
     try:
@@ -1364,6 +1565,8 @@ def _run_bot(notify_q: Queue, command_q: Queue) -> None:
     app.add_handler(CallbackQueryHandler(_cb_ai_button, pattern=r"^ai[dp]?btn\|"))
     app.add_handler(CallbackQueryHandler(_cb_event_delete, pattern=r"^evdel(ok|no)?\|"))
     app.add_handler(CallbackQueryHandler(_cb_plan_delete, pattern=r"^pldel(ok|no)?\|"))
+    app.add_handler(CallbackQueryHandler(_cb_plan_guided, pattern=r"^plg\|"))
+    app.add_handler(CallbackQueryHandler(_cb_update, pattern=r"^upd(no)?\|"))
     app.add_handler(CommandHandler("record", _cmd_record))
     app.add_handler(CallbackQueryHandler(_cb_record, pattern=r"^rec\|"))
     app.add_handler(CommandHandler("buy", _cmd_buy))     # old names, not in the command list any more
@@ -1375,6 +1578,7 @@ def _run_bot(notify_q: Queue, command_q: Queue) -> None:
     app.add_handler(CallbackQueryHandler(_cb_pick, pattern=r"^(hist|sapick)\|"))
     app.add_handler(CommandHandler("history", _cmd_history))
     app.add_handler(CommandHandler("transactions", _cmd_transactions))
+    app.add_handler(CommandHandler("update", _cmd_update))
     app.add_handler(CommandHandler("restart", _cmd_restart))
 
     app.add_error_handler(_on_error)

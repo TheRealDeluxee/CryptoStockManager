@@ -1,0 +1,301 @@
+#!/bin/bash
+# CaSa setup wizard (CaSa image for the Raspberry Pi): keyboard layout, password of the network drive,
+# Telegram bot and API keys. Starts by itself at the first login; later again with: casa-setup
+# Downloads the newest CaSa release from GitHub to ~/Python, sets up the network drive \\<hostname>\Python and the service "casa"
+# (starts CaSa at every boot and again after an error).
+# Keys and passwords are never written to a log or passed as command arguments.
+
+VENV=/opt/casa-venv           # Python environment with the packages, prepared in the image
+REPO="https://github.com/TheRealDeluxee/CryptoStockManager.git"
+ERR=/tmp/casa-setup-error
+PROG="$HOME/Python"           # your CaSa folder (like before: /home/<user>/Python)
+LOG="$HOME/casa-setup.log"
+HELPER=/usr/local/lib/casa/casa_config.py
+TITLE="CaSa setup"
+H=20; W=74
+
+fail() {
+    whiptail --title "$TITLE – error" --msgbox "$1\n\nDetails: $LOG" 12 $W
+    exit 1
+}
+cancelled() {
+    whiptail --title "$TITLE" --msgbox "Setup cancelled, nothing was changed.\n\nStart again at any time:  casa-setup" 10 $W
+    exit 1
+}
+step() { echo "=== $1" >>"$LOG"; }
+
+# Telegram API without the token on the command line (not visible in the process list)
+newest_release() {
+    git ls-remote --tags --refs "$REPO" 'v*' 2>>"$LOG" | sed 's#.*/##' | sort -V | tail -n 1
+}
+
+telegram() {
+    printf 'url = "https://api.telegram.org/bot%s/%s"\n' "$TOKEN" "$1" | curl -s --max-time 20 -K -
+}
+json_value() {
+    python3 -c "import json,sys
+try:
+    d = json.load(sys.stdin); print($1)
+except Exception:
+    pass"
+}
+config_has_keys() {
+    [ -f "$PROG/config.ini" ] && grep -Eq '^token *= *[^ ]' "$PROG/config.ini" \
+        && grep -Eq '^chat_id *= *[^ ]' "$PROG/config.ini"
+}
+
+echo "CaSa setup $(date)" >"$LOG"
+rm -f "$ERR"
+sudo -v || exit 1
+AGAIN=no
+[ -f /etc/casa-setup-done ] && AGAIN=yes
+
+# ── Welcome ────────────────────────────────────────────────────────────────
+if [ "$AGAIN" = yes ]; then
+    TEXT="CaSa is already set up.\n\nThis wizard changes the keyboard layout, the password of the network drive and your keys. Each step asks whether to keep the current setting.\n\nContinue?"
+else
+    TEXT="Welcome to your CaSa Raspberry Pi!\n\nThis wizard asks for:\n\n  1. Your keyboard layout\n  2. Optional: the network drive \\\\\\\\$(hostname)\\\\Python for your files\n  3. Your Telegram bot (token from @BotFather)\n  4. Optional: CoinGecko and Claude API key\n\nThen it downloads the newest CaSa from GitHub (internet needed) and starts it. CaSa runs from now on automatically, also after a restart.\n\nStart?"
+fi
+whiptail --title "$TITLE" --yes-button "Start" --no-button "Cancel" --yesno "$TEXT" $H $W || cancelled
+
+# ── 1. Keyboard ────────────────────────────────────────────────────────────
+CURRENT_KB=$(sed -n 's/^XKBLAYOUT="\{0,1\}\([^",]*\).*/\1/p' /etc/default/keyboard 2>/dev/null)
+KB=$(whiptail --title "$TITLE – keyboard (1/4)" --default-item "${CURRENT_KB:-de}" --menu \
+    "Keyboard layout of this Raspberry Pi (for a keyboard connected to it):" 17 $W 8 \
+    de "German (Germany)" \
+    ch "German (Switzerland)" \
+    at "German (Austria)" \
+    us "English (US)" \
+    gb "English (UK)" \
+    fr "French" \
+    nl "Dutch" \
+    other "other layout (full list)" 3>&1 1>&2 2>&3) || cancelled
+
+# ── 2. Network drive (optional) ────────────────────────────────────────────
+# SHARE: new = set up / new password, keep = unchanged, off = no network drive
+HAS_SHARE=no
+grep -qi '^\[python\]' /etc/samba/smb.conf 2>/dev/null && HAS_SHARE=yes
+if [ "$HAS_SHARE" = yes ]; then
+    SHARE=$(whiptail --title "$TITLE – network drive (2/4)" --default-item keep --menu \
+        "The network drive \\\\\\\\$(hostname)\\\\Python is set up." 13 $W 3 \
+        keep "keep it as it is" \
+        new "keep it, new password" \
+        off "remove it (no network drive)" 3>&1 1>&2 2>&3) || cancelled
+elif whiptail --title "$TITLE – network drive (2/4)" --yes-button "Set up" --no-button "No drive" --yesno \
+    "Set up the network drive \\\\\\\\$(hostname)\\\\Python?\n\nWith it you open and edit your CaSa files (assets.ini, transactions.csv, logfile.txt ...) directly in the Windows Explorer.\n\nWithout it you edit them on the Pi (e.g. nano ~/Python/assets.ini). You can add it later with casa-setup." 15 $W; then
+    SHARE=new
+else
+    SHARE=off
+fi
+if [ "$SHARE" = new ]; then
+    while true; do
+        PW=$(whiptail --title "$TITLE – network drive (2/4)" --passwordbox \
+            "Password for the network drive \\\\\\\\$(hostname)\\\\Python\n(user: $USER, at least 6 characters)\n\nThe password is not shown while typing." 12 $W 3>&1 1>&2 2>&3) || cancelled
+        PW2=$(whiptail --title "$TITLE – network drive (2/4)" --passwordbox "Repeat the password:" 9 $W 3>&1 1>&2 2>&3) || cancelled
+        if [ "${#PW}" -lt 6 ]; then
+            whiptail --title "$TITLE" --msgbox "The password must have at least 6 characters." 8 $W
+        elif [ "$PW" != "$PW2" ]; then
+            whiptail --title "$TITLE" --msgbox "The two passwords are not the same. Please again." 8 $W
+        else
+            break
+        fi
+    done
+    unset PW2
+fi
+
+# ── 3. + 4. Telegram and API keys ──────────────────────────────────────────
+ASK_KEYS=yes
+if config_has_keys && whiptail --title "$TITLE – keys (3/4)" --yes-button "Keep" --no-button "Change" \
+    --yesno "Your Telegram bot and keys are already set.\n\nKeep them?" 10 $W; then
+    ASK_KEYS=no
+fi
+if [ "$ASK_KEYS" = yes ]; then
+    while true; do
+        TOKEN=$(whiptail --title "$TITLE – Telegram (3/4)" --passwordbox \
+            "Token of your Telegram bot\n\nNew bot: in Telegram send /newbot to @BotFather and copy the token.\nPaste: right-click (PowerShell) or Ctrl+Shift+V.\n\nThe token is not shown while typing." 15 $W 3>&1 1>&2 2>&3) || cancelled
+        TOKEN=$(echo "$TOKEN" | tr -d '[:space:]')
+        BOT=$(telegram getMe | json_value 'd["result"]["username"] if d.get("ok") else ""')
+        [ -n "$BOT" ] && break
+        whiptail --title "$TITLE" --msgbox "Telegram does not accept this token (or there is no internet).\n\nPlease check it and enter it again." 10 $W
+    done
+    whiptail --title "$TITLE – Telegram (3/4)" --msgbox \
+        "Token OK: your bot is @$BOT\n\nNow open Telegram and send @$BOT any message (e.g. hello).\n\nThen press OK here." 13 $W
+    CHAT_ID=""
+    for _ in 1 2 3; do
+        CHAT_ID=$(telegram getUpdates | json_value '[u["message"]["chat"]["id"] for u in d.get("result", []) if "message" in u][-1]')
+        [ -n "$CHAT_ID" ] && break
+        sleep 3
+    done
+    if [ -z "$CHAT_ID" ]; then
+        CHAT_ID=$(whiptail --title "$TITLE – Telegram (3/4)" --inputbox \
+            "No message to @$BOT found.\n\nSend the bot a message and enter nothing to try again,\nor enter your chat id yourself:" 13 $W 3>&1 1>&2 2>&3) || cancelled
+        [ -z "$CHAT_ID" ] && CHAT_ID=$(telegram getUpdates | json_value '[u["message"]["chat"]["id"] for u in d.get("result", []) if "message" in u][-1]')
+        [ -z "$CHAT_ID" ] && fail "Still no message to @$BOT found. Send the bot a message and start casa-setup again."
+    fi
+    COINGECKO=$(whiptail --title "$TITLE – API keys (4/4)" --passwordbox \
+        "CoinGecko demo key (optional, coingecko.com/en/developers/dashboard)\n\nWith a key CaSa can watch more cryptos. Leave empty for none." 12 $W 3>&1 1>&2 2>&3) || cancelled
+    CLAUDE=$(whiptail --title "$TITLE – API keys (4/4)" --passwordbox \
+        "Claude API key (optional, console.anthropic.com)\n\nFor the buttons AI decision (API) and AI plan (API); each request costs a few cents. Leave empty for none." 12 $W 3>&1 1>&2 2>&3) || cancelled
+    MODEL=$(whiptail --title "$TITLE – API keys (4/4)" --default-item claude-sonnet-5-5 --menu \
+        "Which Claude model should answer?" 14 $W 3 \
+        claude-sonnet-5-5 "recommended: good and affordable" \
+        claude-opus-5-5 "strongest, about twice the price" \
+        claude-haiku-5-5 "fastest and cheapest" 3>&1 1>&2 2>&3) || cancelled
+fi
+
+case "$SHARE" in
+    new) DRIVE_TEXT="\\\\\\\\$(hostname)\\\\Python, user $USER, new password" ;;
+    keep) DRIVE_TEXT="\\\\\\\\$(hostname)\\\\Python, unchanged" ;;
+    *) DRIVE_TEXT="none" ;;
+esac
+SUMMARY="Keyboard:        $KB\nNetwork drive:   $DRIVE_TEXT"
+if [ "$ASK_KEYS" = yes ]; then
+    SUMMARY="$SUMMARY\nTelegram bot:    @$BOT (chat id $CHAT_ID)\nCoinGecko key:   $([ -n "$COINGECKO" ] && echo set || echo none)\nClaude key:      $([ -n "$CLAUDE" ] && echo set || echo none)\nClaude model:    $MODEL"
+else
+    SUMMARY="$SUMMARY\nTelegram, keys:  unchanged"
+fi
+whiptail --title "$TITLE – summary" --yes-button "Apply" --no-button "Cancel" --yesno "$SUMMARY\n\nApply and start CaSa?" 16 $W || cancelled
+
+# ── Apply ──────────────────────────────────────────────────────────────────
+{
+echo "XXX"; echo 5; echo "Keyboard layout ..."; echo "XXX"
+step "keyboard $KB"
+if [ "$KB" = other ]; then
+    : # the full dialog follows after the progress bar
+elif command -v raspi-config >/dev/null 2>&1; then
+    sudo raspi-config nonint do_configure_keyboard "$KB" >>"$LOG" 2>&1
+else
+    sudo sed -i "s/^XKBLAYOUT=.*/XKBLAYOUT=\"$KB\"/" /etc/default/keyboard >>"$LOG" 2>&1
+    sudo setupcon -k --force >>"$LOG" 2>&1
+fi
+
+echo "XXX"; echo 15; echo "Downloading the newest CaSa from GitHub ..."; echo "XXX"
+if [ ! -d "$PROG/.git" ]; then
+    TAG=$(newest_release)
+    step "download $TAG to $PROG"
+    # also works when ~/Python already exists (e.g. your files copied there): they stay
+    { [ -n "$TAG" ] && mkdir -p "$PROG" && cd "$PROG" && git init -q && git remote add origin "$REPO" \
+        && git fetch -q --tags origin && git checkout -q -f "$TAG"; } >>"$LOG" 2>&1 \
+        || { echo "CaSa could not be downloaded from GitHub (internet?)." > "$ERR"; exit 1; }
+    cd "$HOME"
+fi
+
+echo "XXX"; echo 25; echo "Python packages (1–3 minutes) ..."; echo "XXX"
+step "python packages"
+if [ ! -x "$PROG/.venv/bin/python" ]; then
+    if [ -d "$VENV" ]; then
+        sudo mv "$VENV" "$PROG/.venv" >>"$LOG" 2>&1
+    else
+        python3 -m venv "$PROG/.venv" >>"$LOG" 2>&1
+    fi
+fi
+sudo chown -R "$USER:$(id -gn)" "$PROG" >>"$LOG" 2>&1
+"$PROG/.venv/bin/python" -m pip install -q --upgrade -r "$PROG/requirements.txt" >>"$LOG" 2>&1 \
+    || { echo "The Python packages could not be installed (internet?)." > "$ERR"; exit 1; }
+
+echo "XXX"; echo 40; echo "Saving your keys ..."; echo "XXX"
+if [ "$ASK_KEYS" = yes ]; then
+    step "config.ini"
+    printf 'token=%s\nchat_id=%s\ncoingecko=%s\nclaude=%s\nmodel=%s\n' "$TOKEN" "$CHAT_ID" "$COINGECKO" "$CLAUDE" "$MODEL" \
+        | python3 "$HELPER" "$PROG/config.ini" >>"$LOG" 2>&1
+fi
+if [ ! -f "$PROG/assets.ini" ]; then
+    printf '%s\n' "# CaSa assets. Format: symbol = Name; crypto|stock; 1" \
+        "# 1 at the end = part of the automatic alarm analysis, without 1 = only for /check" \
+        "# Crypto: CoinGecko IDs (e.g. bitcoin), stocks: Yahoo Finance symbols, preferably in EUR (e.g. RHM.DE)" "" \
+        "[crypto]" "bitcoin        = Bitcoin; crypto; 1" "ethereum       = Ethereum; crypto; 1" "" \
+        "[stocks]" "RHM.DE         = Rheinmetall; stock; 1" > "$PROG/assets.ini"
+fi
+
+echo "XXX"; echo 60; echo "Network drive ..."; echo "XXX"
+step "samba $SHARE"
+if [ "$SHARE" = off ]; then
+    # no network drive: remove the share [Python] and stop Samba (nothing else is shared by default)
+    sudo python3 - >>"$LOG" 2>&1 <<'PYEOF'
+conf = '/etc/samba/smb.conf'
+lines = open(conf, encoding='utf-8').read().splitlines()
+out, skip = [], False
+for line in lines:
+    if line.strip().startswith('['):
+        skip = line.strip().lower() == '[python]'
+    if not skip:
+        out.append(line)
+open(conf, 'w', encoding='utf-8').write('\n'.join(out).rstrip('\n') + '\n')
+PYEOF
+    sudo systemctl disable --now smbd nmbd >>"$LOG" 2>&1
+else
+# share [Python] (written new each time, the rest of smb.conf stays)
+sudo python3 - "$PROG" "$USER" >>"$LOG" 2>&1 <<'PYEOF'
+import sys
+path, user = sys.argv[1], sys.argv[2]
+conf = '/etc/samba/smb.conf'
+lines = open(conf, encoding='utf-8').read().splitlines()
+out, skip = [], False
+for line in lines:
+    if line.strip().startswith('['):
+        skip = line.strip().lower() == '[python]'
+    if not skip:
+        out.append(line)
+while out and not out[-1].strip():
+    out.pop()
+out += ['', '[Python]', '   comment = CaSa', f'   path = {path}', '   read only = no', f'   valid users = {user}',
+        '   create mask = 0644', '   directory mask = 0755']
+open(conf, 'w', encoding='utf-8').write('\n'.join(out) + '\n')
+PYEOF
+if [ "$SHARE" = new ]; then
+    printf '%s\n%s\n' "$PW" "$PW" | sudo smbpasswd -s -a "$USER" >>"$LOG" 2>&1
+    unset PW
+fi
+sudo systemctl enable smbd nmbd >>"$LOG" 2>&1
+sudo systemctl restart smbd >>"$LOG" 2>&1
+sudo systemctl restart nmbd >>"$LOG" 2>&1
+fi
+
+echo "XXX"; echo 80; echo "Service casa: start at every boot ..."; echo "XXX"
+step "service"
+sudo tee /etc/systemd/system/casa.service >/dev/null <<EOF
+[Unit]
+Description=CaSa - Crypto and Stock Alert
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=$USER
+WorkingDirectory=$PROG
+ExecStart=$PROG/.venv/bin/python main.py
+# stop like Ctrl+C: CaSa ends the Telegram bot cleanly
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload >>"$LOG" 2>&1
+sudo systemctl enable casa >>"$LOG" 2>&1
+sudo systemctl restart casa >>"$LOG" 2>&1
+sudo touch /etc/casa-setup-done
+echo "XXX"; echo 100; echo "Done"; echo "XXX"
+sleep 1
+} | whiptail --title "$TITLE" --gauge "Applying ..." 8 $W 0
+unset TOKEN COINGECKO CLAUDE PW
+[ -f "$ERR" ] && fail "$(cat "$ERR")\n\nStart again when the Pi is online:  casa-setup"
+
+[ "$KB" = other ] && sudo dpkg-reconfigure keyboard-configuration && sudo setupcon -k --force
+
+sleep 3
+if ! systemctl is-active --quiet casa; then
+    fail "CaSa does not run. Details: journalctl -u casa -n 50   and   ~/Python/logfile.txt"
+fi
+
+IP=$(hostname -I 2>/dev/null | cut -d' ' -f1)
+if [ "$SHARE" = off ]; then
+    DRIVE_DONE="Your files: ~/Python on the Pi (e.g. nano ~/Python/assets.ini).\nNetwork drive later: casa-setup\n"
+else
+    DRIVE_DONE="Network drive in Windows (Explorer > This PC > Map network drive):\n  \\\\\\\\$(hostname)\\\\Python   or   \\\\\\\\$IP\\\\Python\n  user: $USER, password: from step 2\n"
+fi
+VERSION=$(git -C "$PROG" describe --tags --always 2>/dev/null)
+whiptail --title "$TITLE – done" --msgbox "CaSa $VERSION is running and starts by itself from now on!\n\nYour bot sends \"CaSa started\" within a minute.\n\n$DRIVE_DONE\nNext: enter your assets in assets.ini, then send /restart to the bot.\n\nStatus: systemctl status casa      Log: ~/Python/logfile.txt\nAgain:  casa-setup      Update:  casa-update" $H $W
+clear
+echo "CaSa is running. Status: systemctl status casa   Log: tail -f ~/Python/logfile.txt"

@@ -14,13 +14,17 @@ import os
 import platform
 import re
 import shutil
+import subprocess
+import sys
 import socket
 import time
 import traceback
+import types
 import uuid
 from queue import Empty
 
 import pandas as pd
+import requests
 import schedule
 import classes as cl
 import func
@@ -39,9 +43,9 @@ NOON_ANALYSIS = "12:30"
 EVENING_SUMMARY = "18:30"
 EVENT_REMINDER = "08:00"   # reminder for events from events.ini (with daily analysis)
 
-# Template for /ai. Created as ai_prompt.txt on first use and can be edited there
-# with any editor. The program fills in the placeholders in {curly brackets}.
-AI_PROMPT_FILE = "ai_prompt.txt"
+# Template for /ai_prompt and the AI buttons. It is in config.ini [ai_prompt] (added at the start, can be
+# edited there; up to 0.1.12 the file ai_prompt.txt). The program fills in the placeholders in {curly brackets}.
+AI_PROMPT_FILE = "ai_prompt.txt"   # old place: moved into config.ini at the start
 AI_PROMPT_TEMPLATE = """Assess {name} ({symbol}, {type}) for a three-month horizon (no day trading) using my technical data and current news. {task}
 
 A. My program's data (daily values, {date})
@@ -85,8 +89,8 @@ D. Output
 5. Max. four confirmed dates (next 4 weeks) as table: date and German time, event, relevance, source.
 6. Conclusion in max. four simple sentences: what I do now, what I wait for, what triggers or rules out {action}; max. two price levels, no score or abbreviations.
 """
-# Earlier default templates (SHA-256 of the text): an unchanged ai_prompt.txt with one of them is replaced by
-# the current template. Your own changes in ai_prompt.txt are never overwritten.
+# Earlier default templates (SHA-256 of the text): an unchanged template with one of them is replaced by
+# the current one. Your own changes are never overwritten.
 OLD_AI_PROMPT_HASHES = {
     'd1e2b611158317a4a773e7cb1731b04a95dc5e4d97f52dbbb17484d1a83e716e',   # 0.1.8 - 0.1.10
     'de1e14d1b2b86e561090bba6a801e5d4191da15ff68d9c23fc050db1d5dc01d6',   # 0.1.5 - 0.1.7
@@ -103,7 +107,7 @@ AI_SCORE_NOTE = {'stock': 'stocks: high = no edge, very low = slight rebound',
                  'crypto': 'crypto: high = strength tended to continue'}
 
 
-# /ai_api_decision3s and /ai_api_plan: the filled ai_prompt.txt plus one of these tasks (instead of the full answer D)
+# /ai_api_decision3s and /ai_api_plan: the filled prompt template plus one of these tasks (instead of the full answer D)
 AI_API_TASKS = {
     'decision': ("\n\nE. Answer for this request (replaces D): reply only with item 1 of D, the decision in exactly "
                  "three sentences. Plain text, no heading, no list, no other items, no sources list."),
@@ -147,16 +151,52 @@ def parse_plan_block(block):
     return plan
 
 
-def update_ai_prompt_file():
-    """Create ai_prompt.txt, or replace an unchanged earlier default template with the current one."""
-    if os.path.exists(AI_PROMPT_FILE):
+GITHUB_REPO = "TheRealDeluxee/CryptoStockManager"
+UPDATE_DONE_FILE = "update_done.txt"   # written before the restart of an update, read and removed at the start
+UPDATE_CHECK = "19:00"   # daily: new CaSa release on GitHub? (message with button)
+
+
+def version_tuple(text):
+    """'v0.1.13' or '0.1.13' -> (0, 1, 13); unknown parts count as 0."""
+    return tuple(int(part) if part.isdigit() else 0 for part in text.lstrip('vV').split('.'))
+
+
+def newest_release():
+    """Newest version tag on GitHub (e.g. 'v0.1.13'), None if not reachable."""
+    try:
+        response = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/tags", timeout=20)
+        tags = [tag['name'] for tag in response.json() if str(tag.get('name', '')).startswith('v')]
+    except (requests.RequestException, ValueError, TypeError, KeyError):
+        return None
+    return max(tags, key=version_tuple) if tags else None
+
+
+def can_update_itself():
+    """The update button works when CaSa is a Git copy of GitHub (CaSa image, casa-setup) and runs as
+    service: then CaSa ends after the update and the service starts the new version."""
+    folder = os.path.dirname(os.path.abspath(__file__))
+    return (os.path.isdir(os.path.join(folder, '.git')) and shutil.which('git') is not None
+            and bool(os.environ.get('INVOCATION_ID')))   # set by systemd for a service
+
+
+def update_ai_prompt(path='config.ini'):
+    """AI prompt template in config.ini [ai_prompt]: an existing ai_prompt.txt is moved there (your text stays,
+    the old file is kept as ai_prompt.old.txt); missing = the current template; an unchanged earlier default
+    template is replaced by the current one. Returns the template."""
+    text = cl.read_ai_prompt(path)
+    if text is None and os.path.exists(AI_PROMPT_FILE):
         with open(AI_PROMPT_FILE, encoding='utf-8-sig') as file:
-            text = file.read()
-        if hashlib.sha256(text.strip().encode('utf-8')).hexdigest() not in OLD_AI_PROMPT_HASHES:
-            return   # current template or your own version: keep it
-        func.log_print('ai_prompt.txt: unchanged earlier template replaced by the current one')
-    with open(AI_PROMPT_FILE, 'w', encoding='utf-8') as file:
-        file.write(AI_PROMPT_TEMPLATE)
+            text = file.read().strip() or None
+        if text:
+            cl.write_ai_prompt(text, path)
+        os.replace(AI_PROMPT_FILE, 'ai_prompt.old.txt')
+        func.log_print('ai_prompt.txt moved into config.ini [ai_prompt] (old file kept as ai_prompt.old.txt)')
+    if text is not None and hashlib.sha256(text.strip().encode('utf-8')).hexdigest() not in OLD_AI_PROMPT_HASHES:
+        return text   # current template or your own version: keep it
+    if text is not None:
+        func.log_print('config.ini [ai_prompt]: unchanged earlier template replaced by the current one')
+    cl.write_ai_prompt(AI_PROMPT_TEMPLATE, path)
+    return AI_PROMPT_TEMPLATE.strip()
 
 
 class CryptoStockManager:
@@ -169,6 +209,7 @@ class CryptoStockManager:
         # Bring config.ini up to date first (old section name, new settings), then read it
         for change in cl.update_config(config_file_path):
             func.log_print(f"config.ini: {change}")
+        update_ai_prompt(config_file_path)   # AI prompt template in config.ini (up to 0.1.12 ai_prompt.txt)
         for change in cl.convert_value_alerts():   # price alerts up to 0.1.11 -> plans
             func.log_print(change)
         config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
@@ -180,6 +221,9 @@ class CryptoStockManager:
         func.seven_day_price_change = config.getfloat('alertsconfig', 'seven_day_price_change')
         func.previous_alarm_change = config.getfloat('alertsconfig', 'previous_alarm_change')
         func.total_loss_limit = config.getfloat('alertsconfig', 'total_loss_limit')
+        func.infos_for = config.get('alertsconfig', 'infos_for', fallback='all').strip().lower()
+        if func.infos_for not in ('all', 'portfolio'):
+            raise ValueError("infos_for in config.ini [alertsconfig] must be all or portfolio.")
         limits = (func.seven_day_price_change, func.previous_alarm_change, func.total_loss_limit)
         if not all(math.isfinite(value) for value in limits):
             raise ValueError('Alarm values must be finite numbers.')
@@ -214,6 +258,8 @@ class CryptoStockManager:
         # Kept when assets are reloaded and on days without stock analysis (weekend).
         self.daily_prices = {}   # (type, symbol lower) -> price per day
         self.events_done = set()   # events already reminded today (in memory only)
+        self.update_notified = None   # newest GitHub version already announced
+        self.exit_for_update = False   # after "Update now": end, the service starts the new version
         self.missing_held_notified = set()   # held assets missing in assets.ini, already reported in Telegram
         self.plan_stop_checked = {}   # plan -> day the stop was last checked with the daily closes
         self.plan_zone_sent = {}   # (plan, buy_zone/target) -> day of the last message: at most one per day
@@ -280,6 +326,7 @@ class CryptoStockManager:
         from /smart_alert_config apply without a restart. On an error the previous switches stay."""
         try:
             func.alert_settings = cl.read_alert_settings(self.config_file_path)
+            func.infos_for = cl.read_infos_for(self.config_file_path)   # also switchable in /smart_alert_config
         except (OSError, ValueError, configparser.Error) as error:
             func.log_print(f"config.ini [alerts] could not be read, previous settings stay: {error}", 'WARN')
 
@@ -314,6 +361,83 @@ class CryptoStockManager:
             func.pushover(f"Analysis ({data_type}) failed for {len(failed)} of {len(items)} assets:\n"
                           + "\n".join(failed))
         return results
+
+    def check_for_update(self, manual=False):
+        """Daily (and with /update): is there a newer CaSa release on GitHub? The daily check sends one message
+        per new version; /update always answers (also "up to date"). With the button "Update now" when CaSa
+        can update itself (CaSa image), otherwise how to update."""
+        newest = newest_release()
+        if manual and not newest:
+            func.pushover(f"GitHub not reachable – no update check possible. Running: CaSa {VERSION}")
+            return
+        if manual and version_tuple(newest) <= version_tuple(VERSION):
+            func.pushover(f"CaSa {VERSION} is up to date (newest on GitHub: {newest}).")
+            return
+        if not newest or version_tuple(newest) <= version_tuple(VERSION) or (newest == self.update_notified
+                                                                              and not manual):
+            return
+        self.update_notified = newest
+        text = (f"<b>New CaSa version {html.escape(newest)}</b> (running: {html.escape(VERSION)})\n"
+                f"Changes: github.com/{GITHUB_REPO}/blob/{html.escape(newest)}/CHANGELOG.md")
+        if can_update_itself():
+            func.pushover(text + "\nUpdate now? CaSa restarts afterwards (about 1 minute). Your files stay.",
+                          html_format=True, buttons=[[('⬆ Update now', f'upd|{newest}'), ('Later', 'updno|')]])
+        else:
+            func.pushover(text + "\nUpdate on the Pi: casa-update (CaSa image), otherwise the new files from GitHub.",
+                          html_format=True)
+        func.log_print(f"New CaSa version on GitHub: {newest} (running {VERSION})")
+
+    def report_update(self):
+        """After the restart of an update: one message "Update complete" with the old and new version
+        (only then, not after a normal start)."""
+        if not os.path.exists(UPDATE_DONE_FILE):
+            return
+        try:
+            with open(UPDATE_DONE_FILE, encoding='utf-8') as file:
+                old, _, wanted = file.read().strip().partition('|')
+            os.remove(UPDATE_DONE_FILE)
+        except OSError as error:
+            func.log_print(f"Update note could not be read: {error}", 'WARN')
+            return
+        if version_tuple(VERSION) == version_tuple(wanted):
+            func.pushover(f"✅ <b>Update complete:</b> CaSa {html.escape(old)} → {html.escape(VERSION)}\n"
+                          f"Changes: github.com/{GITHUB_REPO}/blob/{html.escape(wanted)}/CHANGELOG.md",
+                          html_format=True)
+            func.log_print(f"Update complete: {old} -> {VERSION}")
+        else:
+            func.pushover(f"⚠ Update to {wanted} did not take effect: CaSa {VERSION} is running. "
+                          "On the Pi: casa-update")
+            func.log_print(f"Update to {wanted} did not take effect, running {VERSION}", 'WARN')
+
+    def update_casa(self, version):
+        """Button "Update now": the given release from GitHub, the Python packages, then CaSa ends and the
+        service starts the new version. Returns True when CaSa should end."""
+        if not can_update_itself():
+            func.pushover('Update by button only works in the CaSa image (Git copy, running as service). '
+                          'On the Pi: casa-update')
+            return False
+        folder = os.path.dirname(os.path.abspath(__file__))
+        steps = (['git', 'fetch', '-q', '--tags', 'origin'], ['git', 'checkout', '-q', version],
+                 [sys.executable, '-m', 'pip', 'install', '-q', '--upgrade', '-r', 'requirements.txt'])
+        for step in steps:
+            try:
+                result = subprocess.run(step, cwd=folder, capture_output=True, text=True, timeout=900)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                result = types.SimpleNamespace(returncode=1, stderr=str(error), stdout='')
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()[-300:]
+                func.log_print(f"Update to {version} failed at {' '.join(step[:3])}: {detail}", 'ERROR')
+                func.pushover(f"Update to {version} failed: {detail}\nCaSa keeps running with {VERSION}.")
+                return False
+        try:   # the new version reports "Update complete" after its start
+            with open(UPDATE_DONE_FILE, 'w', encoding='utf-8') as file:
+                file.write(f"{VERSION}|{version}\n")
+        except OSError as error:
+            func.log_print(f"Update note could not be written: {error}", 'WARN')
+        func.log_print(f"Updated from {VERSION} to {version}; CaSa ends, the service starts the new version")
+        func.pushover(f"CaSa {version} installed. Restarting – the start message follows in about 1 minute.")
+        self.exit_for_update = True
+        return True
 
     def health_check(self):
         """One status line in logfile.txt only (not sent to Telegram): is everything still running?
@@ -460,26 +584,32 @@ class CryptoStockManager:
         details = func.analysis_details(df, item.state.pattern, item.state.score_rank, 'days', sr_zones)
         return name, symbol, item, df, full, sr_zones, details
 
-    def single_daily_analysis(self, symbol, asset_type, ask_ai=False):
-        """ask_ai=True (only /check): the AI buttons below the chart, as below alarms and infos."""
+    def single_daily_analysis(self, symbol, asset_type, ask_ai=False, trigger=None, buttons=None, priority=0):
+        """Daily analysis as chart with figures. ask_ai=True (/check): the AI buttons below the chart.
+        trigger=(title, HTML text): a plan or date alert – one message like the alarms, with the trigger at
+        the top, its buttons (rows of (label, data)) and the AI buttons."""
         name, symbol, item, df, full, sr_zones, details = self._daily_analysis(symbol, asset_type)
         # Telegram HTML as for the alarms (bold/italic/monospace)
-        message = (f"<b>{html.escape(name)} ({html.escape(symbol)}) — daily analysis (100d)</b>\n"
-                   f"Manual request without alarm\n\n" + details['message'])
+        if trigger:
+            title, text = trigger
+            message = f"<b>{html.escape(name)} ({html.escape(symbol)}) — {title}</b>\n{text}\n\n" + details['message']
+            ask_ai = True
+        else:
+            message = (f"<b>{html.escape(name)} ({html.escape(symbol)}) — daily analysis (100d)</b>\n"
+                       f"Manual request without alarm\n\n" + details['message'])
         if not item.state.watch_list:
             message += "\n\n" + html.escape(f"Amount >1 year: {item.state.amount_older_than_one_year:.2f} "
                                            f"({item.state.amount_older_than_one_year_pct:.2f} %)")
         image_name = 'manual_' + uuid.uuid4().hex
         func.plot_and_save(df, image_name, '100d', item.state.zero_line, sr_zones, item.state.pattern)
-        func.pushover_image(image_name, message, delete_after_send=True, html_format=True,
-                            buttons=func.ai_buttons(asset_type, symbol) if ask_ai else None)
+        rows = list(buttons or []) + (func.ai_buttons(asset_type, symbol) if ask_ai else [])
+        func.pushover_image(image_name, message, priority, delete_after_send=True, html_format=True,
+                            buttons=rows or None)
 
     def _ai_question(self, symbol, asset_type):
-        """Fill the prompt from ai_prompt.txt with the daily analysis. Returns (name, symbol, prompt text)."""
+        """Fill the prompt template (config.ini [ai_prompt]) with the daily analysis. Returns (name, symbol, prompt text)."""
         name, symbol, item, df, full, sr_zones, details = self._daily_analysis(symbol, asset_type)
-        update_ai_prompt_file()
-        with open(AI_PROMPT_FILE, encoding='utf-8-sig') as file:
-            question = file.read()
+        question = update_ai_prompt()
 
         price = float(df['Price'].iloc[-1])
 
@@ -638,7 +768,7 @@ class CryptoStockManager:
         return name, symbol, question.strip()
 
     def ai_prompt(self, symbol, asset_type):
-        """/ai_prompt: the filled prompt from ai_prompt.txt as copyable text for ChatGPT or Claude (no API)."""
+        """/ai_prompt: the filled prompt template as copyable text for ChatGPT or Claude (no API)."""
         name, symbol, question = self._ai_question(symbol, asset_type)
         message = (f"<b>AI prompt: {html.escape(name)}</b> – copy into ChatGPT or Claude\n"
                    f"<pre>{html.escape(question)}</pre>")
@@ -760,26 +890,24 @@ class CryptoStockManager:
         func.pushover_image(image_name, message, delete_after_send=True)
 
     def send_pnl_chart(self, weeks=13):
-        """Total profit/loss of the portfolio over the last 13 full weeks (3 months, Monday to Sunday,
-        the current week up to today) as weekly bars (not the portfolio value)."""
+        """Profit/loss per week over the last 13 weeks (Monday to Sunday, the current week up to today):
+        realized from the sales in transactions.csv, for the current week also the unrealized change."""
         today = datetime.date.today()
-        days = today.weekday() + 1 + (weeks - 1) * 7   # from Monday 12 weeks ago up to today
         try:
             rows = cl.read_transactions()
         except (OSError, UnicodeError, ValueError) as error:
             func.log_print(f"P&L chart skipped: transactions.csv could not be read: {error}", 'WARN')
             return
-        if not any(row['action'] in ('buy', 'sell') for row in rows) or not self.daily_prices:
+        if not any(row['action'] in ('buy', 'sell') for row in rows):
             return
-        history, missing = cl.pnl_history(rows, self.daily_prices, days, today=today)
-        if len(history) < 2:
-            return
+        weekly, missing = cl.weekly_pnl(rows, self.daily_prices, weeks, today=today)
         image_name = 'pnl_chart_' + uuid.uuid4().hex
-        func.create_pnl_chart(history, os.path.join(self.output_dir, image_name + '.png'),
+        func.create_pnl_chart(weekly, os.path.join(self.output_dir, image_name + '.png'),
                               title=f'P&L · last {weeks} weeks')
-        message = 'Profit/loss of all positions (realized + unrealized), not the portfolio value.'
+        message = ('Profit/loss per week: realised from your sales (transactions.csv, FIFO) in full colour, '
+                   'for the current week also the unrealised change of your open positions in light colour.')
         if missing:
-            message += f"\nWithout prices (not in the daily analysis): {', '.join(missing)}"
+            message += f"\nUnrealised without (no prices in the daily analysis): {', '.join(missing)}"
         func.pushover_image(image_name, message, delete_after_send=True)
 
     def event_reminders(self):
@@ -796,13 +924,8 @@ class CryptoStockManager:
                 continue
             self.events_done.add(key)
             text = f"\n{html.escape(event['text'])}" if event['text'] else ''
-            func.pushover(f"<b>Event tomorrow: {html.escape(event['name'])}</b>"
-                          f" ({event['date'].strftime('%A, %d/%m/%Y')}){text}\nDaily analysis follows.",
-                          priority=1, html_format=True)
-            try:
-                self.single_daily_analysis(event['symbol'], event['type'])
-            except Exception as error:
-                func.pushover(f"Daily analysis for {event['name']} failed: {error}")
+            trigger = f"📅 <b>Event tomorrow</b>: {event['date'].strftime('%A, %d/%m/%Y')}{text}"
+            self._alert_with_analysis(event['symbol'], event['type'], event['name'], '📅 Event tomorrow', trigger)
         self.earnings_reminders()
 
     def plan_alert_check(self):
@@ -844,8 +967,10 @@ class CryptoStockManager:
                 title = '🟢 Add-on zone (retest)' if is_held else '🟢 Buy zone'
                 action = ('You already hold it: add only if your note allows a further tranche.' if is_held else
                           'Check the conditions in your note before buying (e.g. rebound, higher low, daily close).')
+                buttons = self._trade_buttons(plan, 'buy')
             elif status == 'target' and is_held:
                 title, action = '💰 Take partial profits', 'Target reached: take partial profits as planned.'
+                buttons = self._trade_buttons(plan, 'sell')
             else:
                 func.log_print(f"Plan {plan['name']}: status {status}, price {price:.2f}")
                 continue
@@ -856,7 +981,7 @@ class CryptoStockManager:
                 continue
             self.plan_zone_sent[sent_key] = datetime.date.today()
             messages += 1
-            self._plan_message(plan, title, f"Price {func.format_euro(price)}. {action}", priority=1)
+            self._plan_message(plan, title, f"Price {func.format_euro(price)}. {action}", buttons)
         func.log_print(f"Plan alerts: {checked} of {len(plans)} checked, {messages} messages")
 
     def _plan_stop(self, plan, symbol, is_held):
@@ -882,25 +1007,42 @@ class CryptoStockManager:
         day, close = below.index[0].date(), float(below.iloc[0])
         reason = f"daily close {close:.2f} on {day:%d/%m/%Y} below stop {plan['stop']:.2f}"
         cl.set_plan_value(plan['key'], 'status', f"ended {today:%d/%m/%Y}: {reason}")
+        delete = [[('🗑 Delete plan', f"pldel|{plan['key']}")]]
         if is_held:
             title, action = '🔴 Exit', 'Plan failed: sell as planned, do not average down.'
+            buttons = self._trade_buttons(plan, 'sell', 'sellall') + delete
         else:
             title, action = '❌ Setup cancelled', 'Plan failed before buying: no purchase.'
+            buttons = delete
         self._plan_message(plan, title, f"Daily close {func.format_euro(close)} on {day:%d/%m/%Y} is below "
-                                        f"the stop {func.format_euro(plan['stop'])}. {action}\nThe plan has ended "
-                                        f"(still listed in /plan_alert until you delete it).", priority=1)
+                                        f"the stop {func.format_euro(plan['stop'])}. {action} The plan has ended.",
+                           buttons)
         return True
 
-    def _plan_message(self, plan, title, text, priority=1):
-        """Message with plan numbers and note, followed by the daily analysis."""
+    def _plan_message(self, plan, title, text, buttons=None, priority=1):
+        """Plan alert as one message like the alarms: chart, score and figures, at the top the trigger
+        (plan alert, plan numbers, your note) and buttons (record the trade, delete the plan)."""
         note = f"\nYour note: {html.escape(plan['note'])}" if plan['note'] else ''
-        func.pushover(f"<b>{title}: {html.escape(plan['name'])}</b>\n{html.escape(text)}\n"
-                      f"<i>{html.escape(cl.plan_text(plan))}</i>{note}\nDaily analysis follows.",
-                      priority=priority, html_format=True)
+        trigger = f"📋 <b>Plan alert</b>: {html.escape(text)}\n<i>{html.escape(cl.plan_text(plan))}</i>{note}"
+        self._alert_with_analysis(plan['symbol'], plan['type'], plan['name'], title, trigger, buttons, priority)
+
+    def _alert_with_analysis(self, symbol, asset_type, name, title, trigger, buttons=None, priority=1):
+        """Plan and date alerts: chart with analysis and the trigger in one message. Without chart (no data)
+        the trigger still comes as text, with the buttons."""
         try:
-            self.single_daily_analysis(plan['symbol'], plan['type'])
+            self.single_daily_analysis(symbol, asset_type, trigger=(title, trigger), buttons=buttons,
+                                       priority=priority)
         except Exception as error:
-            func.pushover(f"Daily analysis for {plan['name']} failed: {error}")
+            func.log_print(f"Analysis for {name} failed: {error}", 'WARN')
+            func.pushover(f"<b>{html.escape(name)} — {title}</b>\n{trigger}\n\n"
+                          f"<i>No chart: {html.escape(str(error))}</i>", priority=priority, html_format=True,
+                          buttons=buttons)
+
+    @staticmethod
+    def _trade_buttons(plan, *actions):
+        """Buttons below a plan alert: record the trade for this asset directly (no asset choice)."""
+        labels = {'buy': '🟢 Record buy', 'sell': '🔴 Record sell', 'sellall': 'Sell all'}
+        return [[(labels[action], f"rec|{action}|{plan['type']}|{plan['symbol']}") for action in actions]]
 
     def earnings_reminders(self):
         """Stocks in the alarm analysis (1 in assets.ini): reminder one day before the quarterly results
@@ -923,13 +1065,9 @@ class CryptoStockManager:
             if date != tomorrow or key in self.events_done or (symbol.lower(), date) in planned:
                 continue
             self.events_done.add(key)
-            func.pushover(f"<b>Quarterly results tomorrow: {html.escape(name)}</b>\n"
-                          f"{date.strftime('%A, %d/%m/%Y')} – prices often move strongly on results days.\n"
-                          f"Daily analysis follows.", priority=1, html_format=True)
-            try:
-                self.single_daily_analysis(symbol, asset_type)
-            except Exception as error:
-                func.pushover(f"Daily analysis for {name} failed: {error}")
+            trigger = (f"📅 <b>Quarterly results tomorrow</b>: {date.strftime('%A, %d/%m/%Y')} – "
+                       f"prices often move strongly on results days.")
+            self._alert_with_analysis(symbol, asset_type, name, '📅 Quarterly results tomorrow', trigger)
 
     def startup_message(self):
         """Short start message: version, assets in the alarm analysis, next analysis."""
@@ -1010,6 +1148,10 @@ class CryptoStockManager:
             self.send_status()
         elif action == 'restart_main':
             return True
+        elif action == 'update':
+            return self.update_casa(command['version'])
+        elif action == 'check_update':
+            self.check_for_update(manual=True)
         else:
             raise ValueError(f'Unknown command: {action}')
         return False
@@ -1038,6 +1180,7 @@ def run_program():
                 manager.crypto_items_hh, manager.crypto_items_hd = old_manager.crypto_items_hh, old_manager.crypto_items_hd
                 manager.stock_items_hh, manager.stock_items_hd = old_manager.stock_items_hh, old_manager.stock_items_hd
                 manager.events_done = old_manager.events_done   # no second reminder for the same day
+                manager.update_notified = old_manager.update_notified
                 # Daily results stay: summary, P&L chart and alarm journal work right after the restart
                 manager.daily_prices = old_manager.daily_prices
                 manager.df_crypto_hd, manager.df_stock_hd = old_manager.df_crypto_hd, old_manager.df_stock_hd
@@ -1051,6 +1194,7 @@ def run_program():
                                      args=(notify_q, command_q), daemon=True)
             bot_process.start()
             manager.startup_message()
+            manager.report_update()   # only after an update: "Update complete"
             schedule.clear()
             if manager.test_mode == 1:
                 manager.hundred_hour_analysis()
@@ -1073,6 +1217,7 @@ def run_program():
             # Health check every 6 hours, only in logfile.txt (not sent to Telegram)
             manager.bot_alive = bot_process.is_alive
             schedule.every(6).hours.do(manager.health_check)
+            schedule.every().day.at(UPDATE_CHECK).do(manager.check_for_update)
             while not restart:
                 if not bot_process.is_alive():
                     raise RuntimeError(f'Telegram bot has stopped (exit code {bot_process.exitcode}). '
@@ -1109,6 +1254,8 @@ def run_program():
             for queue in (notify_q, command_q):
                 queue.cancel_join_thread()
                 queue.close()
+        if manager is not None and manager.exit_for_update:
+            break   # after an update: end, the service (systemd) starts the new version
         if not restart:
             break
         # No recursive subprocess call: the old bot has already stopped.

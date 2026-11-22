@@ -9,7 +9,23 @@ Versions follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
 
 ## [Unreleased]
 
+### Added
+- `infos_for` in `config.ini` `[alertsconfig]`: `all` (default, as before) or `portfolio` – infos only for assets you hold, no infos for watched assets (alarms are not affected). Added at the start if missing; also switchable with the last button of `/smart_alert_config`, used from the next analysis on without a restart
+- Plan alerts and date reminders (events.ini, quarterly results) come as one message like the alarms: chart, score and figures, at the top the trigger (📋 Plan alert or 📅 Event tomorrow) with your note, below the AI buttons. Buttons by situation: buy zone 🟢 Record buy, target 🔴 Record sell (the asset is already chosen, the input starts at the amount), plan ended 🗑 Delete plan (when held also Record sell and Sell all)
+- `/plan_alert` shows the buttons ➕ Add plan and 🗑 Delete plan. Add plan is a guided input (asset with current price, support, max_entry, target, stop, note; prices can be skipped; summary before saving); Delete plan asks which plan. The one-line form still works
+- After an update by button, the new version sends "✅ Update complete: CaSa 0.1.12 → 0.1.13" with the link to the changes (only after an update, not after a normal start); if the old version is still running, a warning instead
+- `/update`: look for a new CaSa release on GitHub at once (e.g. right after publishing one); answers also "up to date" or "GitHub not reachable", with a new release the same message and buttons as the daily check
+- Update message: every day at 19:00 CaSa checks GitHub for a newer release and sends one message per new version with the buttons ⬆ Update now and Later. Update now (CaSa image, running as service): git fetch and checkout of the release, pip install of requirements.txt, then CaSa ends and the service starts the new version; on an error CaSa keeps running with the old version
+- CaSa image for the Raspberry Pi (`image/build_image.sh`, pi-gen): Raspberry Pi OS Lite 64-bit (Debian 13 Trixie) with the Python packages of CaSa, Samba and tmux, without CaSa itself. At the first login the wizard `casa-setup` asks for the keyboard layout, whether to set up the network drive `\\casa-pi\Python` (optional, with password; later keep, new password or remove) and the Telegram and API keys, downloads the newest CaSa release from GitHub to `~/Python` and starts CaSa as service `casa` (at boot and after an error). `casa-update` gets the newest release later
+
+### Changed
+- 13-week P&L chart: each bar is now the profit/loss of that week – realised from the sales in `transactions.csv` (FIFO) in full colour, split into one part per sale with a white line between them, without names (gains upwards, losses downwards), for the current week also the unrealised price change of the open positions in light colour (dashed), one part per open asset (gains on top of the realised gains, losses below the realised losses); values only for the realised parts; header with the realised total and below it the unrealised gains and losses of this week, e.g. (+400.00 | −700.00) €
+- The AI prompt template is now in `config.ini` as last section `[ai_prompt]` (every line indented by two spaces) instead of the file `ai_prompt.txt`. At the start CaSa moves an existing `ai_prompt.txt` there, your own text stays; the old file is kept as `ai_prompt.old.txt`
+- `install_venv.bat` installs the packages from `requirements.txt` (one list instead of two, with the version limits, e.g. python-telegram-bot below 23); `psutil` added to `requirements.txt`
+- The automatic tests (`tests/`, `pytest.ini`) are only kept locally and are no longer part of the repository; the README no longer describes them
+
 ### Fixed
+- Stocks: a day without price from Yahoo no longer fails the analysis with "Missing or invalid values in Price" (e.g. the daily analysis after a plan alert). The last day, when it was already traded, gets its current price until the closing price comes; a day without trades yet (night, before the opening) or a gap in the history is skipped; both with a line in the log
 - When the Telegram bot stops with an error, the reason is now written to logfile.txt (before only in the console); the main program names the exit code
 
 ## [0.1.12] – 2026-11-19

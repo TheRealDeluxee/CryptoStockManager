@@ -1,0 +1,29 @@
+#!/bin/bash
+# CaSa update: newest CaSa release from GitHub, Python packages, restart.
+# Your files (config.ini, assets.ini, transactions.csv, ...) stay: Git does not touch them.
+#
+#   casa-update            newest release (e.g. v0.1.13)
+#   casa-update v0.1.12    a certain version (also back to an older one)
+PROG="$HOME/Python"
+REPO="https://github.com/TheRealDeluxee/CryptoStockManager.git"
+set -e
+
+newest_release() {
+    git ls-remote --tags --refs "$REPO" 'v*' | sed 's#.*/##' | sort -V | tail -n 1
+}
+
+[ -d "$PROG/.git" ] || { echo "No CaSa in $PROG – first run: casa-setup"; exit 1; }
+cd "$PROG"
+OLD=$(git describe --tags --always 2>/dev/null)
+TARGET="${1:-$(newest_release)}"
+[ -n "$TARGET" ] || { echo "No release found on GitHub (internet?)."; exit 1; }
+if [ "$OLD" = "$TARGET" ]; then
+    echo "CaSa $OLD is up to date."
+    exit 0
+fi
+echo "CaSa $OLD -> $TARGET"
+git fetch -q --tags origin
+git checkout -q "$TARGET"
+.venv/bin/python -m pip install -q --upgrade -r requirements.txt
+sudo systemctl restart casa
+echo "Done: CaSa $TARGET is running. Changes: $PROG/CHANGELOG.md"

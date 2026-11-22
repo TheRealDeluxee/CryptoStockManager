@@ -10,12 +10,12 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 - [Features](#features)
 - [What's New](#whats-new)
 - [Quick Start](#quick-start)
+- [CaSa Image for the Raspberry Pi](#casa-image-for-the-raspberry-pi)
 - [Telegram Commands](#telegram-commands)
 - [Daily Schedule](#daily-schedule)
 - [Understanding Alerts and Charts](#understanding-alerts-and-charts)
 - [Configuration](#configuration)
 - [Project Structure](#project-structure)
-- [Tests](#tests)
 - [Known Limitations](#known-limitations)
 - [Roadmap](#roadmap)
 - [License, Disclaimer and Links](#license)
@@ -52,7 +52,7 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 - Clean Telegram messages (bold headers, aligned values)
 - Daily ranking of all assets by 1-day P&L
 - Daily P&L of your own positions (crypto and stocks together) after the summary: value, 1-day profit/loss in € and %, total profit/loss, total row
-- P&L chart of the last 13 weeks (3 months) as weekly bars: total profit/loss of all positions at the end of each week (realized + unrealized, not the portfolio value)
+- P&L chart of the last 13 weeks as weekly bars: the realised profit/loss of your sales in each week (from `transactions.csv`, FIFO) in full colour, one part per sale (white line between them; gains upwards, losses downwards); for the current week also the unrealised price change of your open positions in light colour, one part per open asset (gains upwards, losses downwards). Values only for the realised parts. At the top the realised total of the 13 weeks, below it in brackets the unrealised gains and losses of this week, e.g. (+400.00 | −700.00) €
 
 ![Example summary](docs/example_summary.png)
 
@@ -85,7 +85,7 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 - Second backtest with 54 assets: results per alarm in the README; chart patterns only on clear breakouts
 - Daily P&L table and 13-week P&L chart, alarm journal (`/journal`) with the hit rate on new data
 - Bot commands with symbol or name, transactions as table images, AI prompt with backtest findings
-- Faster analysis, fewer packages, automatic tests (`python -m pytest`)
+- Faster analysis, fewer packages
 
 **Version 0.1.10**
 
@@ -156,6 +156,100 @@ After the start, the bot sends the CaSa logo with a short message: the version, 
 
 **Tested on**: RockPi3 with Armbian OS and Windows 11.
 
+**Easiest on a Raspberry Pi:** the ready [CaSa image](#casa-image-for-the-raspberry-pi) – no Python installation, a wizard asks for the keys.
+
+## CaSa Image for the Raspberry Pi
+
+The easiest way to run CaSa: a ready **CaSa image** – Raspberry Pi OS Lite 64-bit (Debian 13 Trixie, without desktop) with the Python packages of CaSa, Samba and tmux already installed. Write it with the Raspberry Pi Imager, start the Pi, log in once: a wizard asks for the keyboard layout, whether you want the network drive (optional) and your keys, then downloads the **newest CaSa release from GitHub**. From then on CaSa starts by itself, also after a power cut.
+
+CaSa itself is not in the image: it always comes from GitHub, so the same image works for every CaSa version.
+
+You need: a Raspberry Pi 4 or 5, a microSD card (16 GB or more), a power supply, network (LAN or Wi-Fi) and a PC with an SD card reader.
+
+### Hardware
+
+| | Minimum | Recommended |
+|---|---|---|
+| Raspberry Pi | Pi 4, 2 GB | Pi 5, 8 GB (room for an own AI model) |
+| Storage | microSD 32 GB, A2 | NVMe SSD (M.2 HAT) |
+| Extras | official power supply | official 27 W power supply, Active Cooler |
+
+64-bit only (Pi 3, 4, 5, Zero 2 W); the Zero 2 W (512 MB) is too small. An AI model trained on the PC runs on the Pi 5 without an AI accelerator.
+
+### Step 1: Write the image
+
+1. Install and start the **Raspberry Pi Imager** on your PC: [raspberrypi.com/software](https://www.raspberrypi.com/software/)
+2. **Device**: your Raspberry Pi (4 or 5)
+3. **Operating system**: scroll down to **Use custom** and choose `casa.img.xz` (see [Build the image](#build-the-image))
+4. **Storage**: your SD card
+5. **Next** → **Edit settings**:
+   - Tab *General*: user name **`casa-user`** and a password (note it down); Wi-Fi name and password (not needed with a LAN cable). Hostname (`casa-pi`), time zone (Europe/Berlin) and keyboard (German) are already set in the image
+   - Tab *Services*: **Enable SSH** → *Use password authentication*
+6. **Save** → **Yes** → **Yes**: the card is written (all data on it is deleted)
+7. Put the card into the Pi, connect power (and LAN), wait 2–3 minutes
+
+Without the settings in step 5 the Pi asks on its own screen at the first start for the keyboard, a user name and a password (screen and keyboard needed).
+
+### Step 2: Log in once – the wizard starts by itself
+
+On the PC in **PowerShell** (or with screen and keyboard directly on the Pi):
+
+```powershell
+ssh casa-user@casa-pi
+```
+
+After the password the **CaSa setup wizard** starts by itself (keys: arrow keys and Tab, Enter to confirm):
+
+| Window | What you do |
+|---|---|
+| Welcome | **Start** |
+| Keyboard (1/4) | Your keyboard layout, e.g. **de** German (for a keyboard connected to the Pi) |
+| Network drive (2/4) | Optional: **Set up** the drive `\\casa-pi\Python` (then a password, twice) or **No drive** – then you edit your files on the Pi (e.g. `nano ~/Python/assets.ini`). Later again with `casa-setup`: keep, new password or remove |
+| Telegram (3/4) | Paste the bot token (from [@BotFather](https://t.me/BotFather), right-click in PowerShell) – it is checked with Telegram. Then send your bot any message: the chat id is found automatically |
+| API keys (4/4) | CoinGecko and Claude key (both optional, leave empty for none) and the Claude model |
+| Summary | **Apply** – downloads the newest CaSa from GitHub (internet needed) and updates the Python packages (1–3 minutes) |
+| Done | CaSa runs, with its version; the address of the network drive |
+
+Your bot sends "CaSa started" within a minute. Keys and passwords appear neither on the screen nor in a log.
+
+### Step 3: Map the network drive in Windows (if set up)
+
+1. Explorer → **This PC** → **Map network drive**
+2. Folder: `\\casa-pi\Python` (or with the IP of the Pi: `\\192.168.x.x\Python`)
+3. Tick **Connect using different credentials** → **Finish**
+4. User `casa-user`, the password from the wizard (step 2/4), tick **Remember my credentials**
+
+The drive shows your CaSa folder (`/home/casa-user/Python` on the Pi): `config.ini`, `assets.ini`, `transactions.csv`, `logfile.txt`, `plots` …
+
+### Step 4: Your assets
+
+Open `assets.ini` on the drive (an example with Bitcoin, Ethereum and Rheinmetall is there), enter your assets (see [assets.ini](#assetsini)), save and send `/restart` to the bot. Moving from an earlier installation: copy your `config.ini`, `assets.ini`, `transactions.csv`, `events.ini`, `planalert.ini` and `alarm_journal.csv` onto the drive and send `/restart` – stop CaSa on the old device first (only one CaSa per Telegram bot).
+
+### Daily use on the Pi
+
+| What | Command (after `ssh casa-user@casa-pi`) |
+|---|---|
+| Status | `systemctl status casa` |
+| Log live | `tail -f ~/Python/logfile.txt` (end with Ctrl+C) – or `logfile.txt` on the drive |
+| Stop / start / restart | `sudo systemctl stop casa` / `start casa` / `restart casa` – or `/restart` in Telegram |
+| Update to the newest CaSa release | `/update` in Telegram, or the button **⬆ Update now** of the daily message (see below), or `casa-update` on the Pi (a certain version, also back: `casa-update v0.1.12`) |
+| Keyboard, drive password, keys | `casa-setup` |
+| Run by hand in tmux (as before) | `sudo systemctl stop casa`, then `tmux`, `cd ~/Python`, `.venv/bin/python main.py` |
+
+**Updates:** `/update` in Telegram looks for a new release at once (e.g. right after you published one) and answers in any case – "up to date" or the message below. In addition, every day at 19:00 CaSa checks GitHub by itself. When there is a newer release, the bot sends one message "New CaSa version …" with a link to the changes and the buttons **⬆ Update now** and **Later**. *Update now* gets the release from GitHub, updates the Python packages and restarts CaSa (about 1 minute); your files stay. After the restart the bot confirms with "✅ Update complete: CaSa 0.1.12 → 0.1.13". If the update fails, CaSa keeps running with the old version and says why. The button needs CaSa from the image (Git copy, running as service); elsewhere the message only shows how to update.
+
+CaSa runs as the service `casa`: it starts at every boot and again 30 seconds after an error. `casa-update` gets the newest release from GitHub, updates the Python packages and restarts CaSa; your files (`config.ini`, `assets.ini`, `transactions.csv` …) stay.
+
+### Build the image
+
+The image is built with **pi-gen**, the official tool of Raspberry Pi. It runs in Docker Desktop on the PC (only as build tool – there is no Docker in the image):
+
+```bash
+bash image/build_image.sh
+```
+
+(Windows: in Git Bash, in the CaSa folder.) It takes about 1–2 hours and about 15 GB of free disk space. Result: `image/deploy/<date>-casa.img.xz`. Neither CaSa itself nor private files (`config.ini`, `transactions.csv` …) go into the image – only the system, the Python packages of `requirements.txt` and the wizard. A new image is only needed for changes of the system, not for a new CaSa version. Settings (hostname, user, time zone, keyboard): `image/config`; what is installed: `image/stage-casa`; the wizard and the update: `image/stage-casa/00-casa/files/casa-setup` and `casa-update`. The Pi downloads what is **released** on GitHub (newest tag such as `v0.1.12`). Afterwards `docker volume rm casa-pigen` frees about 10 GB.
+
 ## Telegram Commands
 
 | Command | Function |
@@ -168,11 +262,12 @@ After the start, the bot sends the CaSa logo with a short message: the version, 
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | **Alarms and Dates** | |
 | `/smart_alert` | Switch assets on/off for the alarm analysis (buttons or `/smart_alert <symbol or name> <on\|off>`); the old `/alarm` still works |
-| `/smart_alert_config` | Alarm, info or off per signal, separately for stocks and crypto (buttons); saved in `config.ini` `[alerts]` |
+| `/smart_alert_config` | Alarm, info or off per signal, separately for stocks and crypto (buttons); saved in `config.ini` `[alerts]`; the last button switches infos for all assets or only for the assets you hold (`infos_for`) |
 | `/event` | List upcoming dates with a 🗑 button to delete each one (with confirmation), or add one: `/event <symbol or name> <DD/MM/YYYY> <text>` |
-| `/plan_alert` | List trading plans with status and a 🗑 button to delete each one (with confirmation), or save one: `/plan_alert <symbol or name> <support> <max_entry %> <target> <stop> <note>`, `-` for a value you do not use (e.g. `/plan_alert TSMC 312.15 2 358.93 312.15 1/4 after a rebound`). A new plan replaces the old one of the same asset. The old `/price_alert` still works |
+| `/plan_alert` | Your trading plans with status and the buttons **➕ Add plan** and **🗑 Delete plan**. Add plan guides you step by step: asset (with its current price), support, how many % above it you still buy (0/2/3/5 % or a number), target, stop, note – each price can be skipped – then a summary to save. Delete plan asks which plan, then for confirmation. In one line still possible: `/plan_alert <symbol or name> <support> <max_entry %> <target> <stop> <note>` (`-` for a value you do not use). A new plan replaces the old one of the same asset. The old `/price_alert` still works |
 | **Portfolio** | |
 | `/portfolio` | Daily P&L table and 13-week P&L chart now (otherwise with the evening summary) |
+| `/update` | Look for a new CaSa release on GitHub now (otherwise daily at 19:00); with the CaSa image the answer has the button **⬆ Update now** |
 | `/record` | Record a transaction: buttons **🟢 Buy**, **🔴 Sell** and **Sell all**. Buy and sell go step by step: choose the asset with a button (sell: only assets you hold), then amount, quantity and date (today, yesterday or other), confirm; afterwards ↩ Undo. Sell all records the full position at the current price (confirmation required). In one line: `/record buy <symbol or name> <amount €> <qty> <DD/MM/YYYY>`, `/record sell <symbol or name> <amount €> <qty>` (today), `/record sellall <symbol or name> [amount €]`. The old `/buy`, `/sell` and `/sellall` still work |
 | `/history` | Transactions of one asset as a table (newest first); asset via button or `/history <symbol or name>` |
 | `/transactions` | All transactions as a table like the daily summary (newest first, 40 per image) |
@@ -276,6 +371,7 @@ seven_day_price_change = 10     # threshold for Positive-5 / Negative-5 (%), 10 
 previous_alarm_change = 3       # minimum change before the same alarm is sent again
 test_mode = 0                   # 0 = scheduled analyses, 1 = run all analyses once at start
 total_loss_limit = -5           # loss limit alarm: total P&L of an own position in % (e.g. -5 = alarm when it falls below -5 %)
+infos_for = all                 # infos (not alarms) for: all = every asset in the analysis, portfolio = only assets you hold (fewer messages)
 
 [coingecko]
 # optional: free demo key from coingecko.com/en/developers/dashboard (empty = free public access)
@@ -310,6 +406,8 @@ model = claude-opus-5-5
 ```
 
 **Section names:** `[alertsconfig]` holds the thresholds (it was called `[alarm]` up to 0.1.10 and is renamed automatically at the start; a missing `total_loss_limit` is added with -5). `one_day_price_change` and `one_day_profit_limit` from older versions are no longer used and can be deleted.
+
+**Fewer infos:** `infos_for = portfolio` sends infos (ℹ️) only for assets you hold; for watched assets ("Watched asset – not in your portfolio") only the alarms come. `infos_for = all` (default) sends infos for every asset in the analysis. CaSa adds the line at the start if it is missing. Also switchable in Telegram: the last button of `/smart_alert_config` (ℹ️ Infos for: all assets / only assets you hold), used from the next analysis on.
 
 **Alarms and infos:** the `[alerts]` section is required. Each line is `name = <stocks>; <crypto>`, each one of `alarm`, `info` or `off`; the comment behind it says what the signal means and how often the price moved in the expected direction within 20 days in the backtest, for stocks and crypto, compared with an average day ("normal"). If the section or a line is missing, CaSa adds it at the start with the defaults; lines in the earlier format (one value: all, stock, crypto, off) are converted without changing their effect. `/smart_alert_config` in Telegram shows two buttons per signal (📈 stocks, 🪙 crypto); each tap switches alarm → info → off and rewrites only that line, with its comment. The change applies from the next analysis on, without `/restart`.
 
@@ -388,7 +486,7 @@ status    = waiting
 | Price at or above the target | every hour | – | 💰 Take partial profits |
 | Daily close below the stop | with the daily closes | ❌ Setup cancelled | 🔴 Exit: sell, do not average down |
 
-Each message comes once and again only after the price has left the zone, at most once per day and plan (a price moving around the mark does not send a message every hour); it includes the daily analysis. At the stop the plan ends; it stays in the file and in `/plan_alert` until you delete it. Stocks are checked Monday to Friday, 08:00–22:00. The file is created with explanations by the first `/plan_alert`.
+Each message comes once and again only after the price has left the zone, at most once per day and plan (a price moving around the mark does not send a message every hour). Like an alarm it is one message with chart, score and figures; at the top "📋 Plan alert" with the plan numbers and your note. Buttons: buy zone **🟢 Record buy**, target **🔴 Record sell** (the asset is already chosen, the input starts at the amount), plan ended **🗑 Delete plan** (when you hold the asset also Record sell and Sell all). Date reminders from `events.ini` and the quarterly results come the same way with "📅 Event tomorrow". At the stop the plan ends; it stays in the file and in `/plan_alert` until you delete it. Stocks are checked Monday to Friday, 08:00–22:00. The file is created with explanations by the first `/plan_alert`.
 
 **From valuealert.ini (up to 0.1.11):** at the first start CaSa converts the price alerts into plans – `below` becomes `support` (with `max_entry = 0`, so it triggers as before), `above` becomes `target`, notes are kept. The old file is kept as `valuealert.old.ini`. Converted plans have no stop yet: add it in the file or save the plan again with `/plan_alert`.
 
@@ -402,9 +500,20 @@ crypto;bitcoin;Bitcoin;buy;500.0;0.01;01/01/2024
 stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
 ```
 
-### ai_prompt.txt
+### AI prompt (config.ini `[ai_prompt]`)
 
-Template for the `/ai_prompt` prompt (also the data for `/ai_api_decision3s` and `/ai_api_plan`, which add their own answer format at the end). It is created automatically on first use and can be edited freely. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program. Since 0.1.11 also `{signals}` (alarms and infos the analysis would send today for this asset) and `{evidence}` (the backtest findings for stocks or crypto, e.g. that stocks recovered slightly after strong sell-offs while crypto tended to keep falling). The leading market is chosen by the company's home country (Nvidia on Xetra: S&P 500), not by the exchange. An unchanged template from an earlier version is replaced by the current one automatically; your own changes are never overwritten.
+Template for the `/ai_prompt` prompt (also the data for `/ai_api_decision3s` and `/ai_api_plan`, which add their own answer format at the end). It is the last section of `config.ini`, added automatically at the start, and can be edited freely:
+
+```ini
+[ai_prompt]
+template =
+  Assess {name} ({symbol}, {type}) for a three-month horizon ...
+
+  A. My program's data (daily values, {date})
+  ...
+```
+
+Every line of the text starts with two spaces; empty lines are allowed. Lines starting with `#` or `;` are treated as comments. Up to 0.1.12 the template was the file `ai_prompt.txt`: at the start CaSa moves its text into `config.ini` (your own changes stay) and keeps the old file as `ai_prompt.old.txt`. Placeholders in curly brackets such as `{name}`, `{price}`, `{support}`, `{bottom}` or `{market}` are filled in by the program. Since 0.1.11 also `{signals}` (alarms and infos the analysis would send today for this asset) and `{evidence}` (the backtest findings for stocks or crypto, e.g. that stocks recovered slightly after strong sell-offs while crypto tended to keep falling). The leading market is chosen by the company's home country (Nvidia on Xetra: S&P 500), not by the exchange. An unchanged template from an earlier version is replaced by the current one automatically; your own changes are never overwritten.
 
 ### alarm_journal.csv (created automatically)
 
@@ -442,30 +551,8 @@ Useful searches, e.g. on a Raspberry Pi: `grep -a "CaSa 0" logfile.txt | tail` (
 | `func.py` | Data retrieval, indicators, support/resistance, bottom/top formation, market phase, alarms, charts, summary image |
 | `telegram_bot.py` | Telegram bot, runs as a separate process: sends messages, forwards commands to `main.py` |
 | `install_venv.bat` | Installation on Windows |
+| `image/` | Building the CaSa image for the Raspberry Pi (pi-gen) |
 | `requirements.txt` | Python packages |
-| `tests/` | Automatic function tests (pytest) |
-
-## Tests
-
-Automatic tests check the most important functions after every change, without internet and without touching your own files (each test runs in an empty temporary folder with sample data).
-
-```
-python -m pip install pytest
-python -m pytest
-```
-
-Run the second line in the CaSa folder. All tests should end with `passed`; a `FAILED` line names the function that no longer works as expected.
-
-| File | Checks |
-|---|---|
-| `tests/test_files.py` | `assets.ini`, `transactions.csv` (FIFO), `events.ini`, symbol or name lookup, number and price input |
-| `tests/test_ai_api.py` | `/ai_api_decision3s` and `/ai_api_plan` with a fake Claude answer: no key, plan block, save/discard button |
-| `tests/test_claude.py` | Claude API function: no key, request, web search, errors, key never in the log |
-| `tests/test_plans.py` | `planalert.ini`: plans, conversion from `valuealert.ini`, buy zone/target/stop messages (held or not), `/plan_alert` |
-| `tests/test_analysis.py` | Indicators, score 1–10, traffic lights, alarm rules (Positive-5, SMA200 filter, sell alarms only for your portfolio), daily P&L values |
-| `tests/test_bot.py` | Bot commands `/record` (buy, sell), `/check`, `/ai_prompt`, `/smart_alert`, `/event`, `/history`, `/transactions` |
-| `tests/test_output.py` | Summary, P&L and transaction images, Telegram length, `logfile.txt` |
-| `tests/test_filter.py` | Duplicate filter for alarms |
 
 ## Known Limitations
 
@@ -526,7 +613,6 @@ Run the second line in the CaSa folder. All tests should end with `passed`; a `F
 ### Reliability
 - [ ] **Keep known alarms after a full restart**: They are currently lost, so the same alarm can be sent twice.
 - [x] **Health check**: A status line in the log every 6 hours, with a warning when an analysis is overdue or failing.
-- [x] **Automated tests** for alarms and charts, so changes don't break existing behaviour.
 
 ### Not planned
 - **Opening/closing volatility**: Needs minute data, while CaSa works with daily data.

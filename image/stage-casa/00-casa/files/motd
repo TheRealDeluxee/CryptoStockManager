@@ -1,0 +1,8 @@
+
+  CaSa – Crypto and Stock Alert
+  Program and your files:  ~/Python   (network drive \\casa-pi\Python, if set up)
+  Setup, new keys:         casa-setup
+  Update to the newest:    casa-update
+  Status / log:            systemctl status casa    tail -f ~/Python/logfile.txt
+  Stop / start / restart:  sudo systemctl stop casa | start casa | restart casa
+

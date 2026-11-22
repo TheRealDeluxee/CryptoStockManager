@@ -1,5 +1,7 @@
 @echo off
 setlocal
+rem Run in the CaSa folder, also when started from somewhere else
+cd /d "%~dp0"
 
 echo Checking Python installation...
 python --version >nul 2>&1
@@ -46,17 +48,8 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo Installing/Updating packages inside venv...
-python -m pip install --upgrade ^
-    pandas ^
-    numpy ^
-    requests ^
-    matplotlib ^
-    yfinance ^
-    schedule ^
-    psutil ^
-    anthropic ^
-    python-telegram-bot
+echo Installing/Updating packages from requirements.txt inside venv...
+python -m pip install --upgrade -r requirements.txt
 if %errorlevel% neq 0 (
     echo Package installation failed.
     pause

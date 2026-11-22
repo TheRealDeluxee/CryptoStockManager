@@ -1,0 +1,17 @@
+# pi-gen settings for the CaSa image: Raspberry Pi OS Lite 64-bit (Debian 13 Trixie, without desktop) + CaSa
+IMG_NAME=casa
+PI_GEN_RELEASE="CaSa image"
+RELEASE=trixie
+DEPLOY_COMPRESSION=xz
+COMPRESSION_LEVEL=6
+TARGET_HOSTNAME=casa-pi
+LOCALE_DEFAULT=en_GB.UTF-8
+KEYBOARD_KEYMAP=de
+KEYBOARD_LAYOUT="German"
+TIMEZONE_DEFAULT=Europe/Berlin
+WPA_COUNTRY=DE
+# User casa-user without a default password: the password comes from the Raspberry Pi Imager
+# or from the first-boot dialog on the screen (security: no image with a known password)
+FIRST_USER_NAME=casa-user
+ENABLE_SSH=1
+STAGE_LIST="stage0 stage1 stage2 /casa-image/stage-casa"

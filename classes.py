@@ -796,6 +796,77 @@ def pnl_history(rows, prices, days=100, today=None):
     return total.dropna(), missing
 
 
+def realized_trades(rows):
+    """Realized profit/loss of every sale from transactions.csv (FIFO: the oldest buys are sold first, as
+    in the position overview). Returns a list of dicts: date, type, symbol, name, amount, cost, profit."""
+    trades = [row for row in rows if row['action'] in ('buy', 'sell')]
+    # by date; on the same date the order in the file
+    trades = sorted(trades, key=lambda row: datetime.strptime(row['date'], '%d/%m/%Y'))
+    lots, sales = {}, []
+    for row in trades:
+        key = (row['type'], row['symbol'].lower())
+        amount, qty = valid_numbers(row['amount'], row['qty'])
+        queue = lots.setdefault(key, [])
+        if row['action'] == 'buy':
+            queue.append([qty, amount / qty])   # quantity and cost per unit
+            continue
+        remaining, cost = qty, 0.0
+        while remaining > 1e-12 and queue:
+            used = min(remaining, queue[0][0])
+            cost += used * queue[0][1]
+            queue[0][0] -= used
+            remaining -= used
+            if queue[0][0] <= 1e-12:
+                queue.pop(0)
+        sold = qty - remaining   # a sale larger than the holdings counts only for the held part
+        if sold <= 1e-12:
+            continue
+        proceeds = amount * sold / qty
+        sales.append({'date': pd.Timestamp(datetime.strptime(row['date'], '%d/%m/%Y')), 'type': key[0],
+                      'symbol': key[1], 'name': row.get('name') or key[1], 'amount': proceeds, 'cost': cost,
+                      'profit': proceeds - cost})
+    return sales
+
+
+def weekly_pnl(rows, prices, weeks=13, today=None):
+    """Profit/loss per week (Monday to Sunday) for the last `weeks` weeks, the current week up to today:
+    realized = sales of that week (FIFO, from transactions.csv); for the current week also unrealized =
+    price change of the open positions since the start of the week (incl. this week's buys).
+    Returns (DataFrame with index = week start and columns realized, unrealized, list of held assets
+    without prices). frame.attrs['sales'] = {week start: [profit of each sale, ...]} and
+    frame.attrs['open'] = [unrealized change of each asset this week, ...] for the bar parts
+    (one part per sale or open asset, without names)."""
+    today = pd.Timestamp(today or datetime.now()).normalize()
+    this_monday = today - pd.Timedelta(days=today.weekday())
+    starts = pd.date_range(end=this_monday, periods=weeks, freq='7D')
+    frame = pd.DataFrame({'realized': 0.0, 'unrealized': 0.0}, index=starts)
+    sales = {}   # week -> realized profit of each sale
+    for sale in realized_trades(rows):
+        week = sale['date'] - pd.Timedelta(days=sale['date'].weekday())
+        if week in frame.index:
+            frame.loc[week, 'realized'] += sale['profit']
+            sales.setdefault(week, []).append(sale['profit'])
+    # current week, per asset: change of its P&L since last Sunday minus its realized part = unrealized change
+    sunday = this_monday - pd.Timedelta(days=1)
+    days = (today - this_monday).days + 2
+    open_changes, missing = [], []
+    trades = [row for row in rows if row['action'] in ('buy', 'sell')]
+    for key in sorted({(row['type'], row['symbol'].lower()) for row in trades}):
+        own = [row for row in trades if (row['type'], row['symbol'].lower()) == key]
+        total, lacking = pnl_history(own, prices, days=days, today=today)
+        missing += lacking
+        if total.empty or sunday not in total.index:
+            continue
+        realized_now = sum(sale['profit'] for sale in realized_trades(own) if sale['date'] >= this_monday)
+        change = total.iloc[-1] - total[sunday] - realized_now
+        if abs(change) > 0.005:
+            open_changes.append(change)
+    frame.loc[this_monday, 'unrealized'] = sum(open_changes)
+    frame.attrs['open'] = sorted(open_changes, reverse=True)
+    frame.attrs['sales'] = {week: sorted(profits, reverse=True) for week, profits in sales.items()}
+    return frame, missing
+
+
 # ── Alarm and info switches (config.ini [alerts]) ──────────────────────────
 # Alarms: signals with an advantage in the backtest ("Potential buy/sell", recorded in the alarm journal).
 # Infos: notable events without a proven forecast ("Info", for your overview).
@@ -908,10 +979,80 @@ ANTHROPIC_SECTION = ['[anthropic]',
                      'model = claude-opus-5-5']
 
 
+AI_PROMPT_HEADER = ['[ai_prompt]',
+                    '# Template for /ai_prompt and the AI buttons. CaSa fills in the placeholders in {curly brackets}.',
+                    '# Every line of the text starts with two spaces, empty lines are allowed.',
+                    '# Lines starting with # or ; are comments, also inside the text.',
+                    'template =']
+
+
+def read_ai_prompt(path='config.ini'):
+    """AI prompt template from config.ini [ai_prompt] template, None if there is none."""
+    config = configparser.ConfigParser(interpolation=None)   # no inline comments: ";" belongs to the text
+    config.read(path, encoding='utf-8-sig')
+    text = config.get('ai_prompt', 'template', fallback='').strip()
+    return text or None
+
+
+def write_ai_prompt(text, path='config.ini'):
+    """Write the template as section [ai_prompt] at the end of config.ini (replaces an existing one).
+    Line by line: the other sections, the keys and all comments stay as they are."""
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip().lower() == '[ai_prompt]'), None)
+    if start is not None:
+        # end: the next section header at the start of a line (the text lines are indented)
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('[')), len(lines))
+        del lines[start:end]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines += [''] + AI_PROMPT_HEADER + [f'  {line}' if line.strip() else '' for line in text.strip().splitlines()]
+    _write_lines(path, lines)
+
+
+INFOS_FOR_LINE = ('infos_for = all                 # infos (not alarms) for: all = every asset in the analysis, '
+                  'portfolio = only assets you hold (fewer messages)')
+INFOS_FOR = ('all', 'portfolio')
+
+
+def read_infos_for(path='config.ini'):
+    """infos_for from config.ini [alertsconfig]: 'all' or 'portfolio' (missing or unknown: 'all')."""
+    config = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=('#', ';'))
+    config.read(path, encoding='utf-8-sig')
+    value = config.get('alertsconfig', 'infos_for', fallback='all').strip().lower()
+    return value if value in INFOS_FOR else 'all'
+
+
+def set_infos_for(value, path='config.ini'):
+    """Change infos_for in config.ini [alertsconfig] (for /smart_alert_config). Only this line is rewritten,
+    with its comment; a missing line is added."""
+    if value not in INFOS_FOR:
+        raise ValueError(f"infos_for must be all or portfolio, not '{value}'.")
+    with open(path, encoding='utf-8-sig') as file:
+        lines = file.read().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip().lower() == '[alertsconfig]'), None)
+    if start is None:
+        raise ValueError(f"{path}: section [alertsconfig] is missing.")
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith('[')), len(lines))
+    comment = INFOS_FOR_LINE.index('#')
+    new = f'infos_for = {value}'.ljust(comment) + INFOS_FOR_LINE[comment:]   # comment stays in its column
+    for index in range(start + 1, end):
+        if '=' in lines[index] and not lines[index].lstrip().startswith(('#', ';')) \
+                and lines[index].split('=', 1)[0].strip().lower() == 'infos_for':
+            lines[index] = new
+            break
+    else:
+        insert = end
+        while insert > start + 1 and not lines[insert - 1].strip():
+            insert -= 1
+        lines.insert(insert, new)
+    _write_lines(path, lines)
+
+
 def update_config(path='config.ini'):
     """Bring an older config.ini up to date (at the start of CaSa), line by line so that the token, the key
     and all comments stay: [alarm] is renamed to [alertsconfig], total_loss_limit is added, [alerts] is
-    created or completed, an empty [anthropic] section is added. Returns a list of what was changed."""
+    created or completed, infos_for and an empty [anthropic] section are added. Returns a list of what was changed."""
     with open(path, encoding='utf-8-sig') as file:
         lines = file.read().splitlines()
     changes = []
@@ -936,6 +1077,13 @@ def update_config(path='config.ini'):
             insert -= 1
         lines.insert(insert, LOSS_LIMIT_LINE)
         changes.append('total_loss_limit = -5 added to [alertsconfig]')
+        end += 1
+    if 'infos_for' not in keys:
+        insert = end
+        while insert > start + 1 and not lines[insert - 1].strip():
+            insert -= 1
+        lines.insert(insert, INFOS_FOR_LINE)
+        changes.append('infos_for = all added to [alertsconfig]')
     if 'anthropic' not in headers:
         while lines and not lines[-1].strip():
             lines.pop()

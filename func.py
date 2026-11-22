@@ -30,6 +30,7 @@ seven_day_price_change = 0.0
 output_dir = 'plots'
 previous_alarm_change = 0.0
 total_loss_limit = -5.0   # loss limit alarm: total P&L of a position in % (config.ini [alertsconfig])
+infos_for = 'all'   # infos for: all = every asset in the analysis, portfolio = only assets you hold
 coingecko_api_key = ''   # optional, from config.ini [coingecko] api_key
 anthropic_api_key = ''   # optional, from config.ini [anthropic] api_key (empty = Claude API not used)
 anthropic_model = 'claude-opus-5-5'   # from config.ini [anthropic] model
@@ -84,7 +85,21 @@ def get_stock(symbol, period):
     if df.empty:
         # Optional: return None or raise an exception
         return None
-    
+
+    # Yahoo sometimes delivers the last day without price. If that day was already traded, its current
+    # price stands in until the closing price comes; otherwise (night, before the opening) the day is skipped.
+    df = _fill_today(stock, symbol, df)
+    # Days without price are skipped instead of failing the whole analysis with
+    # "Missing or invalid values in Price".
+    missing = df['Close'].isna() | (df['Close'] <= 0)
+    if missing.any():
+        days = ', '.join(pd.to_datetime(df.index[missing]).strftime('%d/%m/%Y'))
+        log_print(f"Yahoo {symbol}: {int(missing.sum())} day(s) without price skipped ({days})", 'WARN')
+        df = df[~missing]
+        if df.empty:
+            return None
+    df = df.assign(Volume=df['Volume'].fillna(0)) if 'Volume' in df else df
+
     if 'Date' not in df.columns:
         df['Date'] = df.index
     
@@ -102,6 +117,29 @@ def get_stock(symbol, period):
     df_dropped = df_inverted.drop(columns=[col for col in columns_to_drop if col in df_inverted.columns])
     
     return df_dropped
+
+
+def _fill_today(stock, symbol, df):
+    """Last row without closing price: when Yahoo's last trade is from that day, use its current price
+    (the closing price follows later). Otherwise the row stays empty and is skipped."""
+    if df.empty or not pd.isna(df['Close'].iloc[-1]):
+        return df
+    try:
+        info = stock.info
+        price, traded = float(info['regularMarketPrice']), int(info['regularMarketTime'])
+    except Exception:
+        return df   # no current price: the day is skipped
+    day = pd.Timestamp(df.index[-1])
+    trade = pd.Timestamp(traded, unit='s', tz='UTC')
+    trade = trade.tz_convert(day.tz) if day.tz is not None else trade.tz_localize(None)
+    if trade.date() != day.date() or not math.isfinite(price) or price <= 0:
+        return df
+    df = df.copy()
+    for column in ('Close', 'Open', 'High', 'Low', 'Adj Close'):
+        if column in df and pd.isna(df[column].iloc[-1]):
+            df.loc[df.index[-1], column] = price
+    log_print(f"Yahoo {symbol}: no closing price yet for {day:%d/%m/%Y}, current price {price:.2f} used")
+    return df
 
 
 _fx_cache = {}   # (currency, period) -> (time, daily rates): one request per currency and hour, not per stock
@@ -1409,7 +1447,8 @@ def alarm(df, symbol, watch_list, current_profit_pct, amount_older_than_one_year
         if kind == 'alarm':
             create_alarm(code, buy_sell, title, value, important)
             alarms[code]["msg"] += f"\n\n<i>{html.escape(note)}</i>"
-        elif kind == 'info':
+        elif kind == 'info' and not (watch_list and infos_for == 'portfolio'):
+            # infos_for = portfolio (config.ini [alertsconfig]): no infos for watched assets you do not hold
             create_info(code, title, value, note)
 
     # Signals for all assets with 1 in assets.ini, also watched ones you do not own yet (sell: only your own).
@@ -1786,41 +1825,106 @@ def create_pnl_image(df, output_path, title='', subtitle='', dpi=200):
     plt.close(fig)
 
 
-def create_pnl_chart(pnl, output_path, title='', dpi=200):
-    """Total profit/loss as weekly bars: one bar per week with the P&L at the end of the week
-    (the current week up to today), green above zero, red below. pnl: Series of € per day (index = date)."""
+def create_pnl_chart(weekly, output_path, title='', dpi=200):
+    """Profit/loss per week as bars: realized (sales of the week, from transactions.csv) in full colour,
+    for the current week also the unrealized price change of the open positions in light colour on top.
+    weekly: DataFrame with index = week start (Monday) and columns realized, unrealized;
+    weekly.attrs['sales'] = {week: [profit, ...]} splits each bar into one part per sale and
+    weekly.attrs['open'] = [change, ...] the light part of the current week into one part per open asset
+    (same colour, white line between the parts, no names): gains upwards, losses downwards."""
     GREEN, RED, GREY = '#1e8449', '#c0392b', '#8a8a8a'
-    weekly = pnl.resample('W-SUN').last().dropna()
-    weekly.index = [min(day, pnl.index[-1]) for day in weekly.index]   # current week: today, not next Sunday
-    values = weekly.to_numpy(float)
-    now, change = pnl.iloc[-1], pnl.iloc[-1] - pnl.iloc[0]
-    start = pnl.index[0]
+    realized = weekly['realized'].to_numpy(float)
+    unrealized = weekly['unrealized'].to_numpy(float)
+    total_realized, open_change = realized.sum(), unrealized[-1]
 
     def euro_signed(value):
-        return ('+' if value > 0 else '−' if value < 0 else '') + format_euro(abs(value))
+        return ('+' if value > 0.005 else '−' if value < -0.005 else '') + format_euro(abs(value))
 
-    fig, ax = plt.subplots(figsize=(6.4, 3.4))
+    def color(value):
+        return GREEN if value >= 0 else RED
+
+    fig, ax = plt.subplots(figsize=(6.4, 3.6))
     fig.patch.set_facecolor('white')
     ax.set_facecolor('white')
-    # header: current P&L large, change over the period below (like the broker app)
-    fig.text(0.02, 0.97, title, fontsize=9, color=GREY, fontweight='bold', va='top')
-    fig.text(0.02, 0.89, euro_signed(now), fontsize=16, color=GREEN if now >= 0 else RED, fontweight='bold', va='top')
-    fig.text(0.02, 0.77, f"{euro_signed(change)} since {start:%d/%m/%Y}", fontsize=8,
-             color=GREEN if change >= 0 else RED, va='top')
+    # header: realized in the period large; below it in brackets the unrealized gains | losses of this week
+    open_values = weekly.attrs.get('open') or ([open_change] if abs(open_change) > 0.005 else [])
+    open_up = sum(v for v in open_values if v > 0)
+    open_down = sum(v for v in open_values if v < 0)
 
-    x = np.arange(len(values))
-    colors = [GREEN if value >= 0 else RED for value in values]
-    ax.bar(x, values, width=0.7, color=colors, alpha=0.85, zorder=3)
+    fig.text(0.02, 0.97, title, fontsize=9, color=GREY, fontweight='bold', va='top')
+    fig.text(0.02, 0.90, euro_signed(total_realized), fontsize=16, color=color(total_realized),
+             fontweight='bold', va='top')
+    bracket = fig.text(0.02, 0.78, "(", fontsize=9, color=GREY, va='top')
+    parts = [(f"+{open_up:,.2f}", GREEN), (" | ", GREY), (f"−{abs(open_down):,.2f}", RED),
+             (") € unrealised this week", GREY)]
+    renderer = fig.canvas.get_renderer()
+    left = bracket.get_window_extent(renderer).x1
+    for text, colour in parts:   # coloured pieces one after the other
+        piece = fig.text(left / fig.bbox.width, 0.78, text, fontsize=9, color=colour, va='top',
+                         alpha=0.6 if colour != GREY else 1)
+        left = piece.get_window_extent(renderer).x1
+    # right side of the header: period and legend, so that the chart itself gets the full height
+    fig.text(0.98, 0.97, f"realised from sales since {weekly.index[0]:%d/%m/%Y}", fontsize=7.5, color=GREY,
+             va='top', ha='right')
+
+    x = np.arange(len(weekly))
+    sales_by_week = weekly.attrs.get('sales', {})
+    for i, week in enumerate(weekly.index):
+        parts = sales_by_week.get(week) or ([realized[i]] if abs(realized[i]) > 0.005 else [])
+        # one part per sale: gains stacked upwards from 0, losses downwards, a white line between them
+        heights = {True: 0.0, False: 0.0}
+        for value in parts:
+            up = value >= 0
+            ax.bar(i, value, bottom=heights[up], width=0.7, color=color(value), alpha=0.9, zorder=3,
+                   edgecolor='white', linewidth=0.8)
+            heights[up] += value
+    # current week: the unrealized part in light colour, at the end of this week's gains (if it is a gain)
+    # or of this week's losses (if it is a loss), so that realized and unrealized parts never overlap
+    last = len(weekly) - 1
+    this_week = sales_by_week.get(weekly.index[last]) or ([realized[last]] if abs(realized[last]) > 0.005 else [])
+    gains_end, losses_end = sum(v for v in this_week if v > 0), sum(v for v in this_week if v < 0)
+    open_parts = weekly.attrs.get('open') or ([open_change] if abs(open_change) > 0.005 else [])
+    # one light part per open asset: unrealized gains on top of the realized gains, losses below the losses
+    ends = {True: gains_end, False: losses_end}
+    for value in open_parts:
+        up = value >= 0
+        ax.bar(last, value, bottom=ends[up], width=0.7, color=color(value), alpha=0.3, zorder=3,
+               edgecolor='white', linewidth=0.8)
+        ends[up] += value
+    open_gains_end, open_losses_end = ends[True], ends[False]
+    # dashed outline around the light parts: they are not realized yet
+    for start, end in ((gains_end, open_gains_end), (losses_end, open_losses_end)):
+        if abs(end - start) > 0.005:
+            ax.bar(last, end - start, bottom=start, width=0.7, fill=False, zorder=4,
+                   edgecolor=color(end - start), linewidth=0.8, linestyle='--', alpha=0.6)
+    bottom = gains_end if open_change >= 0 else losses_end
     ax.axhline(0, color=GREY, linewidth=0.8, zorder=4)
-    low, high = min(values.min(), 0), max(values.max(), 0)
-    pad = (high - low) * 0.15 or 1
+    tops = np.concatenate([realized, [open_gains_end, open_losses_end, bottom + open_change]])
+    low, high = min(tops.min(), 0), max(tops.max(), 0)
+    for parts in sales_by_week.values():   # stacked gains and losses can reach further than the sum
+        low = min(low, sum(value for value in parts if value < 0))
+        high = max(high, sum(value for value in parts if value > 0))
+    pad = (high - low) * 0.18 or 1
     ax.set_ylim(low - pad, high + pad)
-    # value of each week above (gain) or below (loss) its bar
-    for i, value in enumerate(values):
-        ax.text(i, value + (pad * 0.15 if value >= 0 else -pad * 0.15), f"{value:,.0f}", fontsize=5.5,
-                color=colors[i], ha='center', va='bottom' if value >= 0 else 'top')
+    ax.set_xlim(-0.6, len(weekly) - 0.4)
+    # value of each week above (gain) or below (loss) its bar; empty weeks without a label
+    for i, (week, value) in enumerate(zip(weekly.index, realized)):
+        if abs(value) > 0.005:
+            # sum of the week at the end of the gains (or losses), not inside the stacked parts
+            parts = sales_by_week.get(week) or [value]
+            end = sum(v for v in parts if v > 0) if value >= 0 else sum(v for v in parts if v < 0)
+            side_has_open = (open_gains_end != gains_end) if value >= 0 else (open_losses_end != losses_end)
+            if i == last and side_has_open:
+                # the unrealized part sits on top: the realized sum in white inside the realized part
+                ax.text(i, end / 2, f"{value:,.0f}", fontsize=5.5, color='white', fontweight='bold',
+                        ha='center', va='center', zorder=5)
+                continue
+            ax.text(i, end + (pad * 0.12 if value >= 0 else -pad * 0.12), f"{value:,.0f}", fontsize=5.5,
+                    color=color(value), ha='center', va='bottom' if value >= 0 else 'top')
+    labels = [f"{day:%d/%m}" for day in weekly.index]
+    labels[-1] = 'this wk'
     ax.set_xticks(x)
-    ax.set_xticklabels([f"{day:%d/%m}" for day in weekly.index], fontsize=6)
+    ax.set_xticklabels(labels, fontsize=6)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:,.0f} €"))
     for side in ('top', 'right', 'left'):
         ax.spines[side].set_visible(False)
@@ -1828,7 +1932,12 @@ def create_pnl_chart(pnl, output_path, title='', dpi=200):
     ax.tick_params(colors=GREY, labelsize=7, length=0)
     ax.grid(axis='y', color='#eeeeee', linewidth=0.6, zorder=0)
     ax.set_axisbelow(True)
-    fig.subplots_adjust(top=0.68, left=0.13, right=0.98, bottom=0.1)
+    handles = [mpatches.Patch(color=GREY, alpha=0.9, label='realised (sales of the week)'),
+               mpatches.Patch(facecolor=GREY, alpha=0.3, edgecolor=GREY, linestyle='--',
+                              label='unrealised (open positions, this week)')]
+    fig.legend(handles=handles, loc='upper right', bbox_to_anchor=(0.985, 0.90), ncol=1, fontsize=6.5,
+               frameon=False, handlelength=1.6, labelcolor=GREY)
+    fig.subplots_adjust(top=0.74, left=0.13, right=0.98, bottom=0.1)
     plt.savefig(output_path, dpi=dpi, facecolor='white')
     plt.close(fig)
 

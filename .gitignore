@@ -5,9 +5,6 @@
 /logfile.txt
 /logfile.old.txt
 /plots
-/new_function
-/venv
-/backup
 __pycache__/
 /test.csv
 desktop.ini
@@ -20,3 +17,14 @@ Thumbs.db
 /valuealert.old.ini
 /planalert.ini
 /alarm_journal.csv
+# automatic tests: only local, not on GitHub
+/tests/
+/pytest.ini
+/_archiv
+/ai_prompt.txt
+/ai_prompt.old.txt
+/image/deploy
+/image/build
+/image/stage-casa/00-casa/files/requirements.txt
+/image/stage-casa/00-casa/files/casa-image
+/update_done.txt
