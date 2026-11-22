@@ -23,6 +23,7 @@
 ## Indicators & charts
 - [ ] **ATR-based stop-loss suggestion**, e.g. "Stop around 142 € (2× ATR)". Adapts the stop to how much the asset usually moves.
 - [x] **Relative strength vs. index**: every stock message has a line "Market" (leading index and sector ETF today) and the figure vsIndex (5 days vs. the index, bar = position within the last 100 days); the same values go to the AI.
+- [x] **Long-term trend for the AI**: 50- and 200-week averages (5 years of weekly closes from Yahoo, one request only when an AI button is used, kept for a day) in part A of the AI prompt, with the distance of the price and the direction; stocks and the cryptos Bitcoin, Ethereum, Solana, XRP, Chainlink, NEAR. Guide and Plan read the long-term trend from them instead of searching.
 - [ ] **Market overview in the evening summary**: the main indices (DAX, EURO STOXX 50, S&P 500, Nasdaq-100, Nikkei 225, MSCI World) with 1 and 7 days, plus 1–2 theme ETFs (e.g. AI, data centres).
 - [ ] **Own benchmark per asset**: an optional field in assets.ini, e.g. `TT = Trane Technologies; stock; 1; USD; SMH`, to compare with a theme (AI chips) instead of the broad sector; European sector ETFs for European stocks.
 - [ ] **R2/S2 zones**: A second resistance and support zone, plus an alarm when the price breaks through a zone.

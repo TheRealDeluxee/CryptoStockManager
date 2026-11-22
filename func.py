@@ -733,6 +733,47 @@ def market_context(asset_type, symbol, full):
         return None
 
 
+# Cryptos with a long history at Yahoo (CoinGecko id -> Yahoo symbol): only for the weekly averages
+YAHOO_CRYPTO = {'bitcoin': 'BTC-EUR', 'ethereum': 'ETH-EUR', 'solana': 'SOL-EUR', 'ripple': 'XRP-EUR',
+                'chainlink': 'LINK-EUR', 'near': 'NEAR-USD'}
+_weekly_cache = {}   # symbol -> (time, text), kept for one day
+
+
+def weekly_averages_text(asset_type, symbol):
+    """Long-term trend for the AI: 50-week and 200-week average of the weekly closes (5 years from Yahoo, one
+    request, kept for a day), the distance of the price in % and whether the average rises over 13 weeks.
+    Stocks in the currency of their exchange; cryptos only those in YAHOO_CRYPTO. 'not available' otherwise."""
+    ticker = symbol if asset_type == 'stock' else YAHOO_CRYPTO.get(symbol.lower())
+    if not ticker:
+        return 'not available'
+    cached = _weekly_cache.get(ticker)
+    if cached and time.time() - cached[0] < 86400:
+        return cached[1]
+    try:
+        data = yf.Ticker(ticker)
+        hist = data.history(period='5y', interval='1wk', timeout=20, auto_adjust=False)
+        closes = hist['Close'].dropna()
+        currency = data.get_history_metadata().get('currency') or ''
+        if currency in ('GBp', 'GBX'):
+            closes, currency = closes / 100, 'GBP'
+        price, parts = float(closes.iloc[-1]), []
+        for weeks in (50, 200):
+            if len(closes) < weeks + 13:
+                parts.append(f"{weeks}-week average not available (history too short)")
+                continue
+            average = closes.rolling(weeks).mean()
+            now, before = float(average.iloc[-1]), float(average.iloc[-14])
+            shown = f"{now:,.2f}" if now < 10000 else f"{now:,.0f}"
+            parts.append(f"{weeks}-week average {shown} {currency} (price {(price / now - 1) * 100:+.1f} %, "
+                         f"{'rising' if now > before else 'falling'})")
+        text = ', '.join(parts)
+    except Exception as error:   # extra information: never stops the prompt
+        log_print(f"Weekly averages for {ticker} not available: {error}", 'WARN')
+        return 'not available'
+    _weekly_cache[ticker] = (time.time(), text)
+    return text
+
+
 def market_text(market, name='the stock'):
     """One line for the AI prompt: index, sector and the stock, 1 and 5 days, verdict."""
     if not market:

@@ -82,7 +82,7 @@ Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 
 ## Known Limitations
 
-- The free CoinGecko API has rate limits and no daily candles (open/high/low); crypto analysis uses closing prices only.
+- The free CoinGecko API has rate limits and no daily candles (open/high/low); crypto analysis uses closing prices only. It also gives only about one year of history: the 50- and 200-week averages for the AI come from Yahoo, so far only for Bitcoin, Ethereum, Solana, XRP, Chainlink and NEAR (other cryptos: "not available").
 - The hourly analysis is only scheduled for crypto; stocks are analysed daily.
 - `/restart` reloads the files (config, assets, dates, transactions), but not the program code. A new version: with the CaSa image `/update` installs it and restarts CaSa by itself; on Windows start `install_casa.bat` again, then CaSa with `start_casa.bat`.
 - The program remembers sent alarms and date reminders only while it is running; after a full restart (not `/restart`), an alarm or reminder of the same day can be sent again.

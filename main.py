@@ -65,11 +65,12 @@ EUR prices from {source}; compare levels only with this source.
 - Market phase {name}: {phase}
 - Market phase {market_name}: {market}
 - Market move: {market_move}
+- Long-term trend: {long_term}
 - Program score: {score}
 - Signals today: {signals}
 
 B. News and dates
-Web search (if unavailable, say so): news of the last 14 days, the long-term trend of the last 3 to 5 years, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move is in A, do not search for it, confirmed dates of the next 4 weeks; older figures only dated.
+Web search (if unavailable, say so): news of the last 14 days, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move and the long-term trend (50- and 200-week averages) are in A, do not search for them, confirmed dates of the next 4 weeks; older figures only dated.
 {research}
 
 C. Rules
@@ -80,7 +81,7 @@ C. Rules
 - {evidence}
 
 D. Output
-1. Decision in three sentences: (1) {decision}, the long-term trend of 3 to 5 years (is today a pull-back within it or a break of it?), both market phases, main reason. (2) Support/resistance in euro; bottom/top formation only if decisive. (3) Program score from A; risk and confidence (high/medium/low).
+1. Decision in three sentences: (1) {decision}, the long-term trend from the 50- and 200-week averages in A (is today a pull-back within it or a break of it?), both market phases, main reason. (2) Support/resistance in euro; bottom/top formation only if decisive. (3) Program score from A; risk and confidence (high/medium/low).
 2. Decision drivers: max. four points (technicals, news, valuation): what is proven and what it means for me.
 3. Trading plan table (scenario | observable signal | my action):
 {plan}
@@ -98,6 +99,7 @@ OLD_AI_PROMPT_HASHES = {
     'f5a04a2a6faee6424640a369d5ec237520e5912ab8f9a7422817f3e9381108ba',   # 0.1.14 test version without market/sectors
     '36c770a8e45c04fb3da2637fe05e84723c587569beb6fd109c55f627b4864bbf',   # 0.1.14 test version without market move in A
     'd76ce2738e4efd0483413d47a90109132f62f6a89c5286dbbf0b9f25a96766b5',   # 0.1.14 (without similar past events)
+    'c29f7cb2c9b2a117d91db6e86501617939d009e6ad72970b0e1d2092b6734d53',   # 0.1.14 (without weekly averages)
 }
 # Backtest findings for the AI (54 own assets, up to 14 years, 20 days after a signal vs. an average day)
 AI_EVIDENCE = {
@@ -118,10 +120,9 @@ AI_API_TASKS = {
                  "(score, support/resistance, risk/reward, distance to the averages, RSI, chart pattern): do not "
                  "repeat them; name at most one price level, the one that would change the decision.\n"
                  "You have a web search tool and must use it before answering (at least one search; never write "
-                 "that no news check was done): the news of the last 14 days, the long-term trend of the last "
-                 "3 to 5 years, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move is in A, do not search for it; none of this is in my data.\n"
+                 "that no news check was done): the news of the last 14 days, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move and the long-term trend (50- and 200-week averages) are in A, do not search for them.\n"
                  "(1) The decision (Buy or Wait without a position, Hold, Add or Reduce with one, see Position "
-                 "in A) and the long-term trend (e.g. 'long-term uptrend since 2021, today a pull-back "
+                 "in A) and the long-term trend from the 50- and 200-week averages in A (e.g. 'above the rising 200-week average: today a pull-back "
                  "within it' or 'a break of it') and, from Market move in A, whether the market moves the same way. (2) The main "
                  "reason from the news, the business or its customer industries (with date and source), or that "
                  "there is no relevant news; if there was a similar event before, how the price reacted then. (3) What would change the decision (one price level "
@@ -807,6 +808,7 @@ class CryptoStockManager:
             'task': task, 'decision': decision, 'action': action, 'plan': plan,
             'market_move': func.market_text(details.get('market'), name) if asset_type == 'stock'
             else 'see the market phase of Bitcoin',
+            'long_term': func.weekly_averages_text(asset_type, symbol),
             'tax': tax, 'source': source,
             'date': time.strftime('%d/%m/%Y %H:%M'),
             'position': position,
