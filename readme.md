@@ -7,18 +7,20 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 ## Contents
 
 - [Why CaSa?](#why-casa)
-- [Features](#features)
-- [What's New](#whats-new)
-- [Quick Start](#quick-start)
-- [CaSa Image for the Raspberry Pi](#casa-image-for-the-raspberry-pi)
-- [Telegram Commands](#telegram-commands)
-- [Daily Schedule](#daily-schedule)
-- [Understanding Alerts and Charts](#understanding-alerts-and-charts)
-- [Configuration](#configuration)
-- [Project Structure](#project-structure)
-- [Known Limitations](#known-limitations)
-- [Roadmap](#roadmap)
-- [License, Disclaimer and Links](#license)
+- [In a Nutshell](#in-a-nutshell) – what CaSa does, setup in four steps, everyday use
+- [Details for Experts](#details-for-experts) – for the curious and experts:
+  - [Features](#features)
+  - [What's New](#whats-new)
+  - [Quick Start](#quick-start)
+  - [CaSa Image for the Raspberry Pi](#casa-image-for-the-raspberry-pi)
+  - [Telegram Commands](#telegram-commands)
+  - [Daily Schedule](#daily-schedule)
+  - [Understanding Alerts and Charts](#understanding-alerts-and-charts)
+  - [Configuration](#configuration)
+  - [Project Structure](#project-structure)
+  - [Known Limitations](#known-limitations)
+  - [Roadmap](#roadmap)
+  - [License, Disclaimer and Links](#license)
 
 ## Why CaSa?
 
@@ -29,6 +31,57 @@ As I started learning about stocks and cryptocurrencies, I kept wondering what m
 CaSa is free and open source on GitHub. It uses very little computing power, so it can run on a low-cost computer without a cloud server or paid API subscriptions. It explains what you’re seeing in simple words, even if you’re new to investing. I started CaSa with a home of my own in mind. But now I hope it helps others take their first steps in investing, whatever they’re saving for. If you try it, I’d love to hear what would make it more useful to you. You can see what I’m planning next in the [roadmap](https://github.com/TheRealDeluxee/CryptoStockManager#roadmap).
 
 ![CaSa alert in Telegram on iPhone and Apple Watch](docs/telegram_phone_watch.png)
+
+## In a Nutshell
+
+### What CaSa does
+
+- **Watches your stocks and cryptos** day and night – you don't have to look at prices all day.
+- **Messages you in Telegram** when something important happens, with a chart and a simple score from 1 to 10.
+- **Explains in plain words** what is going on – no expert knowledge needed.
+- **Knows your portfolio**: what you bought, what you sold, and your profit or loss every evening.
+- **Follows your own plan**: set a buy price, a target and a stop for an asset – CaSa tells you when it is reached.
+- **Optional AI**: one tap asks Claude for a second opinion.
+
+CaSa gives signals, not investment advice. You decide.
+
+### What you need
+
+- A **Raspberry Pi** 4 or 5 (a small, cheap computer), a microSD card and internet
+- **Telegram** on your phone
+
+### Set up in four steps
+
+1. **Create your Telegram bot**: in Telegram, send `/newbot` to [@BotFather](https://t.me/BotFather) and copy the token it gives you.
+2. **Write the CaSa image** to the microSD card with the free [Raspberry Pi Imager](https://www.raspberrypi.com/software/).
+3. **Start the Pi and log in once** from your PC – a short setup asks for your bot.
+4. **Done.** CaSa runs by itself from now on, also after a power cut.
+
+The step-by-step guide: [CaSa Image for the Raspberry Pi](#casa-image-for-the-raspberry-pi).
+
+### Everyday use – all in Telegram
+
+| You want to … | Send |
+|---|---|
+| look at one stock or crypto now | `/check` |
+| choose which assets CaSa watches for you | `/smart_alert` |
+| get a reminder before an important date | `/event` |
+| set a plan for an asset (buy price, target, stop) | `/plan_alert` |
+| record a buy or a sale | `/record` |
+
+Below every alert you find buttons for the next step – for example to record a buy or to ask the AI.
+
+<br>
+
+---
+---
+
+<br>
+
+## Details for Experts
+
+> [!CAUTION]
+> **You don't need this part to use CaSa.** Everything below is for the curious and for experts: how CaSa analyses, what every setting does, how to install it without the image, and what is planned next.
 
 ## Features
 
