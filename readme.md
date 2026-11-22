@@ -6,7 +6,6 @@
 
 CaSa watches your cryptocurrencies and stocks, analyses them with technical indicators and sends alerts, charts and daily summaries to **Telegram**. The same Telegram chat is used to control the program: run analyses on demand, record buys and sells, switch alarms on and off, plan important dates and create prompts for ChatGPT or Claude.
 
-
 ## Contents
 
 - [Why CaSa?](#why-casa)
@@ -21,6 +20,7 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
   - [Project structure](docs/project-structure.md)
   - [Roadmap](docs/roadmap.md)
 - [Known Limitations](#known-limitations)
+- [Versioning](#versioning)
 - [License, Disclaimer and Links](#license)
 
 ## Why CaSa?
@@ -42,7 +42,7 @@ CaSa is free and open source on GitHub. It uses very little computing power, so 
 - **Explains in plain words** what is going on – no expert knowledge needed.
 - **Knows your portfolio**: what you bought, what you sold, and your profit or loss every evening.
 - **Follows your own plan**: set a buy price, a target and a stop for an asset – CaSa tells you when it is reached.
-- **Optional AI**: one tap asks Claude for a second opinion.
+- **Optional AI**: one tap creates a prompt for ChatGPT or Claude – or, with a Claude API key, asks Claude directly for a second opinion.
 
 CaSa gives signals, not investment advice. You decide.
 
@@ -73,7 +73,7 @@ Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 | Page | Content |
 |---|---|
 | [Features](docs/features.md) | Everything CaSa can do: analysis, alarms, charts and messages, portfolio, planning and research |
-| [Installation](docs/installation.md) | Option A: manual installation (2–5 minutes on Windows), to try CaSa out or integrate it into an existing system · Option B: CaSa image for the Raspberry Pi (about 20 minutes; hardware, step by step, daily use) |
+| [Installation](docs/installation.md) | Option A: manual installation (2–5 minutes on Windows), to try CaSa out or run it on a computer you already have · Option B: CaSa image for the Raspberry Pi (about 20 minutes; hardware, step by step, daily use) |
 | [Telegram commands](docs/commands.md) | Every command with its options |
 | [Understanding alerts and charts](docs/alerts.md) | When CaSa sends what, score 1–10, traffic lights, figure list, chart, alarms and infos with their backtest results, evening summary and trading result |
 | [Configuration](docs/configuration.md) | `config.ini`, `assets.ini`, `events.ini`, `planalert.ini`, `transactions.csv`, AI prompt, alarm journal, `logfile.txt` |
@@ -84,7 +84,7 @@ Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 
 - The free CoinGecko API has rate limits and no daily candles (open/high/low); crypto analysis uses closing prices only.
 - The hourly analysis is only scheduled for crypto; stocks are analysed daily.
-- `/restart` reloads the files (config, assets, dates, transactions), but not the program code. After an update (new version), stop CaSa and start it again.
+- `/restart` reloads the files (config, assets, dates, transactions), but not the program code. A new version: with the CaSa image `/update` installs it and restarts CaSa by itself; on Windows start `install_casa.bat` again, then CaSa with `start_casa.bat`.
 - The program remembers sent alarms and date reminders only while it is running; after a full restart (not `/restart`), an alarm or reminder of the same day can be sent again.
 - Quarterly results dates come from Yahoo. Right after a report Yahoo often does not know the next date yet; it is picked up automatically as soon as it is announced. Some stocks (e.g. BAE Systems) have no date on Yahoo.
 - While an analysis is running, Telegram commands are processed afterwards.
@@ -95,7 +95,7 @@ CaSa uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`). The 
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License, see [LICENSE](LICENSE).
 
 ## Disclaimer
 
@@ -106,5 +106,5 @@ This application generates alerts based on technical indicators and market data 
 - [Telegram BotFather](https://t.me/BotFather) — create a Telegram bot
 - [CoinGecko](https://www.coingecko.com) — cryptocurrency market data
 - [Yahoo Finance](https://finance.yahoo.com) — stock market data
-- [Rock Pi](https://rockpi.org/) — single-board computer for hosting
-- [Armbian OS](https://www.armbian.com/) — lightweight ARM-based OS
+- [Raspberry Pi Imager](https://www.raspberrypi.com/software/) — writes the CaSa image to the microSD card (Option B)
+- [Rock Pi](https://rockpi.org/) and [Armbian OS](https://www.armbian.com/) — other single-board computer and Linux, with the manual installation (Option A)
