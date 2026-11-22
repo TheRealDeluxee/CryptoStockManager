@@ -2,7 +2,9 @@
 
 [← back to the README](../readme.md)
 
-## Option A: Manual Installation (2–5 minutes on Windows) – to try CaSa out or integrate it into an existing system
+## Option A: Manual Installation (2–5 minutes on Windows)
+
+**Good for:** trying CaSa out, or running it on a computer you already have (Windows, Linux, macOS, a home server). CaSa only runs while that computer is on.
 
 ### Windows: the setup wizard
 
@@ -29,6 +31,8 @@ After the start, the bot sends the CaSa logo with a short message: the version, 
 For permanent use on a Raspberry Pi, [Option B](#option-b-casa-image-for-the-raspberry-pi-about-20-minutes) is easier: no Python installation, automatic start and updates in Telegram.
 
 ## Option B: CaSa Image for the Raspberry Pi (about 20 minutes)
+
+**Good for:** a small computer of its own that runs CaSa day and night – it starts by itself, also after a power cut, and updates with one tap in Telegram.
 
 The easiest way to run CaSa: a ready **CaSa image** – Raspberry Pi OS Lite 64-bit (Debian 13 Trixie, without desktop) with the Python packages of CaSa, Samba and tmux already installed. Write it with the Raspberry Pi Imager, start the Pi, log in once: a wizard asks for the keyboard layout, whether you want the network drive (optional) and your keys, then downloads the **newest CaSa release from GitHub**. From then on CaSa starts by itself, also after a power cut.
 
