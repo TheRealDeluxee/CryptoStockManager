@@ -82,3 +82,25 @@ Below every alarm and info a **🤖 AI prompt** button creates the `/ai_prompt` 
 - Grey bars on the right: volume profile of the visible range (darker bar = price level with most volume)
 - Left axis: deviation in % from your average buy price (or from the average price if you don't own the asset)
 - Background green/red: price above/below your average buy price
+
+## Evening summary (18:30)
+
+**Daily Summary** – one table for crypto and one for stocks, all assets of the analysis:
+
+![Daily Summary of the cryptos: ranking by today's change with bar, 7-day change and score](daily_summary.jpg)
+
+- **#**: rank, sorted by today's change (best first); the best row is tinted green when it gained
+- **Price**: current price in €
+- **Bar and 1D P&L**: today's change in % – the bar goes right (green) for a gain and left (red) for a loss; the largest move of the day fills half of the bar column
+- **7D**: change over the last 7 days in %
+- **Score**: score 1–10 of the asset (see above) – green from 8, red up to 3, grey in between, `–` when not available
+
+**Trading result · last 13 weeks** – your profit or loss from sales, week by week (from `transactions.csv`, FIFO):
+
+![Trading result of the last 13 weeks: realised profit per week as bars](trading_result.jpg)
+
+- **Big number**: realised profit or loss of all sales in the 13 weeks; the period is at the top right ("realised from sales since …")
+- **(+x | −y) € unrealised this week**: how much your open positions gained (+) and lost (−) this week, not sold yet
+- **Bars**: one bar per week (Monday to Sunday, "this wk" = the current week); full colour = realised from sales (green gain, red loss), the white lines split the bar into the single sales; the number above is the sum of the week
+- **Light bars with a dashed border** (only this week): the unrealised change of your open positions, one part per asset
+- The message below the chart only shows the time of the data ("Data as of: …"); assets without a price in the daily analysis are listed there

@@ -1,6 +1,8 @@
 ![CaSa](logo.png)
 
-# CaSa – Crypto and Stock Alert
+# CaSa
+
+**C**rypto **a**nd **S**tock **A**lert
 
 CaSa watches your cryptocurrencies and stocks, analyses them with technical indicators and sends alerts, charts and daily summaries to **Telegram**. The same Telegram chat is used to control the program: run analyses on demand, record buys and sells, switch alarms on and off, plan important dates and create prompts for ChatGPT or Claude.
 
@@ -8,9 +10,16 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 ## Contents
 
 - [Why CaSa?](#why-casa)
-- [In a Nutshell](#in-a-nutshell) – what CaSa does, what you need, important Telegram commands
+- [In a Nutshell](#in-a-nutshell)
 - [What's New](#whats-new)
-- [Learn More](#learn-more) – [features](docs/features.md), [installation](docs/installation.md), [commands](docs/commands.md), [alerts and charts](docs/alerts.md), [configuration](docs/configuration.md), [project structure](docs/project-structure.md), [roadmap](docs/roadmap.md)
+- [Learn More](#learn-more)
+  - [Features](docs/features.md)
+  - [Installation](docs/installation.md)
+  - [Telegram commands](docs/commands.md)
+  - [Understanding alerts and charts](docs/alerts.md)
+  - [Configuration](docs/configuration.md)
+  - [Project structure](docs/project-structure.md)
+  - [Roadmap](docs/roadmap.md)
 - [Known Limitations](#known-limitations)
 - [License, Disclaimer and Links](#license)
 
@@ -67,7 +76,7 @@ Earlier versions: [CHANGELOG.md](CHANGELOG.md)
 | [Features](docs/features.md) | Everything CaSa can do: analysis, alarms, charts and messages, portfolio, planning and research |
 | [Installation](docs/installation.md) | Option A: manual installation (2–5 minutes on Windows), to try CaSa out or integrate it into an existing system · Option B: CaSa image for the Raspberry Pi (about 20 minutes; hardware, step by step, daily use) |
 | [Telegram commands](docs/commands.md) | Every command with its options |
-| [Understanding alerts and charts](docs/alerts.md) | When CaSa sends what, score 1–10, traffic lights, figure blocks, chart, alarms and infos with their backtest results |
+| [Understanding alerts and charts](docs/alerts.md) | When CaSa sends what, score 1–10, traffic lights, figure list, chart, alarms and infos with their backtest results, evening summary and trading result |
 | [Configuration](docs/configuration.md) | `config.ini`, `assets.ini`, `events.ini`, `planalert.ini`, `transactions.csv`, AI prompt, alarm journal, `logfile.txt` |
 | [Project structure](docs/project-structure.md) | The program files and folders and what each one does |
 | [Roadmap](docs/roadmap.md) | What is planned next, what is done and what is not planned |
