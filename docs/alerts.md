@@ -60,7 +60,7 @@ The averages come from a few large moves: for most buy alarms the median is slig
 
 **Message content**
 
-Below every alarm and info a **🤖 Prompt** button creates the `/ai_prompt` prompt for this asset; with a Claude API key there are also **🤖 Guide (API)** and **🤖 Plan (API)** (as `/ai_api_decision3s` and `/ai_api_plan`). The figure blocks are **collapsed** (tap the quote to open them); score and traffic lights stay visible. Wrong or incomplete input (e.g. an unknown name in `/check`, `/history` without an asset) is answered with buttons to choose from instead of only the format.
+Below every alarm and info a **🤖 Prompt** button creates the `/ai_prompt` prompt for this asset; with a Claude API key there are also **🤖 Guide (API)** and **🤖 Plan (API)** (as `/ai_api_guide` and `/ai_api_plan`). The figure blocks are **collapsed** (tap the quote to open them); score and traffic lights stay visible. Wrong or incomplete input (e.g. an unknown name in `/check`, `/history` without an asset) is answered with buttons to choose from instead of only the format.
 
 ![Alarm message in Telegram: score 1–10 with traffic-light lines and the numbered figure list](telegram_message.png)
 

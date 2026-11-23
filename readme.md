@@ -116,7 +116,7 @@ This project is licensed under the MIT License, see [LICENSE](LICENSE).
 
 ## Disclaimer
 
-This application generates alerts based on technical indicators and market data analysis. All alerts are purely informational and require independent user evaluation. Users are solely responsible for their own investment decisions. CaSa does not recommend buying or selling any assets, nor does it provide personalized investment advice. Answers of AI tools to the 🤖 Prompt (`/ai_prompt`), 🤖 Guide (API) (`/ai_api_decision3s`) and 🤖 Plan (API) (`/ai_api_plan`) are not investment advice either.
+This application generates alerts based on technical indicators and market data analysis. All alerts are purely informational and require independent user evaluation. Users are solely responsible for their own investment decisions. CaSa does not recommend buying or selling any assets, nor does it provide personalized investment advice. Answers of AI tools to the 🤖 Prompt (`/ai_prompt`), 🤖 Guide (API) (`/ai_api_guide`) and 🤖 Plan (API) (`/ai_api_plan`) are not investment advice either.
 
 ## Links
 

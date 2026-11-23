@@ -113,7 +113,7 @@ AI_SCORE_NOTE = {'stock': 'stocks: high = no edge, very low = slight rebound',
 
 
 AI_API_SEARCHES = 12   # web searches per Guide/Plan answer (each about 1 cent; 5 were too few for news, trend, market, sectors)
-# /ai_api_decision3s and /ai_api_plan: the filled prompt template plus one of these tasks (instead of the full answer D)
+# /ai_api_guide and /ai_api_plan: the filled prompt template plus one of these tasks (instead of the full answer D)
 AI_API_TASKS = {
     'decision': ("\n\nE. Answer for this request (replaces D): my decision in exactly three sentences, plain text, "
                  "no heading, no list, no sources list. I already see the figures of part A in my program "
@@ -859,7 +859,7 @@ class CryptoStockManager:
                 func.pushover(part)
 
     def ai_api(self, symbol, asset_type, mode):
-        """/ai_api_decision3s (mode 'decision') and /ai_api_plan (mode 'plan'): the same data as /ai_prompt,
+        """/ai_api_guide (mode 'decision') and /ai_api_plan (mode 'plan'): the same data as /ai_prompt,
         answered directly by the Claude API (with web search for the news). Without a key: error message."""
         if not func.claude_available():
             func.pushover(func.CLAUDE_NO_KEY)

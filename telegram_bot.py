@@ -2,7 +2,7 @@
 telegram_bot.py
 - Always-on Telegram bot
 - Sends notifications from notify_queue (text/image) to Telegram
-- Accepts commands (/help /status /analyse /check /ai_prompt /ai_api_decision3s /ai_api_plan /smart_alert /event /plan_alert /record /history /restart)
+- Accepts commands (/help /status /analyse /check /ai_prompt /ai_api_guide /ai_api_plan /smart_alert /event /plan_alert /record /history /restart)
   and sends them as dict via command_queue to main
 
 Important:
@@ -452,7 +452,7 @@ async def _cb_noai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _run_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, cmd) -> None:
-    # /ai_prompt (cmd 'ai'): prompt to copy, no API; /ai_api_decision3s and /ai_api_plan: answer from the Claude API
+    # /ai_prompt (cmd 'ai'): prompt to copy, no API; /ai_api_guide and /ai_api_plan: answer from the Claude API
     app = context.application
     if not _authorized(update, app.bot_data['chat_id']):
         return
@@ -1541,7 +1541,7 @@ def _run_bot(notify_q: Queue, command_q: Queue) -> None:
     app.add_handler(CommandHandler("analyse", _cmd_analyse))
     app.add_handler(CommandHandler("check", _cmd_check))
     app.add_handler(CommandHandler(["ai_prompt", "ai"], _cmd_ai))   # /ai: old name
-    app.add_handler(CommandHandler("ai_api_decision3s", _cmd_ai_decision))
+    app.add_handler(CommandHandler(["ai_api_guide", "ai_api_decision3s"], _cmd_ai_decision))   # /ai_api_decision3s: old name
     app.add_handler(CommandHandler("ai_api_plan", _cmd_ai_plan))
     app.add_handler(CommandHandler(["smart_alert", "alarm"], _cmd_alarm))   # /alarm still works as before
     app.add_handler(CommandHandler(["event", "termin"], _cmd_event))   # /termin still works as before

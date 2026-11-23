@@ -7,7 +7,7 @@
 | **Analysis** | |
 | `/check` | Daily analysis of one asset without alarm (choose via buttons or `/check <symbol or name>`); below the chart the same buttons as below alarms: 🤖 Prompt, with a Claude API key also 🤖 Guide (API) and 🤖 Plan (API) |
 | 🤖 Prompt (button) | AI prompt to copy into ChatGPT or Claude; below every alarm, info and `/check`. Typing `/ai_prompt <symbol or name>` (or the old `/ai`) still works, it is just not in the command list any more |
-| 🤖 Guide (API) (button, `/ai_api_decision3s`) | Claude API (key needed): the same data as `/ai_prompt`, answered directly with a short guide in three sentences (with web search for news) |
+| 🤖 Guide (API) (button, `/ai_api_guide`; the old `/ai_api_decision3s` still works) | Claude API (key needed): the same data as `/ai_prompt`, answered directly with a short guide in three sentences (with web search for news) |
 | 🤖 Plan (API) (button, `/ai_api_plan`) | Claude API (key needed): the same data, answered with a short trading plan and the values for `planalert.ini`; **✅ Save as plan** saves it (replaces an existing plan of the asset), **Discard** drops it |
 | `/analyse <daily\|hourly\|summary>` | Start an analysis immediately |
 | **Alarms and Dates** | |

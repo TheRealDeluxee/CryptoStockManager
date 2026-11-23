@@ -2283,7 +2283,7 @@ def log_message(kind, message):
     log_print(f"Telegram {kind}: {first[:100]}")
 
 
-CLAUDE_NO_KEY = ('No Claude API key: /ai_api_decision3s and /ai_api_plan need an api_key in config.ini '
+CLAUDE_NO_KEY = ('No Claude API key: /ai_api_guide and /ai_api_plan need an api_key in config.ini '
                  '[anthropic] (console.anthropic.com, costs money per request). /ai_prompt works without a key.')
 
 
@@ -2327,7 +2327,7 @@ def claude_usage_text(usage):
 
 def ai_buttons(asset_type, symbol):
     """Buttons below alarms, infos and /check: 🤖 Prompt (as /ai_prompt); with a Claude API key also
-    🤖 Guide (API) and 🤖 Plan (API) (as /ai_api_decision3s and /ai_api_plan)."""
+    🤖 Guide (API) and 🤖 Plan (API) (as /ai_api_guide and /ai_api_plan)."""
     asset = f"{asset_type}|{symbol.lower()}"
     row = [('🤖 Prompt', f"aibtn|{asset}")]
     if claude_available():
