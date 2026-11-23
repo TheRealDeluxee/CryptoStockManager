@@ -154,15 +154,23 @@ Each message comes once and again only after the price has left the zone, at mos
 
 ## transactions.csv
 
-Written by `/record` (buy, sell, sell all):
+Written by `/record` (buy, sell, sell all); the columns are the same as on a broker statement:
 
 ```
-type;symbol;name;action;amount_eur;qty;date
-crypto;bitcoin;Bitcoin;buy;500.0;0.01;01/01/2024
-stock;QCOM;Qualcomm;sell;312.16;2.0;14/11/2026
+type;symbol;name;action;qty;price;net amount;date;wallet
+crypto;bitcoin;Bitcoin;buy;0.01;;500.0;01/01/2024;
+stock;TTWO;Take-Two;buy;15;200.00;3012.40;18/11/2026;ING
+stock;TTWO;Take-Two;sell;11;188.10;2059.03;09/11/2026;ING
 ```
 
-`amount_eur` is the amount in EUR you paid (buy) or received (sell), also for stocks quoted in USD or another currency: CaSa compares it with the price converted to EUR. Up to 0.1.13 the column was called `amount`; CaSa renames it at the start.
+- `qty`: quantity (shares or coins).
+- `price` (optional): price per unit in EUR from your statement (ING: "Kurs"). Empty = not known.
+- `net amount`: what you paid for a buy **including the fee** or received for a sale **after the fee**, in EUR (ING: "Gegenwert" or "Endbetrag"). Also for stocks quoted in USD or another currency: CaSa compares it with the price converted to EUR, so profit and loss already contain the fees.
+- The fee follows from both: buy = net amount − quantity × price (3012.40 − 15 × 200.00 = 12.40), sale = quantity × price − net amount. It is shown and summed in `/transactions` and `/history`. A buy below or a sale above quantity × price is rejected (more than one cent apart).
+- `wallet` (optional): broker or wallet, e.g. `ING` or `Bitvavo`, only for your overview.
+- Dates as `DD/MM/YYYY` or `DD.MM.YYYY`; completely empty lines (e.g. `;;;;;;;;` from a spreadsheet) are ignored.
+
+Older files are converted at the start: up to 0.1.13 the column `amount` became `amount_eur`; files of 0.1.14 and before get the new order, `amount_eur` becomes `net amount`, and the empty columns `price` and `wallet` are added (the old file is kept as `transactions.csv.bak`).
 
 ## ai_prompt.txt (created automatically)
 

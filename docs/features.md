@@ -26,7 +26,7 @@
 - Buttons below every alarm and info: 🤖 Prompt, and with a Claude API key 🤖 Guide (API) and 🤖 Plan (API)
 - Daily ranking of all assets by 1-day P&L
 - Daily P&L of your own positions (crypto and stocks together) after the summary: value, 1-day profit/loss in € and %, total profit/loss, total row
-- P&L chart of the last 13 weeks as weekly bars: the realised profit/loss of your sales in each week (from `transactions.csv`, FIFO) in full colour, one part per sale (white line between them; gains upwards, losses downwards); for the current week also the unrealised price change of your open positions in light colour, one part per open asset (gains upwards, losses downwards). Values only for the realised parts. At the top the realised total of the 13 weeks, below it in brackets the unrealised gains and losses of this week, e.g. (+400.00 | −700.00) €
+- P&L chart of the last 13 weeks as weekly bars: the realised profit/loss of your sales in each week (from `transactions.csv`, FIFO) in full colour, one part per sale (white line between them; gains upwards, losses downwards); for the current week also the profit or loss of your open positions if you sold them today (value minus what you paid, since the buy) in light colour, one part per open asset (gains upwards, losses downwards). Values only for the realised parts. At the top the realised total of the 13 weeks, below it in brackets the gains and losses of the open positions if sold today and their sum, e.g. (+400.00 | −700.00) € open positions if sold today = −300.00 €
 
 **Portfolio**
 - Buys and sells with `/record` or the 🟢 Record buy / 🔴 Record sell buttons, saved in `transactions.csv` (FIFO bookkeeping, amounts in EUR)

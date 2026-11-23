@@ -238,10 +238,12 @@ class CryptoStock:
 
 
 # Shared file checks: the same rules apply when entering and when loading.
-# transactions.csv: amount_eur = what you paid or received in EUR (since 0.1.14; before: amount).
-# In the program the column is called "amount".
-CSV_HEADER = ["type", "symbol", "name", "action", "amount_eur", "qty", "date"]
-OLD_CSV_HEADER = ["type", "symbol", "name", "action", "amount", "qty", "date"]
+# transactions.csv, like the broker statement (all amounts in EUR): qty; price = price per unit ("Kurs",
+# optional); net amount = what you paid (buy, fee included) or received (sell, after the fee) ("Gegenwert");
+# the fee follows from both. wallet = broker or wallet (optional). In the program "net amount" is "amount".
+CSV_HEADER = ["type", "symbol", "name", "action", "qty", "price", "net amount", "date", "wallet"]
+CSV_HEADER_0114 = ["type", "symbol", "name", "action", "amount_eur", "qty", "date"]   # 0.1.14
+OLD_CSV_HEADER = ["type", "symbol", "name", "action", "amount", "qty", "date"]        # 0.1.13 and before
 
 
 def valid_numbers(amount, qty):
@@ -736,24 +738,56 @@ def set_alarm(symbol, asset_type, active, path="assets.ini"):
 
 
 def transaction_file_rows(rows):
-    """Rows of the program ("amount") as rows of transactions.csv ("amount_eur")."""
-    return [{('amount_eur' if key == 'amount' else key): value for key, value in row.items()
-             if (key if key != 'amount' else 'amount_eur') in CSV_HEADER} for row in rows]
+    """Rows of the program ("amount") as rows of transactions.csv ("net amount"; price and wallet empty
+    when missing)."""
+    names = {'amount': 'net amount'}
+    result = []
+    for row in rows:
+        values = {names.get(key, key): value for key, value in row.items()}
+        result.append({key: values.get(key) or '' for key in CSV_HEADER})
+    return result
+
+
+def transaction_fee(action, net_amount, qty, price):
+    """Fee of a transaction from the statement: buy = net amount - qty x price, sell = qty x price - net
+    amount. None when the price is not known (empty). ValueError when it would be negative (more than a
+    cent, rounding of the broker)."""
+    text = str(price or '').strip().replace(',', '.')
+    if not text:
+        return None
+    price = float(text)
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError("The price must be a number greater than zero (or empty).")
+    gross = float(qty) * price
+    fee = float(net_amount) - gross if action == 'buy' else gross - float(net_amount)
+    if fee < -0.01:
+        raise ValueError(f"net amount {float(net_amount):.2f} € {'below' if action == 'buy' else 'above'} quantity x "
+                         f"price {gross:.2f} €: for a buy the net amount includes the fee (higher), for a sale "
+                         f"the fee is deducted (lower).")
+    return max(fee, 0.0)
 
 
 def update_transactions_header(path="transactions.csv"):
-    """Header of 0.1.13 and before (amount) -> amount_eur, so that the file says that the amounts are in EUR.
-    Only the first line changes. Returns True when it was changed."""
+    """transactions.csv of 0.1.14 and before -> the columns since 0.1.15: qty, price (empty),
+    net amount (= the old amount), date, wallet (empty). The rows stay the same; the old file is kept as
+    transactions.csv.bak. Returns True when the file was converted."""
     try:
         with open(path, encoding='utf-8-sig', newline='') as file:
             text = file.read()
     except FileNotFoundError:
         return False
-    first, _, rest = text.partition('\n')
-    if first.rstrip('\r') != ';'.join(OLD_CSV_HEADER):
+    first = text.partition('\n')[0].rstrip('\r')
+    if first not in (';'.join(OLD_CSV_HEADER), ';'.join(CSV_HEADER_0114)):
         return False
-    newline = '\r\n' if first.endswith('\r') else '\n'
-    _write_text(path, ';'.join(CSV_HEADER) + newline + rest)
+    rows = list(csv.DictReader(text.splitlines(), delimiter=';'))
+    _write_text(path + '.bak', text)
+    newline = '\r\n' if '\r\n' in text else '\n'
+    lines = [';'.join(CSV_HEADER)]
+    for row in rows:
+        values = dict(row, price='', wallet='')
+        values['net amount'] = row.get('amount_eur', row.get('amount'))
+        lines.append(';'.join(str(values.get(key) or '') for key in CSV_HEADER))
+    _write_text(path, newline.join(lines) + newline)
     return True
 
 
@@ -770,15 +804,22 @@ def read_transactions(path="transactions.csv"):
     try:
         with open(path, newline="", encoding="utf-8-sig") as file:
             reader = csv.DictReader(file, delimiter=';')
-            if reader.fieldnames not in (CSV_HEADER, OLD_CSV_HEADER):
+            if reader.fieldnames not in (CSV_HEADER, CSV_HEADER_0114, OLD_CSV_HEADER):
                 raise ValueError("transactions.csv has a wrong or missing header.")
-            rows = list(reader)
-        for row in rows:   # the column amount_eur is "amount" in the program
-            if 'amount_eur' in row:
-                row['amount'] = row.pop('amount_eur')
+            # completely empty lines (e.g. ";;;;;;;;" from a spreadsheet) are left out
+            numbered = [(line, row) for line, row in enumerate(reader, 2)
+                        if any((value or '').strip() for key, value in row.items() if key is not None)
+                        or row.get(None)]
+        rows = [row for _, row in numbered]
+        for row in rows:   # "net amount" (0.1.14: amount_eur) is "amount" in the program
+            for name in ('net amount', 'amount_eur'):
+                if name in row:
+                    row['amount'] = row.pop(name)
+            row.setdefault('price', '')   # files of 0.1.14 and before: no price, no wallet
+            row.setdefault('wallet', '')
     except FileNotFoundError:
         return []
-    for line, row in enumerate(rows, 2):
+    for line, row in numbered:
         try:
             if None in row or any(value is None for value in row.values()):
                 raise ValueError("Wrong number of columns.")
@@ -791,7 +832,10 @@ def read_transactions(path="transactions.csv"):
                 raise ValueError("Unknown action.")
             if row['action'] == 'watchlist':
                 continue
-            valid_numbers(row['amount'], row['qty'])
+            amount, qty = valid_numbers(row['amount'], row['qty'])
+            transaction_fee(row['action'], amount, qty, row['price'])
+            row['price'] = (row['price'] or '').strip()
+            row['wallet'] = (row['wallet'] or '').strip()
             row['date'] = row['date'].strip().replace('.', '/')
             parsed_date = datetime.strptime(row['date'], '%d/%m/%Y')
             if parsed_date.date() > datetime.now().date():
@@ -883,10 +927,36 @@ def realized_trades(rows):
     return sales
 
 
+def open_lots(rows):
+    """Open positions after all sales (FIFO, as in realized_trades): {(type, symbol lower): (quantity, cost
+    in € of the remaining buys)}; only assets with a quantity above zero."""
+    trades = sorted((row for row in rows if row['action'] in ('buy', 'sell')),
+                    key=lambda row: datetime.strptime(row['date'], '%d/%m/%Y'))
+    lots = {}
+    for row in trades:
+        amount, qty = valid_numbers(row['amount'], row['qty'])
+        queue = lots.setdefault((row['type'], row['symbol'].lower()), [])
+        if row['action'] == 'buy':
+            queue.append([qty, amount / qty])
+            continue
+        while qty > 1e-12 and queue:
+            used = min(qty, queue[0][0])
+            queue[0][0] -= used
+            qty -= used
+            if queue[0][0] <= 1e-12:
+                queue.pop(0)
+    result = {}
+    for key, queue in lots.items():
+        qty = sum(lot[0] for lot in queue)
+        if qty > 1e-12:
+            result[key] = (qty, sum(lot[0] * lot[1] for lot in queue))
+    return result
+
+
 def weekly_pnl(rows, prices, weeks=13, today=None):
     """Profit/loss per week (Monday to Sunday) for the last `weeks` weeks, the current week up to today:
     realized = sales of that week (FIFO, from transactions.csv); for the current week also unrealized =
-    price change of the open positions since the start of the week (incl. this week's buys).
+    profit or loss of the open positions if they were sold today (value - cost since the buy).
     Returns (DataFrame with index = week start and columns realized, unrealized, list of held assets
     without prices). frame.attrs['sales'] = {week start: [profit of each sale, ...]} and
     frame.attrs['open'] = [unrealized change of each asset this week, ...] for the bar parts
@@ -901,19 +971,16 @@ def weekly_pnl(rows, prices, weeks=13, today=None):
         if week in frame.index:
             frame.loc[week, 'realized'] += sale['profit']
             sales.setdefault(week, []).append(sale['profit'])
-    # current week, per asset: change of its P&L since last Sunday minus its realized part = unrealized change
-    sunday = this_monday - pd.Timedelta(days=1)
-    days = (today - this_monday).days + 2
+    # current week, per open asset: what a sale at today's price would bring = value - cost of the
+    # remaining buys (FIFO, fees of the buys included; the fee of the sale is not known yet)
     open_changes, missing = [], []
-    trades = [row for row in rows if row['action'] in ('buy', 'sell')]
-    for key in sorted({(row['type'], row['symbol'].lower()) for row in trades}):
-        own = [row for row in trades if (row['type'], row['symbol'].lower()) == key]
-        total, lacking = pnl_history(own, prices, days=days, today=today)
-        missing += lacking
-        if total.empty or sunday not in total.index:
+    for key, (qty, cost) in sorted(open_lots(rows).items()):
+        series = prices.get(key)
+        known = series[series.index <= today].dropna() if series is not None else series
+        if known is None or known.empty:
+            missing.append(key[1])
             continue
-        realized_now = sum(sale['profit'] for sale in realized_trades(own) if sale['date'] >= this_monday)
-        change = total.iloc[-1] - total[sunday] - realized_now
+        change = qty * float(known.iloc[-1]) - cost
         if abs(change) > 0.005:
             open_changes.append(change)
     frame.loc[this_monday, 'unrealized'] = sum(open_changes)

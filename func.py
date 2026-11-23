@@ -2099,7 +2099,8 @@ def create_pnl_chart(weekly, output_path, title='', dpi=200):
     fig, ax = plt.subplots(figsize=(6.4, 3.6))
     fig.patch.set_facecolor('white')
     ax.set_facecolor('white')
-    # header: realized in the period large; below it in brackets the unrealized gains | losses of this week
+    # header: realized in the period large; below it in brackets the gains | losses of the open positions if
+    # they were sold today, and their sum
     open_values = weekly.attrs.get('open') or ([open_change] if abs(open_change) > 0.005 else [])
     open_up = sum(v for v in open_values if v > 0)
     open_down = sum(v for v in open_values if v < 0)
@@ -2109,7 +2110,7 @@ def create_pnl_chart(weekly, output_path, title='', dpi=200):
              fontweight='bold', va='top')
     bracket = fig.text(0.02, 0.78, "(", fontsize=9, color=GREY, va='top')
     parts = [(f"+{open_up:,.2f}", GREEN), (" | ", GREY), (f"−{abs(open_down):,.2f}", RED),
-             (") € unrealised this week", GREY)]
+             (f") € open positions if sold today = {euro_signed(open_up + open_down)}", GREY)]
     renderer = fig.canvas.get_renderer()
     left = bracket.get_window_extent(renderer).x1
     for text, colour in parts:   # coloured pieces one after the other
@@ -2187,7 +2188,7 @@ def create_pnl_chart(weekly, output_path, title='', dpi=200):
     ax.set_axisbelow(True)
     handles = [mpatches.Patch(color=GREY, alpha=0.9, label='realised (sales of the week)'),
                mpatches.Patch(facecolor=GREY, alpha=0.3, edgecolor=GREY, linestyle='--',
-                              label='unrealised (open positions, this week)')]
+                              label='unrealised (open positions if sold today)')]
     fig.legend(handles=handles, loc='upper right', bbox_to_anchor=(0.985, 0.90), ncol=1, fontsize=6.5,
                frameon=False, handlelength=1.6, labelcolor=GREY)
     fig.subplots_adjust(top=0.74, left=0.13, right=0.98, bottom=0.1)
@@ -2197,7 +2198,9 @@ def create_pnl_chart(weekly, output_path, title='', dpi=200):
 
 def create_transactions_image(rows, output_path, title='', subtitle='', dpi=200):
     """Transactions (/transactions, /history) as a table in the style of the daily summary.
-    rows: dicts with date (datetime), name, type ('crypto'/'stock'), action ('buy'/'sell'), amount (€), qty."""
+    rows: dicts with date (datetime), name, type ('crypto'/'stock'), action ('buy'/'sell'), amount (€), qty,
+    optional price (per unit from the statement; without it amount / qty, fee included), fee (€, included in
+    the amount) and wallet: wallet and fee shown small below the name."""
     GREEN, RED, GREY, DARK = '#1e8449', '#c0392b', '#8a8a8a', '#222222'
     rows = sorted(rows, key=lambda row: row['date'], reverse=True)   # newest first
     count = len(rows)
@@ -2225,8 +2228,12 @@ def create_transactions_image(rows, output_path, title='', subtitle='', dpi=200)
                                              facecolor='#f7f7f7' if i % 2 else 'white', edgecolor='none', zorder=0))
         ax.text(col['rank'][0], y, str(i + 1), fontsize=8, color=GREY, ha='center', va='center')
         ax.text(col['date'][0], y, row['date'].strftime('%d/%m/%Y'), fontsize=7.5, color=GREY, ha='left', va='center')
-        name_text = ax.text(col['name'][0], y, str(row['name']), fontsize=9, color=DARK,
+        details = ' · '.join(part for part in (row.get('wallet') or '',
+                                               f"fee {format_euro(row['fee'])}" if row.get('fee') else '') if part)
+        name_text = ax.text(col['name'][0], y - (0.14 if details else 0), str(row['name']), fontsize=9, color=DARK,
                             fontweight='bold', ha='left', va='center')
+        if details:   # wallet and fee small below the name
+            ax.text(col['name'][0], y + 0.24, details, fontsize=6, color=GREY, ha='left', va='center')
         buy = row['action'] == 'buy'
         badge = ax.text(col['action'][0], y, 'BUY' if buy else 'SELL', fontsize=7, color='white', fontweight='bold',
                         ha='center', va='center', bbox=dict(boxstyle='round,pad=0.3', facecolor=GREEN if buy else RED,
@@ -2241,7 +2248,7 @@ def create_transactions_image(rows, output_path, title='', subtitle='', dpi=200)
         ax.text(col['qty'][0], y, qty, fontsize=8, color=DARK, ha='right', va='center')
         ax.text(col['amount'][0], y, format_euro(row['amount']), fontsize=8.5, color=DARK, fontweight='bold',
                 ha='right', va='center')
-        unit_price = row['amount'] / row['qty'] if row['qty'] else 0.0
+        unit_price = row.get('price') or (row['amount'] / row['qty'] if row['qty'] else 0.0)
         ax.text(col['unit'][0], y, format_euro(unit_price), fontsize=7.5, color=GREY, ha='right', va='center')
 
     fig.patch.set_facecolor('white')

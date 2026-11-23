@@ -262,8 +262,9 @@ class CryptoStockManager:
         for change in cl.update_config(config_file_path):
             func.log_print(f"config.ini: {change}")
         update_ai_prompt(config_file_path)   # AI prompt template ai_prompt.txt (0.1.13: config.ini [ai_prompt])
-        if cl.update_transactions_header():   # amount -> amount_eur (0.1.13 and before)
-            func.log_print("transactions.csv: column amount renamed to amount_eur (amounts in EUR)")
+        if cl.update_transactions_header():   # 0.1.14 and before -> qty, price, net amount, date, wallet
+            func.log_print("transactions.csv: new columns price and wallet (empty), amount_eur is now "
+                           "net amount; the old file is kept as transactions.csv.bak")
         cl.update_plan_header()   # explanation at the top of planalert.ini (wording of 0.1.14)
         if cl.update_plan_keys():   # support/max_entry/target/stop -> buy-zone/sell-zone/stop-plan
             func.log_print("planalert.ini: support, max_entry, target, stop renamed to buy-zone, sell-zone, stop-plan")

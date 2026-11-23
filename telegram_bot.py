@@ -35,7 +35,7 @@ logging.basicConfig(
 )
 
 _TRANSACTIONS_PATH = "transactions.csv"
-CSV_HEADER = cl.CSV_HEADER   # amount_eur
+CSV_HEADER = cl.CSV_HEADER   # qty, price, net amount, ...
 
 
 def _load_config() -> Dict[str, str]:
@@ -66,12 +66,14 @@ def _ensure_csv_exists() -> None:
             w.writeheader()
 
 
-def _append_transaction(asset_type, symbol, name, action, amount, qty, date):
+def _append_transaction(asset_type, symbol, name, action, amount, qty, date, price=None, wallet=''):
     # Write a complete new file first, then replace it atomically.
     # This way main.py can never read a half-written CSV line.
+    # amount = net amount in EUR (fee included); price per unit (optional) and wallet for your overview
     rows = cl.read_transactions(_TRANSACTIONS_PATH)
     row = {"type": asset_type, "symbol": symbol, "name": name,
-           "action": action, "amount": str(amount), "qty": str(qty), "date": date}
+           "action": action, "amount": str(amount), "qty": str(qty), "date": date,
+           "price": f"{price:g}" if price else '', "wallet": wallet}
     asset = cl.CryptoStock(symbol, name, asset_type)
     cl.apply_transactions(asset, rows + [row])
     rows.append(row)
@@ -102,7 +104,7 @@ def _write_transactions(rows):
             temp_path = file.name
             writer = csv.DictWriter(file, fieldnames=CSV_HEADER, delimiter=';')
             writer.writeheader()
-            writer.writerows(cl.transaction_file_rows(rows))   # "amount" -> column amount_eur
+            writer.writerows(cl.transaction_file_rows(rows))   # "amount" -> column "net amount"
             file.flush()
             os.fsync(file.fileno())
         os.replace(temp_path, _TRANSACTIONS_PATH)
@@ -1115,9 +1117,45 @@ def _date_keyboard():
 
 def _trade_summary(trade):
     label = 'Buy' if trade['action'] == 'buy' else 'Sell'
-    unit = trade['amount'] / trade['qty'] if trade.get('qty') else 0
-    return (f"{label}: {trade['name']} ({trade['symbol']})\nAmount: {func.format_euro(trade['amount'])}\n"
-            f"Quantity: {trade['qty']:g}\nPrice per unit: {func.format_euro(unit)}\nDate: {trade['date']}")
+    price = trade.get('price')
+    if price:
+        fee = cl.transaction_fee(trade['action'], trade['amount'], trade['qty'], price)
+        price_line = f"Price per unit: {func.format_euro(price)}\nFee: {func.format_euro(fee)}"
+    else:   # no price: price per unit from the net amount (fee included)
+        unit = trade['amount'] / trade['qty'] if trade.get('qty') else 0
+        price_line = f"Price per unit (fee included): {func.format_euro(unit)}"
+    return (f"{label}: {trade['name']} ({trade['symbol']})\nNet amount: {func.format_euro(trade['amount'])}\n"
+            f"Quantity: {trade['qty']:g}\n{price_line}\n"
+            f"Wallet: {trade.get('wallet') or '–'}\nDate: {trade['date']}")
+
+
+def _known_wallets():
+    """Wallets of earlier transactions, the last used first (at most 6, for buttons)."""
+    try:
+        rows = cl.read_transactions(_TRANSACTIONS_PATH)
+    except (OSError, UnicodeError, csv.Error, ValueError):
+        return []
+    wallets = []
+    for row in reversed(rows):
+        wallet = row.get('wallet', '').replace('|', '').strip()
+        if wallet and wallet not in wallets and len(wallet.encode()) <= 40:
+            wallets.append(wallet)
+    return wallets[:6]
+
+
+def _price_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton('Skip', callback_data='tr|price|skip')], _CANCEL_ROW])
+
+
+def _wallet_keyboard():
+    buttons = [InlineKeyboardButton(wallet, callback_data=f'tr|wallet|{wallet}') for wallet in _known_wallets()]
+    rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+    return InlineKeyboardMarkup(rows + [[InlineKeyboardButton('No wallet', callback_data='tr|wallet|')], _CANCEL_ROW])
+
+
+_PRICE_QUESTION = ('Price per unit in € from your statement (e.g. 200 or 187,20)? CaSa works out the fee from '
+                   'it. Send it as a message or tap "Skip".')
+_WALLET_QUESTION = 'Wallet or broker (e.g. ING)? Tap one, send a new name as a message or tap "No wallet".'
 
 
 async def _cb_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1159,6 +1197,12 @@ async def _cb_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         verb = 'paid' if trade['action'] == 'buy' else 'received'
         await query.edit_message_text(f"{name}: amount in € {verb} (e.g. 1200 or 1200,50)? Send it as a message.",
                                       reply_markup=InlineKeyboardMarkup([_CANCEL_ROW]))
+    elif parts[1] == 'price' and trade.get('step') == 'price':
+        trade.update(price=None, step='wallet')
+        await query.edit_message_text(_WALLET_QUESTION, reply_markup=_wallet_keyboard())
+    elif parts[1] == 'wallet' and trade.get('step') == 'wallet':
+        trade.update(wallet=parts[2] if len(parts) > 2 else '', step='date_buttons')
+        await query.edit_message_text('Date of the transaction?', reply_markup=_date_keyboard())
     elif parts[1] == 'date':
         if parts[2] == 'other':
             trade['step'] = 'date'
@@ -1172,7 +1216,8 @@ async def _cb_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data.pop('trade', None)
         try:
             row = _append_transaction(trade['type'], trade['symbol'], trade['name'], trade['action'],
-                                      trade['amount'], trade['qty'], trade['date'])
+                                      trade['amount'], trade['qty'], trade['date'],
+                                      trade.get('price'), trade.get('wallet', ''))
         except (OSError, UnicodeError, csv.Error, configparser.Error, ValueError) as error:
             await query.edit_message_text(f'Error: {error}\nTransaction not saved.')
             return
@@ -1188,7 +1233,7 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _on_plan_text(update, context, plan)
         return
     trade = context.user_data.get('trade')
-    if not trade or trade.get('step') not in ('amount', 'qty', 'date') or update.message is None:
+    if not trade or trade.get('step') not in ('amount', 'qty', 'price', 'wallet', 'date') or update.message is None:
         return
     if not _authorized(update, context.application.bot_data['chat_id']):
         return
@@ -1202,7 +1247,18 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(f"Quantity ({unit}, e.g. 2 or 0,015)?", reply_markup=cancel)
         elif trade['step'] == 'qty':
             trade['qty'] = cl.valid_numbers(trade['amount'], text)[1]
-            trade['step'] = 'date_buttons'
+            trade['step'] = 'price'
+            await update.message.reply_text(_PRICE_QUESTION, reply_markup=_price_keyboard())
+        elif trade['step'] == 'price':
+            price = cl.parse_price(text.replace('€', ''))
+            cl.transaction_fee(trade['action'], trade['amount'], trade['qty'], price)   # fee must not be negative
+            trade.update(price=price, step='wallet')
+            await update.message.reply_text(_WALLET_QUESTION, reply_markup=_wallet_keyboard())
+        elif trade['step'] == 'wallet':
+            wallet = text.replace('|', '').replace(';', '').strip()
+            if not wallet or len(wallet) > 30:
+                raise ValueError('The wallet name must have 1 to 30 characters.')
+            trade.update(wallet=wallet, step='date_buttons')
             await update.message.reply_text('Date of the transaction?', reply_markup=_date_keyboard())
         else:
             date = text.replace('.', '/')
@@ -1346,11 +1402,17 @@ async def _reply_transactions_table(update, rows, title):
     for row in rows:
         amount, qty = cl.valid_numbers(row['amount'], row['qty'])
         table.append({'date': datetime.strptime(row['date'], '%d/%m/%Y'), 'name': row.get('name') or row['symbol'],
-                      'type': row['type'], 'action': row['action'], 'amount': amount, 'qty': qty})
+                      'type': row['type'], 'action': row['action'], 'amount': amount, 'qty': qty,
+                      'price': float(row['price'].replace(',', '.')) if row.get('price') else None,
+                      'fee': cl.transaction_fee(row['action'], amount, qty, row.get('price')) or 0.0,
+                      'wallet': row.get('wallet', '')})
     table.sort(key=lambda row: row['date'], reverse=True)
     bought = sum(row['amount'] for row in table if row['action'] == 'buy')
     sold = sum(row['amount'] for row in table if row['action'] == 'sell')
+    fees = sum(row['fee'] for row in table)
     subtitle = f"{len(table)} transactions · bought {func.format_euro(bought)} · sold {func.format_euro(sold)}"
+    if fees:
+        subtitle += f" · fees {func.format_euro(fees)}"
     parts = [table[i:i + _TABLE_ROWS_PER_IMAGE] for i in range(0, len(table), _TABLE_ROWS_PER_IMAGE)]
     for number, part in enumerate(parts, 1):
         name = f"{title} ({number}/{len(parts)})" if len(parts) > 1 else title

@@ -103,7 +103,7 @@ Below every alarm and info a **🤖 Prompt** button creates the `/ai_prompt` pro
 ![Trading result of the last 13 weeks: realised profit per week as bars](trading_result.jpg)
 
 - **Big number**: realised profit or loss of all sales in the 13 weeks; the period is at the top right ("realised from sales since …")
-- **(+x | −y) € unrealised this week**: how much your open positions gained (+) and lost (−) this week, not sold yet
+- **(+x | −y) € open positions if sold today = z €**: what a sale of your open positions at today's price would bring compared with what you paid (since the buy, buy fees included, FIFO): the positions in profit (+), those in loss (−) and the sum – like the return since purchase in your broker app. The fee of the sale is not included
 - **Bars**: one bar per week (Monday to Sunday, "this wk" = the current week); full colour = realised from sales (green gain, red loss), the white lines split the bar into the single sales; the number above is the sum of the week
-- **Light bars with a dashed border** (only this week): the unrealised change of your open positions, one part per asset
+- **Light bars with a dashed border** (only this week): the same profit or loss of your open positions if sold today, one part per asset
 - The message below the chart only shows the time of the data ("Data as of: …"); assets without a price in the daily analysis are listed there
