@@ -28,35 +28,40 @@ CaSa watches your cryptocurrencies and stocks, analyses them with technical indi
 
 **Following your investments should leave room for living.**
 
-I started investing while saving for a home of my own. Before long, I was checking prices throughout the day, wondering what I might miss while I was away. The apps I tried offered price alerts. But getting more control over when and why they arrived often meant paying for a subscription.
+I started investing while saving for a home of my own. Before long, I was checking prices throughout the day, wondering what I might miss while I was away.
 
-So I built CaSa. Its name means “home” in Spanish, after the goal that started it.
+Price alerts helped, but I wanted more control over when and why they arrived. I also wanted to understand the signals without spending my day studying charts and technical terms. Getting the features I wanted often meant paying for a subscription.
 
-CaSa is free and open source. You can inspect the code behind its analyses and alerts, because trust matters when money is involved.
+So I built CaSa. Its name means "home" in Spanish, after the goal that started it.
 
-Whatever you are saving for, CaSa helps you stay informed while you get on with your day. Have an idea that would make it more useful? I'd love to hear it. Take a look at the [roadmap](docs/roadmap.md) to see what is next.
+CaSa is free and open source. Trust matters when money is involved, so anyone can inspect the code behind its analyses and alerts.
+
+Whatever you are saving for, CaSa helps you stay informed while you get on with your day. Ideas and feedback are welcome. See the [roadmap](docs/roadmap.md) for what is next.
 
 ![CaSa alert in Telegram on iPhone and Apple Watch](docs/telegram_phone_watch.png)
 
 ## How does CaSa work?
 
-**See the move. Understand the signal. Choose what deserves your attention.**
+**More context. Clearer messages. No subscription.**
 
-- **Understand why you were notified.** Each signal comes with a chart, a score and a short explanation of what triggered it. For stocks, index and sector comparisons put the move in context.
-- **Choose what reaches you.** Pick the assets you follow. Set each signal to an alarm, an info (never marked as important) or off, with separate settings for stocks and crypto.
-- **Run it on your own computer.** CaSa runs on a Windows or Linux PC or a Raspberry Pi and sends results to Telegram. It uses market data from Yahoo Finance and CoinGecko. No CaSa account or subscription is required for the core features.
+CaSa checks your chosen stocks and cryptocurrencies at scheduled times and sends the results to Telegram.
 
-Where available, messages include historical backtest results. Rules without a matching backtest are clearly marked. An alarm journal records alerts and provides monthly summaries of subsequent price changes. See [alerts and backtests](docs/alerts.md) for results and limitations.
+- **Put moves in context.** CaSa analyses trend, momentum and trading volume. For stocks, it also compares performance with the index and sector.
+- **Understand the alert.** Each message shows what triggered it, with a chart, a short summary and a numbered list of the underlying figures.
+- **Choose what reaches you.** Set each signal to an alarm, an informational update or off, separately for stocks and crypto.
+- **Run it yourself.** CaSa runs on your Windows or Linux PC or a Raspberry Pi, with free market data from Yahoo Finance and CoinGecko. No CaSa account, no subscription.
+
+Messages include historical backtest results where available. Rules without a matching backtest are marked accordingly. An alarm journal records every alarm and reports monthly how the price moved afterwards. See [alerts and backtests](docs/alerts.md) for results and limitations.
 
 ## What does CaSa do?
 
-- **Market alerts, explained.** Get a chart and the reason for the message when one of your chosen signals is triggered.
-- **Your plan, within reach.** Set buy zones, sell zones, stop levels and position loss limits. CaSa alerts you when a condition is met. It never places trades.
-- **Your portfolio at a glance.** Record purchases and sales manually in Telegram. Receive an evening summary of your holdings and profit or loss.
-- **Dates worth remembering.** Get reminders for upcoming earnings where dates are available, and add your own events.
-- **Optional AI research.** Create prompts for ChatGPT or Claude. With your own Claude API key, Claude combines CaSa’s data with web research on relevant news and business relationships to help you interpret the signals and suggest plans directly in Telegram. Save a suggested plan with one tap. Each API answer shows its usage cost.
+- **Market alerts:** notifications when your chosen signals are triggered.
+- **Plans and limits:** alerts for buy zones, sell zones, stop levels and position loss limits. CaSa never places trades.
+- **Portfolio tracking:** record purchases and sales in Telegram and receive evening summaries of your holdings and profit or loss.
+- **Dates and reminders:** upcoming earnings where dates are available, plus your own events.
+- **Optional AI research:** create prompts for ChatGPT or Claude. With your own Claude API key, Claude interprets CaSa's data, researches relevant news and the industries driving demand for a company's products and services, and suggests plans directly in Telegram. Save a suggested plan with one tap. Each API answer shows its usage cost.
 
-Prices are displayed in EUR. Portfolio records are stored on your computer; commands and notifications pass through Telegram. Optional Claude API requests send the asset analysis and your position details to Anthropic. API usage is billed separately by Anthropic.
+Prices are displayed in EUR. Portfolio records are stored locally; commands and notifications pass through Telegram. Optional Claude API requests send asset analysis and position details to Anthropic. API usage is billed separately by Anthropic.
 
 CaSa provides signals and context, not investment advice. You decide how to act.
 
