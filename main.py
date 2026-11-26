@@ -44,12 +44,15 @@ MAX_CRYPTO, MAX_CRYPTO_WITH_KEY, MAX_STOCKS = 8, 12, 30
 
 # Template for /ai_prompt and the AI buttons. It is the file ai_prompt.txt (created at the start, can be edited;
 # in 0.1.13 config.ini [ai_prompt]). The program fills in the placeholders in {curly brackets}.
-AI_PROMPT_TEMPLATE = """Assess {name} ({symbol}, {type}) for a three-month horizon (no day trading) using my technical data and current news. {task}
+AI_PROMPT_TEMPLATE = """Assess {name} ({symbol}, {type}) for a three-month horizon (about {horizon}, no day trading) using my technical data and current news. My figures in A compare today with the last 100 {lookback}. {task} If data in A contradicts itself or my plan breaks my own rules (C), say so first.
 
 A. My program's data (daily values, {date})
 EUR prices from {source}; compare levels only with this source.
 - Position: {position}
+- My current trading plan: {current_plan}
+- Plan check: {plan_check}
 - Price: {price} · 1 day {day} · 7-day trend {week}
+- Largest one-day move in the last 10 days: {largest_move}
 - 250-day high/low: {high} / {low}
 - Resistance: {resistance}
 - Support: {support}
@@ -70,13 +73,15 @@ EUR prices from {source}; compare levels only with this source.
 - Signals today: {signals}
 
 B. News and dates
-Web search (if unavailable, say so): news of the last 14 days, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move and the long-term trend (50- and 200-week averages) are in A, do not search for them, confirmed dates of the next 4 weeks; older figures only dated.
+Web search (if unavailable, say so): news of the last 14 days, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), the cause of the largest one-day move in A and how the price moved in the 4 weeks after comparable moves or similar events in the company's history (e.g. the last big launch or a similar result); the market move and the long-term trend (50- and 200-week averages) are in A, do not search for them, confirmed dates of the next 4 weeks; older figures only dated.
 {research}
 
 C. Rules
 - Report only what supports, contradicts or changes risk or entry/exit; minor points in one sentence; merge identical signals.
 - Technicals only from part A; news with date and source. Missing essentials: write exactly "not verifiable" plus what is missing.
 - Price levels critically: a period low or low RSI is only a possible support or recovery.
+- My current trading plan (A) stays unless something changed. Every change to buy-zone, sell-zone, stop-plan or the position building (size and number of buys) as 'old value -> new value, because <concrete trigger>' (e.g. a daily close below a support, a news item with date, a broken trend); without such a trigger keep the old value.
+- Address the plan check in A first; if the current price already triggers a message of my plan, say whether that is intended.
 - Trading plan in the terms of my program: buy-zone (buy at or below this price; the price may still fall there), turn up (a daily close back above the buy-zone with a rising 12-day average) before a small first tranche, stop-plan (a daily close below it ends the plan, set in advance), sell-zone (partial profits, near resistance). Staggered tranches; bearish phase: small tranches, trend change only above SMA200; limit size. {tax}Max. three price zones, few numbers, no disclaimers.
 - {evidence}
 
@@ -100,16 +105,73 @@ OLD_AI_PROMPT_HASHES = {
     '36c770a8e45c04fb3da2637fe05e84723c587569beb6fd109c55f627b4864bbf',   # 0.1.14 test version without market move in A
     'd76ce2738e4efd0483413d47a90109132f62f6a89c5286dbbf0b9f25a96766b5',   # 0.1.14 (without similar past events)
     'c29f7cb2c9b2a117d91db6e86501617939d009e6ad72970b0e1d2092b6734d53',   # 0.1.14 (without weekly averages)
+    '64007c6aec2efa37003272d8784e65ec58a7cb3487ad2c5f88d45b3bf6de0e38',   # 0.1.14 (without the current plan)
+    'ce3f67a9b78deeaa580033b6ddb6f7dad16e1260d9c014468c7f2e7daa0d3844',   # test version (without plan check)
 }
 # Backtest findings for the AI (54 own assets, up to 14 years, 20 days after a signal vs. an average day)
 AI_EVIDENCE = {
-    'stock': ("My backtest, stocks: slight rebound after strong sell-offs (58 % up after 20 days, normal 52 %), "
-              "waiting for a confirmed bottom did not help; rises and chart patterns: no follow-through."),
-    'crypto': ("My backtest, crypto: strength continued (100-day high: 60 % up after 20 days, normal 49 %); "
-               "sell-offs often continued: buy only after an observable bottom."),
+    'stock': ("My backtest, stocks (after 20 days – shorter than my horizon): slight rebound after strong "
+              "sell-offs (58 % up, normal 52 %), waiting for a confirmed bottom did not help; rises and chart "
+              "patterns: no follow-through."),
+    'crypto': ("My backtest, crypto (after 20 days – shorter than my horizon): strength continued (100-day high: "
+               "60 % up, normal 49 %); sell-offs often continued: buy only after an observable bottom."),
 }
 AI_SCORE_NOTE = {'stock': 'stocks: high = no edge, very low = slight rebound',
                  'crypto': 'crypto: high = strength tended to continue'}
+PLAN_RESISTANCE_GAP = 5.0   # plan check: sell-zone more than this many % below the resistance is reported
+
+
+def score_meaning(rank, asset_type):
+    """Plain meaning of the score 1-10 from the backtest, e.g. 'very low: historically slight rebound'."""
+    if asset_type == 'crypto':
+        return ('high: strength tended to continue' if rank >= 8 else
+                'low: sell-offs often continued' if rank <= 3 else 'middle: no clear edge')
+    return ('high: no edge in my backtest' if rank >= 8 else
+            'very low: historically slight rebound' if rank <= 3 else 'middle: no clear edge')
+
+
+def largest_move_text(df, native=None, currency='EUR', days=10):
+    """Largest one-day change of the last `days` values, e.g. '-9.5 % on 20/11/2026 (USD)': in the currency
+    of the exchange when known (the cause is in its news), otherwise in EUR."""
+    prices = native if native is not None else df['Price'].astype(float)
+    changes = prices.pct_change().iloc[-days:] * 100
+    changes = changes.dropna()
+    if changes.empty:
+        return 'not verifiable (too few values)'
+    position = changes.abs().idxmax()
+    day = pd.Timestamp(df['Date'].loc[position]) if 'Date' in df else None
+    when = f" on {day:%d/%m/%Y}" if day is not None else ''
+    return f"{changes.loc[position]:+.1f} %{when} ({currency if native is not None else 'EUR'})"
+
+
+def plan_check_text(plan, price, resistance, support, state):
+    """Checks of the current plan that CaSa can do itself -> (text for 'Plan check', risk/reward text to the
+    stop-plan or ''). Reports only what stands out; 'no plan' without a plan."""
+    if plan is None:
+        return 'no plan', ''
+    top, target, stop = cl.plan_zone_top(plan), plan['target'], plan['stop']
+    euro = func.format_euro
+    found = []
+    if stop is not None and top is not None and stop > top:
+        found.append(f"stop-plan ({euro(stop)}) above buy-zone ({euro(top)})")
+    if stop is not None and price < stop:
+        found.append("price already below stop-plan (message 'Setup cancelled' / 'Exit')")
+    elif top is not None and price <= top:
+        found.append("price already in the buy-zone (message 'Buy zone')")
+    if target is not None and price >= target:
+        found.append("price already at or above sell-zone (message 'Take partial profits' when held)")
+    if target is not None and not state.watch_list and target < state.zero_line:
+        found.append(f"sell-zone below avg. cost ({euro(state.zero_line)}): partial 'profits' would be losses")
+    if target is not None and resistance and target < resistance['center'] * (1 - PLAN_RESISTANCE_GAP / 100):
+        found.append(f"sell-zone well below resistance ({euro(resistance['center'])})")
+    check = '; '.join(found) or 'no problems found'
+    rr = ''
+    if stop is not None and resistance and resistance['center'] > price > stop:
+        up, down = resistance['center'] - price, price - stop
+        rr = f"to resistance +{euro(up)} vs. to stop-plan -{euro(down)} = {up / down:.1f} : 1"
+        if support and support['center'] < price:
+            rr += f" (vs. support: {(resistance['center'] / price - 1) / (1 - support['center'] / price):.1f} : 1)"
+    return check, rr
 
 
 AI_API_SEARCHES = 12   # web searches per Guide/Plan answer (each about 1 cent; 5 were too few for news, trend, market, sectors)
@@ -120,13 +182,15 @@ AI_API_TASKS = {
                  "(score, support/resistance, risk/reward, distance to the averages, RSI, chart pattern): do not "
                  "repeat them; name at most one price level, the one that would change the decision.\n"
                  "You have a web search tool and must use it before answering (at least one search; never write "
-                 "that no news check was done): the news of the last 14 days, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), similar events in the company's history and how the price moved in the weeks after them (e.g. after the last big launch or a similar result); the market move and the long-term trend (50- and 200-week averages) are in A, do not search for them.\n"
-                 "(1) The decision (Buy or Wait without a position, Hold, Add or Reduce with one, see Position "
+                 "that no news check was done): the news of the last 14 days, the industries the company sells to and that drive its demand (e.g. cooling for data centres depends on investment in AI), the cause of the largest one-day move in A and how the price moved in the 4 weeks after comparable moves or similar events in the company's history (e.g. the last big launch or a similar result); the market move and the long-term trend (50- and 200-week averages) are in A, do not search for them.\n"
+                 "(1) First a contradiction in A or a problem from the plan check, if there is one, in a few "
+                 "words; then the decision (Buy or Wait without a position, Hold, Add or Reduce with one, see Position "
                  "in A) and the long-term trend from the 50- and 200-week averages in A (e.g. 'above the rising 200-week average: today a pull-back "
                  "within it' or 'a break of it') and, from Market move in A, whether the market moves the same way. (2) The main "
                  "reason from the news, the business or its customer industries (with date and source), or that "
                  "there is no relevant news; if there was a similar event before, how the price reacted then. (3) What would change the decision (one price level "
-                 "or one event) and your confidence (high/medium/low)."),
+                 "or one event) and your confidence (high/medium/low). If my current trading plan in A no longer fits, "
+                 "name the value to change as 'old -> new' with its concrete trigger in this sentence."),
     'plan': ("\n\nE. Answer for this request (replaces D): a trading plan for my program. It watches three prices "
              "and sends me these messages by itself: 'Buy zone' (price at or below buy-zone: watch, it may still "
              "fall), 'Turn up' (after the buy-zone a daily close above it again and the 12-day average rising), "
@@ -138,6 +202,10 @@ AI_API_TASKS = {
              "the industries that drive the company's demand and similar earlier events and the price reaction "
              "after them (the market move is in A), so that the plan and "
              "the 'Not if' part of the note take them into account (e.g. 'Not if: AI stocks keep falling').\n"
+             "If I have a current trading plan (A): before the block one line per changed value - buy-zone, "
+             "sell-zone, stop-plan or the position building (Size in the note) - as 'buy-zone: 320.00 -> 305.00, "
+             "because <concrete trigger with date or price>'; values without such a trigger stay as they are. "
+             "Nothing changed: write 'Plan unchanged' and why in one sentence.\n"
              "Then exactly this block:\n"
              "```planalert\n"
              "buy-zone = <buy at or below this price in EUR, or empty>\n"
@@ -155,6 +223,16 @@ AI_API_TASKS = {
              "at most two buys'); 'Buy when:' what I check myself at 'Turn up' beyond the prices (e.g. 'volume "
              "above average'); 'Not if:' what stops me (e.g. 'bad quarterly results or a profit warning')."),
 }
+
+
+def without_output_part(question, task):
+    """API requests: the task E replaces the answer format D of the template, so D is not sent (saves about
+    1,300 characters per request). Then E becomes D. Own templates without 'D. Output' stay as they are."""
+    match = re.search(r'\n\s*D\. Output\b', question)
+    if not match:
+        return question, task
+    return question[:match.start()].rstrip(), task.replace('E. Answer for this request (replaces D)',
+                                                         'D. Answer for this request')
 
 
 def split_plan_answer(answer):
@@ -721,6 +799,17 @@ class CryptoStockManager:
             plan = ("- Hold | what confirms holding? | what do I watch?\n"
                     "- Add | which buy-zone and which turn up confirm adding? | how much?\n"
                     "- Sell-zone / stop-plan | at which price do I take profits, which daily close ends it? | how much do I sell?")
+        # The current plan from planalert.ini: the AI keeps it unless it names a concrete trigger for a change
+        try:
+            current = next((plan for plan in cl.read_plans()
+                            if plan['symbol'] == symbol.lower() and plan['type'] == asset_type), None)
+            current_plan = 'none' if current is None else (
+                f"{cl.plan_text(current) or 'no prices'}"
+                + (f"; note: {current['note']}" if current['note'] else '')
+                + (f"; since {current['start']:%d/%m/%Y}" if current['start'] else '')
+                + f"; status: {current['status_text']}")
+        except (OSError, ValueError, configparser.Error) as error:   # extra information: must not stop /ai
+            current, current_plan = None, f'not verifiable ({str(error)[:60]})'
         tax = ('Consider the holding period: selling parts held less than 1 year is taxable in Germany. '
                if asset_type == 'crypto' and not state.watch_list else '')
         source = 'CoinGecko, average of several exchanges' if asset_type == 'crypto' else 'Yahoo Finance, converted if needed'
@@ -760,8 +849,23 @@ class CryptoStockManager:
                                         ('bestaetigung', 'price below EMA12')))
         rr = func.risk_reward(price, sr_zones)
         rank = details.get('rank')
-        score_text = (f"{rank}/10 (vs. the last 100 days; {AI_SCORE_NOTE[asset_type]})"
+        score_text = (f"{rank}/10 (vs. the last 100 days) = {score_meaning(rank, asset_type)}"
                       if rank else f"{details['score']} (-18 to +18; {AI_SCORE_NOTE[asset_type]})")
+
+        # Price in the currency of the exchange: the day change in EUR and in that currency (exchange rate effect)
+        currency = df.attrs.get('currency', 'EUR') if asset_type == 'stock' else 'EUR'
+        native = df['PriceNative'].astype(float) if currency != 'EUR' and 'PriceNative' in df else None
+        if native is not None and len(native) > 1 and native.iloc[-1] > 0 and native.iloc[-2] > 0:
+            price_text = (f"{func.format_euro(price)} ({func.native_text(df, price)}, "
+                          f"EUR/{currency} {native.iloc[-1] / price:.4f})")
+            day_text = (f"{pct(item.state.current_one_day_price_change_pct)} (EUR) / "
+                        f"{pct((native.iloc[-1] / native.iloc[-2] - 1) * 100)} ({currency})")
+        else:
+            native = None
+            price_text = func.format_euro(price)
+            day_text = pct(item.state.current_one_day_price_change_pct)
+        largest_move = largest_move_text(df, native, currency)
+        plan_check, plan_rr = plan_check_text(current, price, resistance, support, state)
 
         # Alarms and infos that the analysis would send today for this asset (with your [alerts] settings)
         state = item.state
@@ -795,6 +899,7 @@ class CryptoStockManager:
         low = full['PriceLow'].min() if 'PriceLow' in full else full['Price'].min()
         if asset_type == 'stock':
             research = ("- Earnings/outlook: last revenue, guidance, consensus, next date (German time); "
+                        "monthly sales if the company publishes them; "
                         "separate actuals/estimates; what would change the call.\n"
                         "- Analyst targets/valuation: major target changes (original currency), trailing and forward P/E (estimate period).\n"
                         "- Company/industry: management, demand, competition, regulation, exports.")
@@ -812,10 +917,11 @@ class CryptoStockManager:
             'long_term': func.weekly_averages_text(asset_type, symbol),
             'tax': tax, 'source': source,
             'date': time.strftime('%d/%m/%Y %H:%M'),
-            'position': position,
+            'position': position, 'current_plan': current_plan,
             # also in the currency of the exchange: news and analyst targets of US stocks are in USD
-            'price': func.format_euro(price) + (f" ({func.native_text(df, price)})" if func.native_text(df, price) else ''),
-            'day': pct(item.state.current_one_day_price_change_pct),
+            'price': price_text, 'day': day_text, 'largest_move': largest_move, 'plan_check': plan_check,
+            'lookback': 'trading days' if asset_type == 'stock' else 'days',
+            'horizon': '60 trading days' if asset_type == 'stock' else '90 days',
             'week': pct(item.state.current_seven_days_slope_pct),
             'high': f"{func.format_euro(high)} ({pct((price / high - 1) * 100)})",
             'low': f"{func.format_euro(low)} ({pct((price / low - 1) * 100)})",
@@ -823,9 +929,10 @@ class CryptoStockManager:
             'score': score_text,
             'pattern': pattern_short,
             # facts only: a "good" ratio did not predict better results; the levels are in the two lines above
-            'risk_reward': (f"ratio {(resistance['center'] / price - 1) / (1 - support['center'] / price):.1f} : 1 "
-                            "(room to resistance vs. distance to support)" if resistance and support
-                            else rr['short'].rstrip('.')),
+            'risk_reward': plan_rr or (
+                f"ratio {(resistance['center'] / price - 1) / (1 - support['center'] / price):.1f} : 1 "
+                "(room to resistance vs. distance to support)" if resistance and support
+                else rr['short'].rstrip('.')),
             'rsi': f"{df['RSI14'].iloc[-1]:.0f} ({rsi_label})",
             'macd': macd, 'bollinger': bollinger,
             'trend': details['texts']['trend'], 'short_term': details['texts']['short'],
@@ -834,8 +941,14 @@ class CryptoStockManager:
             'signals': signals, 'evidence': AI_EVIDENCE[asset_type],
         }
         # Simple replace instead of format(): other {brackets} in the file do no harm this way.
+        own_template = '{current_plan}' not in question
         for key, value in values.items():
             question = question.replace('{' + key + '}', value)
+        if own_template and current_plan != 'none':
+            # your own template without {current_plan}: the plan is still part of every AI analysis
+            question = (question.strip() + f"\n\nMy current trading plan: {current_plan}. Keep it unless something "
+                        "changed; every change to buy-zone, sell-zone, stop-plan or the position building as "
+                        "'old value -> new value, because <concrete trigger>'.")
         return name, symbol, question.strip()
 
     def ai_prompt(self, symbol, asset_type):
@@ -866,9 +979,10 @@ class CryptoStockManager:
             func.pushover(func.CLAUDE_NO_KEY)
             return
         name, symbol, question = self._ai_question(symbol, asset_type)
+        question, task = without_output_part(question, AI_API_TASKS[mode])
         try:
             # up to 12 searches: news, long-term trend and customer industries need several (the market move is in A)
-            answer, usage = func.claude(question + AI_API_TASKS[mode], web_search=True, with_usage=True,
+            answer, usage = func.claude(question + task, web_search=True, with_usage=True,
                                         max_searches=AI_API_SEARCHES)
         except (PermissionError, RuntimeError) as error:
             func.pushover(f"Claude API for {name}: {error}")

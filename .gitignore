@@ -33,3 +33,5 @@ Thumbs.db
 /backup_symbols_*
 /backup/
 /transactions.csv.bak
+# notes for Claude Code: only local
+/CLAUDE.md
