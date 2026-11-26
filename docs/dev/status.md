@@ -12,15 +12,16 @@ Update this file when a task ends or the plan changes. Last update: 26/11/2026.
 - `transactions.csv` in the broker format (`qty;price;net amount;date;wallet`), `/record` asks for price
   and wallet, `/transactions` shows real price, wallet and fee.
 - Trading result: open positions "if sold today".
-
-## Not committed yet (26/11/2026)
 - Current trading plan in every AI analysis with the rule "old -> new, because <trigger>".
 - AI prompt: horizon "about 60 trading days" / lookback "last 100 trading days" (crypto 90 / 100 days),
   contradictions first, plan check line, day change in EUR and exchange currency with the rate, largest
   one-day move of 10 days, risk/reward to the stop-plan, plain meaning of the score, targeted search for the
   cause of the largest move and monthly sales, backtest marked "20 days – shorter than my horizon";
   Guide/Plan API without part D.
-  (`main.py`, `docs/features.md`, `docs/configuration.md`)
+- Developer notes in `docs/dev/`; `CLAUDE.md` is local only (in `.gitignore`).
+
+## Not committed yet
+- Nothing.
 
 ## Open points / ideas
 - Share of the portfolio in the prompt: only when `transactions.csv` is complete.
